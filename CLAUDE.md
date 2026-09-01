@@ -48,16 +48,128 @@ writing code in *this* repo; it doesn't restate the design.
   here, independent of what the open interface permits third parties to
   build.
 
+## Mandatory coding conventions (this repo, all languages)
+
+Design doc §12 lays out the AI directives OpenCombatEngine's own repo
+enforces. **The *principles* behind those directives are not scoped to
+that repo — they apply here too, project-wide, for the same reason they
+exist there: so any contributor, human or AI, can jump into unfamiliar
+code and find the same discipline every time.** What's scoped to
+OpenCombatEngine specifically is the *syntax* — XML doc comments, PascalCase
+properties, `I`-prefixed interfaces, `Result<T>`, underscore-prefixed
+fields, `UPPER_CASE` constants — because that syntax is idiomatic C#, and
+this repo isn't C#. Copying it verbatim into Go or TypeScript would be
+wrong twice over: unidiomatic for the language, and confusing for
+contributors who know that language's real conventions. Translate the
+principle, not the punctuation. Below is the Go translation (the one that
+matters today, since Master is the only code so far); a TypeScript
+translation should be added here once client code starts.
+
+**Go — translating each §12 directive:**
+
+1. **Documentation, no exceptions.** Every exported identifier
+   (`Type`, `Func`, `Method`, exported `const`/`var`) gets a doc comment
+   in standard godoc form: starts with the identifier's name, states what
+   it does, notes parameter constraints/special values and what error
+   conditions mean when non-obvious. Unexported identifiers get a comment
+   when their *why* isn't obvious from the name — not required on every
+   one, but never skip it on something a future reader would have to
+   puzzle out.
+2. **Enum-sentinel pattern → typed consts with an explicit unspecified
+   zero value.** Go has no enums, but the same defensive intent (never
+   let an unset value silently mean something valid) translates directly:
+   define a named type, make its zero value an explicit `Unspecified`
+   constant, and give it an `IsValid()` (or similar) helper that rejects
+   `Unspecified` along with any out-of-range value. This is exactly the
+   pattern already used for `CharacterStatus` in
+   `protocol/system_engine.proto` (`CHARACTER_STATUS_UNSPECIFIED = 0`) —
+   Go-side enums mirror it, e.g.:
+   ```go
+   type SessionState string
+
+   const (
+       SessionStateUnspecified SessionState = ""
+       SessionStateJoined      SessionState = "joined"
+       SessionStateLeft        SessionState = "left"
+   )
+
+   func (s SessionState) IsValid() bool {
+       switch s {
+       case SessionStateJoined, SessionStateLeft:
+           return true
+       default:
+           return false
+       }
+   }
+   ```
+   No `LastValue` sentinel — Go has no way to iterate a type's value
+   range the way the C# validation helper does, so the `switch` above
+   *is* the range check; keep it exhaustive by hand.
+3. **Naming — idiomatic Go, not transliterated C#.** Exported
+   `PascalCase`, unexported `camelCase`, no underscore-prefixed fields, no
+   `UPPER_CASE` constants (Go constants are `MixedCaps` like everything
+   else), no `I`-prefix on interfaces — name interfaces for what they do
+   (`Reader`, `TokenValidator`), not what they are. Run `gofmt`/`go vet`;
+   don't hand-deviate from what they'd flag.
+4. **Error handling — idiomatic `(T, error)`, not an emulated
+   `Result<T>`.** Go's built-in `error` return *is* the Result pattern —
+   don't build a generic `Result[T]` wrapper on top of it, that would be
+   fighting the language to recreate something it already has. Guard
+   clauses first; expected failures return a wrapped or sentinel error
+   (`fmt.Errorf("...: %w", err)`, or a package-level `var ErrX = errors.New(...)`
+   for callers that need to `errors.Is` it); exported functions never
+   `panic` — a panic reaching an exported boundary is a bug, not a
+   control-flow tool. The one exception: a goroutine handling a client
+   connection should `recover()` at its own top level so one malformed
+   message can't take down Master for every other player at the table.
+5. **TDD — tests written first, same bar as OpenCombatEngine's ≥80%
+   coverage.** Table-driven tests are Go's `[Theory]`/`[InlineData]`
+   equivalent — use them for anything with more than one interesting
+   case. Test naming: `TestFunctionName_Condition_ExpectedResult`, same
+   convention as §12, since it reads identically well in Go. Arrange/
+   Act/Assert structure; a small builder/fixture helper for constructing
+   test inputs when a literal struct would be noisy.
+6. **Interface design — this one needs *no* translation.** Interface
+   segregation, composition over inheritance, and "define the interface
+   at the point of consumption, keep it small" are already how idiomatic
+   Go works (`io.Reader` is one method; Go has no inheritance at all, only
+   embedding). Don't build a C#-style upfront "all contracts live in one
+   package" layer — but *do* keep the actual swappable boundaries
+   (system-engine client, image-gen provider, auth provider) behind a
+   Go interface with the concrete adapter in its own file/package, which
+   is the same intent as OpenCombatEngine's `Core`/`Implementation` split,
+   achieved the Go way.
+7. **File header — mandatory on every `.go` file, no exceptions:**
+   ```go
+   // Copyright (c) 2026 James Duane Plotts
+   // Licensed under the MIT License. See LICENSE in the repository root.
+
+   package foo
+   ```
+   Same pattern already used in `protocol/system_engine.proto`.
+
+**Legal compliance (design doc §12) applies verbatim, not just
+translated** — no proprietary D&D terms, named characters, non-SRD
+monster names, or flavor text, in Go code, comments, test fixtures, or
+anywhere else in this repo. See "Legal / content rules" above.
+
+**Git/PR conventions apply verbatim, language-independent:** branches
+`feature/add-{name}`, `fix/repair-{issue}`, `docs/update-{section}`,
+`test/add-{area}`; commits `type(scope): description` (e.g.
+`feat(master): add websocket handshake`). Use this format for new commits
+in this repo going forward.
+
 ## Working across the OpenCombatEngine boundary
 
-`jamesplotts/opencombatengine` is a **separate repo** with its own
-mandatory conventions (XML docs on every member, `Unspecified`/`LastValue`
-enum sentinel pattern, `Result<T>` error handling, file-header copyright
-block, TDD-first, interfaces confined to `Core`, etc. — reproduced in full
-in design doc §12). Those conventions apply when writing or touching code
-*in that repo*. In *this* repo, Master calls OpenCombatEngine only through
-its generated Go gRPC client stub (§6.1) — never assume its C# internals,
-and don't import its conventions into Go/TS code here.
+`jamesplotts/opencombatengine` is a **separate repo**, and its own
+mandatory conventions as literally written in design doc §12 (XML docs,
+`I`-prefixed interfaces, `Result<T>`, underscore fields, etc.) apply when
+writing or touching code *in that repo* — that's C# syntax for a C#
+codebase. In *this* repo, Master calls OpenCombatEngine only through its
+generated Go gRPC client stub (§6.1); never assume its C# internals. The
+*principles* those C# conventions express are not left behind at that
+boundary, though — see "Mandatory coding conventions" above for how they
+carry into this repo's own code.
 
 ## Language/stack choices already made
 
