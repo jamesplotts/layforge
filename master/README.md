@@ -7,10 +7,12 @@ connect to.
 
 ## Status
 
-Only the client-handshake WebSocket endpoint exists so far:
-`system.connect` in, `system.session_state` (`joined`) or `system.error`
-out, per `protocol/asyncapi.yaml`. Session orchestration, the turn-order
-state machine, authoritative dice, the narrative-transform pipeline, and
+The client-handshake WebSocket endpoint exists (`system.connect` in,
+`system.session_state`/`system.error` out, per `protocol/asyncapi.yaml`),
+and the generated System Engine gRPC client/server stubs build and
+round-trip correctly — but nothing in `main.go` dials a real
+OpenCombatEngine sidecar yet. Session orchestration, the turn-order state
+machine, authoritative dice, the narrative-transform pipeline, and
 tool-use dispatch are all still to come — see
 [`docs/design.md`](../docs/design.md) §3 and §7–§10.
 
@@ -21,6 +23,10 @@ main.go                      entrypoint: flag parsing, listener, graceful shutdo
 internal/protocol/           wire types for protocol/asyncapi.yaml (Envelope,
                               Message[T], per-message payloads) — no transport logic
 internal/server/              WebSocket endpoint and the connection handshake
+internal/systemenginepb/      generated gRPC/protobuf stubs for
+                              protocol/system_engine.proto (gitignored;
+                              regenerate with protocol/generate.sh) plus a
+                              hand-written round-trip test
 ```
 
 ## Running

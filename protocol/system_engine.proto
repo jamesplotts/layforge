@@ -9,15 +9,21 @@
 // in any language with a protobuf compiler — that's the whole point of
 // this being the extensibility seam rather than an in-language interface.
 //
-// Generate stubs with protoc; do not hand-edit generated code. Checked-in
-// generated output belongs under protocol/gen/ (gitignored — regenerate,
-// don't commit).
+// Generate stubs with protocol/generate.sh; do not hand-edit generated
+// code. The Go stubs land inside the Master module itself
+// (master/internal/systemenginepb/, gitignored — regenerate, don't
+// commit) rather than under a repo-level protocol/gen/, since Go modules
+// can't cleanly import generated code living outside their own tree
+// without workspace/multi-module machinery this project doesn't need
+// yet — see protocol/README.md. A future non-Go consumer's stubs (e.g. a
+// Python reference SDK) would generate into that consumer's own
+// language-appropriate location instead.
 
 syntax = "proto3";
 
 package layforge.systemengine.v1;
 
-option go_package = "github.com/jamesplotts/layforge/protocol/gen/go/systemengine/v1;systemenginev1";
+option go_package = "github.com/jamesplotts/layforge/master/internal/systemenginepb;systemenginepb";
 option csharp_namespace = "Layforge.Protocol.SystemEngine.V1";
 
 import "google/protobuf/struct.proto";

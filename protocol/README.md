@@ -16,6 +16,33 @@ Two contracts, matched to their audience (see [`docs/design.md`](../docs/design.
   sidecar to relay OpenCombatEngine's internal combat events across the
   process boundary (design doc §6.1, §12).
 
-Neither contract has a Go/TS/Python codegen step wired up yet — that's
-next. Generated stubs (any language) belong under `gen/` (gitignored —
-regenerate via `protoc`/AsyncAPI generator, don't commit).
+## Go codegen for the System Engine contract
+
+[`generate.sh`](generate.sh) regenerates the Go client/server stubs for
+`system_engine.proto` directly into
+`master/internal/systemenginepb/` — inside the Master module's own tree,
+not a repo-level `gen/`, because a Go module can't cleanly import
+generated code living outside its own directory tree without
+workspace/multi-module machinery this project doesn't need with only one
+Go consumer so far. If a second Go consumer shows up later, revisit this
+(a `go.work` workspace tying multiple modules together is the natural
+next step).
+
+Requires on `PATH`: `protoc`, and the Go plugins (`go install
+google.golang.org/protobuf/cmd/protoc-gen-go@latest` and `go install
+google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest`, then make sure
+`$(go env GOPATH)/bin` is on `PATH`). Run it from the repo root:
+
+```
+./protocol/generate.sh
+```
+
+The well-known-types (`google.protobuf.Struct`, `google.protobuf.Timestamp`)
+this contract imports are vendored under
+[`third_party/`](third_party/) rather than requiring every contributor to
+install `libprotobuf-dev` — see that directory's README.
+
+Generated `*.pb.go` files are gitignored (`**/*.pb.go`) — regenerate,
+don't commit. A future non-Go reference SDK (Python, per design doc §6)
+would get its own generation step and its own output location, following
+that language's own conventions rather than this one.

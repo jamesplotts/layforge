@@ -17,8 +17,11 @@ build/
 .env.*
 !.env.example
 
-# gRPC/protobuf generated code (regenerate via protoc, don't commit)
-protocol/gen/
+# gRPC/protobuf generated code (regenerate via protocol/generate.sh,
+# don't commit). Go stubs land inside master/internal/systemenginepb/
+# alongside a hand-written test — ignore by extension, not by directory,
+# so that test file stays tracked.
+**/*.pb.go
 
 # SQLite local dev databases
 *.db
