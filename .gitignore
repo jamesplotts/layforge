@@ -23,8 +23,11 @@ build/
 # so that test file stays tracked.
 **/*.pb.go
 
-# SQLite local dev databases
+# SQLite local dev databases, including WAL mode's sidecar files
+# (internal/store enables journal_mode=WAL)
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 

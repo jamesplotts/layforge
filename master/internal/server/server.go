@@ -12,6 +12,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,6 +23,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/jamesplotts/layforge/master/internal/protocol"
+	"github.com/jamesplotts/layforge/master/internal/store"
 )
 
 // masterSenderID is the sender_id Master uses on messages it originates
@@ -31,12 +33,16 @@ const masterSenderID = "master"
 // Server serves Master's client-facing WebSocket endpoint.
 type Server struct {
 	logger *slog.Logger
+	events store.EventStore
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
-// the caller has no specific logger configured.
-func New(logger *slog.Logger) *Server {
-	return &Server{logger: logger}
+// the caller has no specific logger configured. events may be nil to run
+// without persistence (e.g. in tests that don't care about the audit
+// log) — every message Server exchanges is still handled normally either
+// way, since recording is best-effort (see recordEvent).
+func New(logger *slog.Logger, events store.EventStore) *Server {
+	return &Server{logger: logger, events: events}
 }
 
 // Handler returns the http.Handler that serves the WebSocket endpoint,
@@ -78,6 +84,7 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 	if err := wsjson.Read(ctx, conn, &connect); err != nil {
 		return fmt.Errorf("reading handshake: %w", err)
 	}
+	recordEvent(ctx, s, connect)
 
 	campaignID := connect.CampaignID
 	if campaignID == "" {
@@ -110,6 +117,7 @@ func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, cam
 	if err != nil {
 		return err
 	}
+	recordEvent(ctx, s, msg)
 	if err := wsjson.Write(ctx, conn, msg); err != nil {
 		return fmt.Errorf("writing session_state: %w", err)
 	}
@@ -131,6 +139,7 @@ func (s *Server) rejectHandshake(ctx context.Context, conn *websocket.Conn, inRe
 	if err != nil {
 		return errors.Join(cause, err)
 	}
+	recordEvent(ctx, s, msg)
 	// Best-effort: the connection is closing regardless of whether the
 	// client receives this, so a write failure here doesn't change the
 	// outcome — it only means the client won't know why.
@@ -139,6 +148,40 @@ func (s *Server) rejectHandshake(ctx context.Context, conn *websocket.Conn, inRe
 	}
 	conn.Close(websocket.StatusPolicyViolation, "handshake rejected")
 	return cause
+}
+
+// recordEvent best-effort persists msg to s's event log: a failure here
+// is logged, not returned, because losing an audit-log entry shouldn't
+// interrupt the live connection that's the actual point of Server. This
+// is deliberately different from how design doc §10 describes
+// authoritative session/character state, which does need durability
+// guarantees — but that state doesn't exist yet (only the handshake
+// does), so today this records handshake traffic as an audit trail, not
+// authoritative game state. It is a free function taking *Server rather
+// than a Server method for the same reason newMessage is: Go methods
+// cannot themselves be generic.
+func recordEvent[T any](ctx context.Context, s *Server, msg protocol.Message[T]) {
+	if s.events == nil {
+		return
+	}
+
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		s.logger.Warn("failed to marshal event for persistence", "error", err, "message_id", msg.MessageID)
+		return
+	}
+
+	err = s.events.AppendEvent(ctx, store.Event{
+		CampaignID:  msg.CampaignID,
+		MessageID:   msg.MessageID,
+		MessageType: string(msg.Type),
+		SenderID:    msg.SenderID,
+		OccurredAt:  msg.Timestamp,
+		Raw:         raw,
+	})
+	if err != nil && !errors.Is(err, store.ErrDuplicateMessage) {
+		s.logger.Warn("failed to persist event", "error", err, "message_id", msg.MessageID)
+	}
 }
 
 // newMessage builds a Message[T] envelope for a Master-originated
