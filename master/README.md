@@ -9,27 +9,27 @@ connect to.
 
 Multiple clients can now connect to the same campaign and actually see
 each other: `system.connect` in, `system.session_state`/`system.error`
-out, then the connection stays open and Master routes `safety.flag` from
-any client to a `safety.flag_broadcast` delivered to every client in that
-campaign (design doc §9.2) — the first real cross-client message routing,
-via `internal/session`'s connection registry. Any client can also page
-back through everything recorded for its campaign with
-`log.history_request`/`log.history_response` (design doc §10, §11), since
-every message exchanged (handshake, flags, and broadcasts) is durably
-logged to SQLite as it happens. The generated System Engine gRPC
-client/server stubs build and round-trip correctly, but nothing in
-`main.go` dials a real OpenCombatEngine sidecar yet. Every other message
-category (narrative, roll, map, character, tool), the turn-order state
-machine, authoritative dice, the narrative-transform pipeline (blocked on
-an actual LLM provider integration, a deliberately-deferred decision, not
-an oversight), and governance gates beyond safety.flag are all still to
+out, then the connection stays open and Master routes messages between
+clients via `internal/session`'s connection registry — `safety.flag`
+broadcasts to everyone in the campaign (design doc §9.2), and
+`narrative.player_input` is rendered through an LLM (design doc §7's fast
+pass only — no slow-pass DM/NPC reaction yet) and broadcast as
+`narrative.player_bubble`. Any client can also page back through
+everything recorded for its campaign with `log.history_request`/
+`log.history_response` (design doc §10, §11), since every message
+exchanged is durably logged to SQLite as it happens. The generated System
+Engine gRPC client/server stubs build and round-trip correctly, but
+nothing in `main.go` dials a real OpenCombatEngine sidecar yet. Every
+other message category (roll, map, character, tool), the turn-order
+state machine, authoritative dice, the narrative-transform pipeline's
+slow pass, and governance gates beyond safety.flag are all still to
 come — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 
 ```
-main.go                      entrypoint: flag parsing, event store, listener,
-                              graceful shutdown
+main.go                      entrypoint: flag parsing, event store, LLM
+                              provider wiring, listener, graceful shutdown
 internal/protocol/           wire types for protocol/asyncapi.yaml (Envelope,
                               Message[T], per-message payloads) — no transport logic
 internal/server/              WebSocket endpoint: the handshake, the
@@ -41,6 +41,8 @@ internal/session/              connection registry (design doc §3.1's "session
 internal/store/                repository/DAO abstraction over storage (design
                               doc §10): EventStore interface + SQLiteEventStore,
                               the zero-config default (pure-Go driver, no cgo)
+internal/llm/                  LLM-provider contract (design doc §3.1) +
+                              OllamaProvider, the first implementation
 internal/systemenginepb/      generated gRPC/protobuf stubs for
                               protocol/system_engine.proto (gitignored;
                               regenerate with protocol/generate.sh) plus a
@@ -50,14 +52,24 @@ internal/systemenginepb/      generated gRPC/protobuf stubs for
 ## Running
 
 ```
-go run . -addr :8080 -db layforge.db
+go run . -addr :8080 -db layforge.db -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
 ```
 
 `-db` defaults to `layforge.db` in the working directory — SQLite,
 zero-config, created on first run. Every message the WebSocket endpoint
-exchanges during the handshake is appended to its `events` table,
-scoped by `campaign_id` and ordered by a store-assigned sequence number;
-inspect it directly with `sqlite3 layforge.db`.
+exchanges is appended to its `events` table, scoped by `campaign_id` and
+ordered by a store-assigned sequence number; inspect it directly with
+`sqlite3 layforge.db`.
+
+`-llm-url` has no default — narrative rendering is disabled (a
+`narrative.player_input` gets a `system.error` explaining why) unless you
+point it at a reachable Ollama server. `-llm-model` defaults to
+`qwen3.8:27b`; pick whatever model your Ollama instance actually has
+(`curl <url>/api/tags` to check). Not every model behaves well here — in
+testing, a 7B "instruct" model produced reliably garbled output on
+RPG-narrative-style prompts while a 27B model handled the same prompts
+correctly; if narrative bubbles come back corrupted, try a different/
+larger model before assuming the pipeline itself is broken.
 
 ## Testing
 

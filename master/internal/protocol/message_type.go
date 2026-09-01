@@ -19,14 +19,16 @@ type MessageType string
 // Master implements more of it; an unrecognized type on the wire is
 // rejected by IsValid, not silently accepted.
 const (
-	MessageTypeUnspecified         MessageType = ""
-	MessageTypeSystemConnect       MessageType = "system.connect"
-	MessageTypeSystemSessionState  MessageType = "system.session_state"
-	MessageTypeSystemError         MessageType = "system.error"
-	MessageTypeSafetyFlag          MessageType = "safety.flag"
-	MessageTypeSafetyFlagBroadcast MessageType = "safety.flag_broadcast"
-	MessageTypeLogHistoryRequest   MessageType = "log.history_request"
-	MessageTypeLogHistoryResponse  MessageType = "log.history_response"
+	MessageTypeUnspecified           MessageType = ""
+	MessageTypeSystemConnect         MessageType = "system.connect"
+	MessageTypeSystemSessionState    MessageType = "system.session_state"
+	MessageTypeSystemError           MessageType = "system.error"
+	MessageTypeSafetyFlag            MessageType = "safety.flag"
+	MessageTypeSafetyFlagBroadcast   MessageType = "safety.flag_broadcast"
+	MessageTypeLogHistoryRequest     MessageType = "log.history_request"
+	MessageTypeLogHistoryResponse    MessageType = "log.history_response"
+	MessageTypeNarrativePlayerInput  MessageType = "narrative.player_input"
+	MessageTypeNarrativePlayerBubble MessageType = "narrative.player_bubble"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -36,7 +38,8 @@ func (t MessageType) IsValid() bool {
 	switch t {
 	case MessageTypeSystemConnect, MessageTypeSystemSessionState, MessageTypeSystemError,
 		MessageTypeSafetyFlag, MessageTypeSafetyFlagBroadcast,
-		MessageTypeLogHistoryRequest, MessageTypeLogHistoryResponse:
+		MessageTypeLogHistoryRequest, MessageTypeLogHistoryResponse,
+		MessageTypeNarrativePlayerInput, MessageTypeNarrativePlayerBubble:
 		return true
 	default:
 		return false

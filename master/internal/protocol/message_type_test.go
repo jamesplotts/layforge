@@ -19,6 +19,8 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "SafetyFlagBroadcast_ReturnsTrue", t: MessageTypeSafetyFlagBroadcast, want: true},
 		{name: "LogHistoryRequest_ReturnsTrue", t: MessageTypeLogHistoryRequest, want: true},
 		{name: "LogHistoryResponse_ReturnsTrue", t: MessageTypeLogHistoryResponse, want: true},
+		{name: "NarrativePlayerInput_ReturnsTrue", t: MessageTypeNarrativePlayerInput, want: true},
+		{name: "NarrativePlayerBubble_ReturnsTrue", t: MessageTypeNarrativePlayerBubble, want: true},
 		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("narrative.dm_prose"), want: false},
 	}
 

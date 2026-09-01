@@ -6,14 +6,14 @@
 // system.error on rejection), followed by a per-connection message loop
 // that dispatches whatever the client sends next. See design doc §5 for
 // the protocol and §11 for what's still to come — governance-gate
-// enforcement and most message categories (narrative, roll, map, tool)
-// don't exist yet. Two are implemented so far: safety.flag (§9.2),
-// broadcast to every client in the campaign via package session's Hub,
-// and log.history_request (§10, §11), answered from package store
-// directly to the requester. Both were reachable without an LLM or a
-// real system-engine sidecar, which most of the rest of the protocol
-// isn't — see CLAUDE.md and each dispatch case's own comments for why a
-// given message either is or isn't implemented yet.
+// enforcement and most message categories (roll, map, character, tool)
+// don't exist yet. Implemented so far: safety.flag (§9.2), broadcast to
+// every client in the campaign via package session's Hub;
+// log.history_request (§10, §11), answered from package store directly
+// to the requester; and narrative.player_input (§7's fast pass only —
+// see renderPlayerBubble), rendered via package llm and broadcast as
+// narrative.player_bubble. See CLAUDE.md and each dispatch case's own
+// comments for why a given message either is or isn't implemented yet.
 package server
 
 import (
@@ -28,6 +28,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
@@ -44,15 +45,29 @@ type Server struct {
 	logger *slog.Logger
 	events store.EventStore
 	hub    *session.Hub
+
+	llm            llm.Provider
+	narrativeModel string
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
 // the caller has no specific logger configured. events may be nil to run
 // without persistence (e.g. in tests that don't care about the audit
 // log) — every message Server exchanges is still handled normally either
-// way, since recording is best-effort (see recordEvent).
-func New(logger *slog.Logger, events store.EventStore) *Server {
-	return &Server{logger: logger, events: events, hub: session.NewHub()}
+// way, since recording is best-effort (see recordEvent). llmProvider may
+// also be nil to run without narrative rendering — a
+// narrative.player_input then gets a system.error explaining rendering
+// is unavailable, rather than Master panicking on a nil provider.
+// narrativeModel names the model llmProvider should use; it's ignored
+// when llmProvider is nil.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string) *Server {
+	return &Server{
+		logger:         logger,
+		events:         events,
+		hub:            session.NewHub(),
+		llm:            llmProvider,
+		narrativeModel: narrativeModel,
+	}
 }
 
 // Handler returns the http.Handler that serves the WebSocket endpoint,
@@ -228,6 +243,13 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// log, not a game event — recording it would just be recursive
 		// noise (a request to view history, sitting in the history).
 		return s.sendHistory(ctx, conn, campaignID, envelope.MessageID, req.Payload)
+	case protocol.MessageTypeNarrativePlayerInput:
+		var input protocol.NarrativePlayerInputMessage
+		if err := json.Unmarshal(data, &input); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed narrative.player_input payload: %w", err))
+		}
+		recordEvent(ctx, s, input)
+		return s.renderPlayerBubble(ctx, conn, campaignID, input)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
@@ -253,6 +275,58 @@ func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic stri
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshaling safety.flag_broadcast: %w", err)
+	}
+	s.hub.Broadcast(campaignID, payload)
+	return nil
+}
+
+// narrativeFastPassSystemPrompt instructs the model for design doc §7's
+// fast pass: render the player's stated action/dialogue in third-person
+// prose, faithfully — not the DM/NPC reaction, and not a ruling on
+// whether the action succeeds. That's the slow pass's job (design doc
+// §7's second beat), which isn't implemented — see renderPlayerBubble.
+const narrativeFastPassSystemPrompt = `You are rendering a tabletop RPG player's stated action or dialogue into brief, third-person, present-tense narrative prose for a shared chat log.
+Rules:
+- Describe only what the player explicitly stated — do not invent new events, dialogue, or outcomes.
+- Do not resolve success or failure of any action; that is decided elsewhere.
+- Keep it to 1-3 sentences.
+- Write in the tone of a dungeon master narrating at the table.
+- Output only the narrated prose, nothing else — no preamble, no quotation marks around it.`
+
+// renderPlayerBubble runs the narrative-transform pipeline's fast pass
+// only (design doc §7): rendering the player's stated action/dialogue in
+// third-person DM-voiced prose via s.llm, then broadcasting the result as
+// narrative.player_bubble to everyone in the campaign. There is no slow
+// pass yet — no DM/NPC reaction is generated, and no campaign/character
+// context is fed to the model beyond the player's own input, since
+// neither exists in Master yet to feed it.
+func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, campaignID string, input protocol.NarrativePlayerInputMessage) error {
+	if s.llm == nil {
+		return s.sendError(ctx, conn, campaignID, input.MessageID, errors.New("narrative rendering unavailable: no LLM provider configured"))
+	}
+
+	completion, err := s.llm.Complete(ctx, llm.CompletionRequest{
+		Model:        s.narrativeModel,
+		SystemPrompt: narrativeFastPassSystemPrompt,
+		UserPrompt:   input.Payload.Text,
+	})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, input.MessageID, fmt.Errorf("rendering narrative: %w", err))
+	}
+
+	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativePlayerBubble, protocol.NarrativePlayerBubblePayload{
+		CharacterID: input.Payload.CharacterID,
+		Text:        completion.Text,
+		Editable:    true,
+	})
+	if err != nil {
+		return err
+	}
+	recordEvent(ctx, s, msg)
+
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshaling narrative.player_bubble: %w", err)
 	}
 	s.hub.Broadcast(campaignID, payload)
 	return nil

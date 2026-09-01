@@ -6,6 +6,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/server"
 	"github.com/jamesplotts/layforge/master/internal/store"
@@ -161,7 +163,7 @@ func TestHandleWebSocket_ValidConnect_PersistsHandshakeEvents(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = events.Close() })
 
-	srv := server.New(logger, events)
+	srv := server.New(logger, events, nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -421,7 +423,7 @@ func TestServe_LogHistoryRequest_ReturnsRecordedEventsInOrder(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = events.Close() })
 
-	ts := httptest.NewServer(server.New(logger, events).Handler())
+	ts := httptest.NewServer(server.New(logger, events, nil, "").Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-history", "player-a")
@@ -499,7 +501,7 @@ func TestServe_LogHistoryRequest_Pagination(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = events.Close() })
 
-	ts := httptest.NewServer(server.New(logger, events).Handler())
+	ts := httptest.NewServer(server.New(logger, events, nil, "").Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-page", "player-a")
@@ -538,7 +540,7 @@ func TestServe_LogHistoryRequest_Pagination(t *testing.T) {
 }
 
 func TestServe_LogHistoryRequest_PersistenceDisabled_RespondsWithError(t *testing.T) {
-	ts := newTestServer(t) // uses server.New(logger, nil) — no store
+	ts := newTestServer(t) // uses server.New(logger, nil, nil, "") — no store
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
@@ -596,6 +598,170 @@ func requestHistory(ctx context.Context, conn *websocket.Conn, campaignID, sende
 	return resp.Payload, nil
 }
 
+func TestServe_NarrativePlayerInput_RendersAndBroadcastsBubble(t *testing.T) {
+	fake := &fakeLLMProvider{response: llm.CompletionResponse{Text: "Player-A draws a sword."}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model").Handler())
+	defer ts.Close()
+
+	a := dialAndJoin(t, ts, "campaign-narrative", "player-a")
+	defer a.CloseNow()
+	b := dialAndJoin(t, ts, "campaign-narrative", "player-b")
+	defer b.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := protocol.NarrativePlayerInputMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "input-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-narrative",
+			Type:            protocol.MessageTypeNarrativePlayerInput,
+		},
+		Payload: protocol.NarrativePlayerInputPayload{
+			CharacterID: "char-a",
+			Text:        "I draw my sword.",
+			Source:      protocol.NarrativeInputSourceTyped,
+		},
+	}
+	if err := wsjson.Write(ctx, a, input); err != nil {
+		t.Fatalf("Write(narrative.player_input) error = %v", err)
+	}
+
+	for name, conn := range map[string]*websocket.Conn{"player-a (sender)": a, "player-b": b} {
+		var got protocol.NarrativePlayerBubbleMessage
+		if err := wsjson.Read(ctx, conn, &got); err != nil {
+			t.Fatalf("%s: Read(narrative.player_bubble) error = %v", name, err)
+		}
+		if got.Type != protocol.MessageTypeNarrativePlayerBubble {
+			t.Errorf("%s: Type = %q, want %q", name, got.Type, protocol.MessageTypeNarrativePlayerBubble)
+		}
+		if got.Payload.Text != "Player-A draws a sword." {
+			t.Errorf("%s: Payload.Text = %q, want %q", name, got.Payload.Text, "Player-A draws a sword.")
+		}
+		if got.Payload.CharacterID != "char-a" {
+			t.Errorf("%s: Payload.CharacterID = %q, want %q", name, got.Payload.CharacterID, "char-a")
+		}
+		if !got.Payload.Editable {
+			t.Errorf("%s: Payload.Editable = false, want true", name)
+		}
+	}
+
+	if fake.lastRequest.Model != "test-model" {
+		t.Errorf("Complete() called with Model = %q, want %q", fake.lastRequest.Model, "test-model")
+	}
+	if fake.lastRequest.UserPrompt != "I draw my sword." {
+		t.Errorf("Complete() called with UserPrompt = %q, want %q", fake.lastRequest.UserPrompt, "I draw my sword.")
+	}
+}
+
+func TestServe_NarrativePlayerInput_NoProvider_RespondsWithError(t *testing.T) {
+	ts := newTestServer(t) // no LLM provider configured
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := protocol.NarrativePlayerInputMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "input-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-1",
+			Type:            protocol.MessageTypeNarrativePlayerInput,
+		},
+		Payload: protocol.NarrativePlayerInputPayload{CharacterID: "char-a", Text: "hi", Source: protocol.NarrativeInputSourceTyped},
+	}
+	if err := wsjson.Write(ctx, conn, input); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	var got protocol.SystemErrorMessage
+	if err := wsjson.Read(ctx, conn, &got); err != nil {
+		t.Fatalf("Read(system.error) error = %v", err)
+	}
+	if got.Payload.InReplyToMessageID != input.MessageID {
+		t.Errorf("Payload.InReplyToMessageID = %q, want %q", got.Payload.InReplyToMessageID, input.MessageID)
+	}
+}
+
+func TestServe_NarrativePlayerInput_ProviderError_RespondsWithErrorAndKeepsConnectionOpen(t *testing.T) {
+	fake := &fakeLLMProvider{err: errors.New("model unavailable")}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model").Handler())
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := protocol.NarrativePlayerInputMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "input-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-1",
+			Type:            protocol.MessageTypeNarrativePlayerInput,
+		},
+		Payload: protocol.NarrativePlayerInputPayload{CharacterID: "char-a", Text: "hi", Source: protocol.NarrativeInputSourceTyped},
+	}
+	if err := wsjson.Write(ctx, conn, input); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	var gotErr protocol.SystemErrorMessage
+	if err := wsjson.Read(ctx, conn, &gotErr); err != nil {
+		t.Fatalf("Read(system.error) error = %v", err)
+	}
+
+	// Connection must still be usable afterward.
+	flag := protocol.SafetyFlagMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "flag-after-llm-error",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-1",
+			Type:            protocol.MessageTypeSafetyFlag,
+		},
+	}
+	if err := wsjson.Write(ctx, conn, flag); err != nil {
+		t.Fatalf("Write(safety.flag) after LLM error error = %v", err)
+	}
+	var gotBroadcast protocol.SafetyFlagBroadcastMessage
+	if err := wsjson.Read(ctx, conn, &gotBroadcast); err != nil {
+		t.Fatalf("Read(safety.flag_broadcast) after LLM error error = %v", err)
+	}
+}
+
+// fakeLLMProvider is a minimal llm.Provider for testing narrative
+// rendering without a real Ollama server.
+type fakeLLMProvider struct {
+	response llm.CompletionResponse
+	err      error
+	// lastRequest captures the most recent Complete() call's request,
+	// for asserting on what Server actually sent to the provider.
+	lastRequest llm.CompletionRequest
+}
+
+func (f *fakeLLMProvider) Complete(_ context.Context, req llm.CompletionRequest) (llm.CompletionResponse, error) {
+	f.lastRequest = req
+	if f.err != nil {
+		return llm.CompletionResponse{}, f.err
+	}
+	return f.response, nil
+}
+
 // dialAndJoin dials ts, completes the handshake for campaignID
 // (attributing the connect to sender, used as both message_id prefix and
 // sender_id so failures are easy to trace back to a specific test
@@ -639,7 +805,7 @@ func dialAndJoin(t *testing.T, ts *httptest.Server, campaignID, sender string) *
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := server.New(logger, nil)
+	srv := server.New(logger, nil, nil, "")
 	return httptest.NewServer(srv.Handler())
 }
 

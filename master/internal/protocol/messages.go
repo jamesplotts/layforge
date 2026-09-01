@@ -116,3 +116,60 @@ type HistoryResponsePayload struct {
 
 // HistoryResponseMessage is a log.history_response Message.
 type HistoryResponseMessage = Message[HistoryResponsePayload]
+
+// NarrativeInputSource records how the player input a
+// NarrativePlayerInputPayload's Text — typed, or finalized from voice
+// transcription (design doc §4, §7). The zero value,
+// NarrativeInputSourceUnspecified, is never valid on the wire.
+type NarrativeInputSource string
+
+const (
+	NarrativeInputSourceUnspecified NarrativeInputSource = ""
+	NarrativeInputSourceTyped       NarrativeInputSource = "typed"
+	NarrativeInputSourceVoice       NarrativeInputSource = "voice"
+)
+
+// IsValid reports whether s is a recognized input source. It
+// deliberately returns false for NarrativeInputSourceUnspecified.
+func (s NarrativeInputSource) IsValid() bool {
+	switch s {
+	case NarrativeInputSourceTyped, NarrativeInputSourceVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// NarrativePlayerInputPayload is the payload of a narrative.player_input
+// message: a player's raw typed or voice-transcribed action/dialogue,
+// which Master's narrative-transform pipeline (design doc §7) renders
+// into a NarrativePlayerBubblePayload before broadcast — never shown to
+// other players verbatim. See protocol/asyncapi.yaml
+// components.messages.NarrativePlayerInput.
+type NarrativePlayerInputPayload struct {
+	CharacterID string               `json:"character_id"`
+	Text        string               `json:"text"`
+	Source      NarrativeInputSource `json:"source"`
+}
+
+// NarrativePlayerInputMessage is a narrative.player_input Message.
+type NarrativePlayerInputMessage = Message[NarrativePlayerInputPayload]
+
+// NarrativePlayerBubblePayload is the payload of a narrative.player_bubble
+// message: the rendered, third-person, DM-voiced prose for a player's own
+// stated action/dialogue (design doc §7's fast pass). See protocol/
+// asyncapi.yaml components.messages.NarrativePlayerBubble.
+type NarrativePlayerBubblePayload struct {
+	CharacterID string `json:"character_id"`
+	Text        string `json:"text"`
+	// Visibility is nil (omitted) until knowledge scoping (design doc
+	// §9.7) is actually enforced — see VisibilityScope's doc comment.
+	Visibility *VisibilityScope `json:"visibility,omitempty"`
+	// Editable is true if the originating player may still edit/
+	// regenerate this bubble (design doc §7) — not enforced anywhere yet;
+	// Master doesn't implement narrative.regenerate_request.
+	Editable bool `json:"editable,omitempty"`
+}
+
+// NarrativePlayerBubbleMessage is a narrative.player_bubble Message.
+type NarrativePlayerBubbleMessage = Message[NarrativePlayerBubblePayload]
