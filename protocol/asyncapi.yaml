@@ -1,0 +1,731 @@
+asyncapi: 2.6.0
+id: 'urn:layforge:protocol:client'
+info:
+  title: Layforge Client Protocol
+  version: 0.1.0
+  contact:
+    name: James Duane Plotts
+    url: https://github.com/jamesplotts/layforge
+  description: |
+    Client-facing WebSocket protocol between Master and Slave/third-party
+    clients (docs/design.md §5). A single WebSocket connection per client
+    multiplexes every message category below — there is no separate
+    transport per feature.
+
+    This is a first draft covering representative messages per category,
+    not an exhaustive enumeration — docs/design.md §5 explicitly describes
+    the category list as non-exhaustive, and this spec should grow message
+    definitions as each is implemented rather than being fully speculated
+    up front.
+  license:
+    name: MIT
+    url: https://github.com/jamesplotts/layforge/blob/main/LICENSE
+tags:
+  - name: narrative
+    description: DM prose, player narrative bubbles, system notes (docs/design.md §7).
+  - name: map
+    description: Renderer-agnostic token/room state (docs/design.md §6.2).
+  - name: roll
+    description: Authoritative server-side dice resolution (docs/design.md §3.1, §4).
+  - name: audio
+    description: Push-to-talk voice input and transcription (docs/design.md §4).
+  - name: character
+    description: Upload, validation, and review of imported characters (docs/design.md §9.4).
+  - name: safety
+    description: X-card/veil flags (docs/design.md §9.2).
+  - name: tool
+    description: DM tool-use call results (docs/design.md §8).
+  - name: system
+    description: Connection/session lifecycle.
+
+defaultContentType: application/json
+
+servers:
+  master:
+    url: "{host}:{port}/ws"
+    protocol: wss
+    description: Master's WebSocket endpoint, reverse-proxied for TLS termination (docs/design.md §3.2).
+    variables:
+      host:
+        default: localhost
+        description: Master host, or the reverse-proxy host in production.
+      port:
+        default: "8080"
+
+channels:
+  /ws:
+    description: >
+      The single multiplexed connection. Every inbound message is one of
+      `clientMessages`; every outbound message is one of `serverMessages`.
+      Routing within the connection is by each message's `type` field
+      (see the Envelope schema), not by channel — AsyncAPI models this as
+      one channel with a oneOf message set per direction because the
+      transport itself has no sub-channels.
+    subscribe:
+      operationId: receiveServerMessage
+      summary: Messages Master sends to a connected client.
+      message:
+        oneOf:
+          - $ref: '#/components/messages/NarrativeDmProse'
+          - $ref: '#/components/messages/NarrativePlayerBubble'
+          - $ref: '#/components/messages/NarrativeSystemNote'
+          - $ref: '#/components/messages/MapTokenState'
+          - $ref: '#/components/messages/RollRequest'
+          - $ref: '#/components/messages/RollResult'
+          - $ref: '#/components/messages/AudioTranscription'
+          - $ref: '#/components/messages/CharacterValidationResult'
+          - $ref: '#/components/messages/CharacterReviewStatus'
+          - $ref: '#/components/messages/SafetyFlagBroadcast'
+          - $ref: '#/components/messages/ToolResult'
+          - $ref: '#/components/messages/SystemSessionState'
+          - $ref: '#/components/messages/SystemError'
+    publish:
+      operationId: sendClientMessage
+      summary: Messages a client sends to Master.
+      message:
+        oneOf:
+          - $ref: '#/components/messages/NarrativePlayerInput'
+          - $ref: '#/components/messages/NarrativeRegenerateRequest'
+          - $ref: '#/components/messages/MapTokenMoveRequest'
+          - $ref: '#/components/messages/RollAcknowledge'
+          - $ref: '#/components/messages/AudioChunk'
+          - $ref: '#/components/messages/CharacterUpload'
+          - $ref: '#/components/messages/SafetyFlag'
+          - $ref: '#/components/messages/SystemConnect'
+
+components:
+  messages:
+
+    # --- narrative.* (docs/design.md §5, §7) ---
+
+    NarrativeDmProse:
+      name: narrative.dm_prose
+      messageId: narrative_dm_prose
+      title: DM narrative prose
+      summary: DM/NPC narration, the slow-pass output of the narrative-transform pipeline (docs/design.md §7).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: narrative.dm_prose
+              payload:
+                type: object
+                required: [text]
+                properties:
+                  text:
+                    type: string
+                  visibility:
+                    $ref: '#/components/schemas/VisibilityScope'
+                  in_reply_to_message_id:
+                    type: string
+                    description: message_id of the player input this narrates in response to, if any.
+
+    NarrativePlayerBubble:
+      name: narrative.player_bubble
+      messageId: narrative_player_bubble
+      title: Rendered player narrative bubble
+      summary: Fast-pass rendering of a player's own stated action/dialogue in third-person DM-voiced prose (docs/design.md §7).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: narrative.player_bubble
+              payload:
+                type: object
+                required: [character_id, text]
+                properties:
+                  character_id:
+                    type: string
+                  text:
+                    type: string
+                  visibility:
+                    $ref: '#/components/schemas/VisibilityScope'
+                  editable:
+                    type: boolean
+                    description: True if the originating player may still edit/regenerate this bubble.
+
+    NarrativeSystemNote:
+      name: narrative.system_note
+      messageId: narrative_system_note
+      title: Out-of-character system note
+      summary: Lightweight OOC escape hatch (docs/design.md §7) — e.g. "brb", mic-shy player text — rendered distinctly from in-character narration.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: narrative.system_note
+              payload:
+                type: object
+                required: [text]
+                properties:
+                  text:
+                    type: string
+
+    NarrativePlayerInput:
+      name: narrative.player_input
+      messageId: narrative_player_input
+      title: Raw player input
+      summary: Typed or finalized-voice-transcribed player action/dialogue, stored alongside its rendered bubble for edit/regenerate and campaign log (docs/design.md §7).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: narrative.player_input
+              payload:
+                type: object
+                required: [character_id, text, source]
+                properties:
+                  character_id:
+                    type: string
+                  text:
+                    type: string
+                  source:
+                    type: string
+                    enum: [typed, voice]
+
+    NarrativeRegenerateRequest:
+      name: narrative.regenerate_request
+      messageId: narrative_regenerate_request
+      title: Regenerate/edit own bubble
+      summary: Player requests their own already-broadcast bubble be regenerated or edited (docs/design.md §7).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: narrative.regenerate_request
+              payload:
+                type: object
+                required: [target_message_id]
+                properties:
+                  target_message_id:
+                    type: string
+                  edited_text:
+                    type: string
+                    description: If present, use this text directly rather than regenerating from the original raw input.
+
+    # --- map.* (docs/design.md §5, §6.2) ---
+
+    MapTokenState:
+      name: map.token_state
+      messageId: map_token_state
+      title: Token position/facing state
+      summary: Renderer-agnostic grid/coordinate state — no camera-model assumptions, so both a tactical top-down viewport and a first-person grid-crawler can consume the same feed (docs/design.md §6.2).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: map.token_state
+              payload:
+                type: object
+                required: [room_id, tokens]
+                properties:
+                  room_id:
+                    type: string
+                  room_adjacency:
+                    type: array
+                    items:
+                      type: string
+                    description: IDs of rooms adjacent to room_id, for renderers that need crawler-style navigation.
+                  tokens:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Token'
+
+    MapTokenMoveRequest:
+      name: map.token_move_request
+      messageId: map_token_move_request
+      title: Client-initiated token move
+      summary: A viewport letting a player move their own token requests it; Master validates before broadcasting accepted state (docs/design.md §6.2).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: map.token_move_request
+              payload:
+                type: object
+                required: [token_id, to]
+                properties:
+                  token_id:
+                    type: string
+                  to:
+                    $ref: '#/components/schemas/GridPosition'
+
+    # --- roll.* (docs/design.md §5, §4) ---
+
+    RollRequest:
+      name: roll.request
+      messageId: roll_request
+      title: Roll requested
+      summary: Master informs a client a roll is about to happen (e.g. so it can pre-stage the dice-tray animation), roll spec sourced from the system engine, not assumed d20-shaped.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: roll.request
+              payload:
+                type: object
+                required: [character_id, roll_spec]
+                properties:
+                  character_id:
+                    type: string
+                  roll_spec:
+                    $ref: '#/components/schemas/RollSpec'
+
+    RollResult:
+      name: roll.result
+      messageId: roll_result
+      title: Authoritative roll result
+      summary: The server-computed result. Clients animate a tumble that lands on this outcome; they never determine it (docs/design.md §3.1, §4).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: roll.result
+              payload:
+                type: object
+                required: [character_id, rolls, total]
+                properties:
+                  character_id:
+                    type: string
+                  rolls:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DieRoll'
+                  total:
+                    type: integer
+                  result_summary:
+                    type: string
+                    description: Short machine-usable label, e.g. "hit", "miss", "success", "failure".
+
+    RollAcknowledge:
+      name: roll.acknowledge
+      messageId: roll_acknowledge
+      title: Client acknowledges roll animation complete
+      summary: Lets Master sequence narration after the dice-tray animation finishes rather than racing it.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: roll.acknowledge
+              payload:
+                type: object
+                required: [in_reply_to_message_id]
+                properties:
+                  in_reply_to_message_id:
+                    type: string
+
+    # --- audio.* (docs/design.md §5, §4) ---
+
+    AudioChunk:
+      name: audio.chunk
+      messageId: audio_chunk
+      title: Streamed push-to-talk audio chunk
+      summary: Chunked audio uploaded while the push-to-talk button is held; VAD segments speech within the window (docs/design.md §4).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: audio.chunk
+              payload:
+                type: object
+                required: [stream_id, sequence, audio_base64, final]
+                properties:
+                  stream_id:
+                    type: string
+                    description: Groups chunks belonging to one held-button recording session.
+                  sequence:
+                    type: integer
+                  audio_base64:
+                    type: string
+                    contentEncoding: base64
+                  final:
+                    type: boolean
+                    description: True on the chunk sent when the button is released.
+
+    AudioTranscription:
+      name: audio.transcription
+      messageId: audio_transcription
+      title: Transcription result (partial or final)
+      summary: Live partial-transcription feedback shown to the speaking player; only the finalized text is ever written to the durable log (docs/design.md §4, §10).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: audio.transcription
+              payload:
+                type: object
+                required: [stream_id, text, is_final]
+                properties:
+                  stream_id:
+                    type: string
+                  text:
+                    type: string
+                  is_final:
+                    type: boolean
+
+    # --- character.* (docs/design.md §5, §9.4) ---
+
+    CharacterUpload:
+      name: character.upload
+      messageId: character_upload
+      title: Character upload/import
+      summary: Player uploads a character; JSON conforms to the active system engine's schema (docs/design.md §6.1). Uploaded characters are personal library data, not campaign state, until approved into a session (docs/design.md §9.4).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.upload
+              payload:
+                type: object
+                required: [character_json, schema_version]
+                properties:
+                  character_json:
+                    type: string
+                    description: Serialized character data conforming to the system engine's character schema.
+                  schema_version:
+                    type: string
+
+    CharacterValidationResult:
+      name: character.validation_result
+      messageId: character_validation_result
+      title: Mechanical + narrative validation result
+      summary: Combines system-engine validate_character() output with the DM's freeform narrative-flag pass (docs/design.md §9.4).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.validation_result
+              payload:
+                type: object
+                required: [character_id, warnings]
+                properties:
+                  character_id:
+                    type: string
+                  warnings:
+                    type: array
+                    items:
+                      type: object
+                      required: [field_path, message, severity]
+                      properties:
+                        field_path:
+                          type: string
+                        message:
+                          type: string
+                        severity:
+                          type: string
+                          enum: [error, warning]
+                  narrative_flags:
+                    type: array
+                    items:
+                      type: string
+                    description: Freeform notes from the DM's lore-consistency pass (e.g. lore-breaking backstory content).
+
+    CharacterReviewStatus:
+      name: character.review_status
+      messageId: character_review_status
+      title: Character review status change
+      summary: Master operator's approve/reject decision on an imported character (docs/design.md §9.4).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.review_status
+              payload:
+                type: object
+                required: [character_id, status]
+                properties:
+                  character_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [pending_review, approved, rejected]
+                  reason:
+                    type: string
+                    description: Set when status = rejected, or as change-request notes.
+
+    # --- safety.* (docs/design.md §5, §9.2) ---
+
+    SafetyFlag:
+      name: safety.flag
+      messageId: safety_flag
+      title: X-card / veil flag
+      summary: Any client can send this at any time; immediately interrupts the current scene for all clients and constrains the DM's next generation (docs/design.md §9.2).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: safety.flag
+              payload:
+                type: object
+                properties:
+                  topic:
+                    type: string
+                    description: Optional topic tag, omitted for a bare X-card.
+
+    SafetyFlagBroadcast:
+      name: safety.flag_broadcast
+      messageId: safety_flag_broadcast
+      title: Safety flag broadcast to the table
+      summary: Master's rebroadcast of a received safety.flag to all connected clients, deliberately not naming which player sent it.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: safety.flag_broadcast
+              payload:
+                type: object
+                properties:
+                  topic:
+                    type: string
+
+    # --- tool.* (docs/design.md §5, §8) ---
+
+    ToolResult:
+      name: tool.result
+      messageId: tool_result
+      title: DM tool-use call result
+      summary: Broadcast of a completed tool call for transparency/logging (docs/design.md §8). Governance-gate rejections (docs/design.md §9) surface here as success=false.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: tool.result
+              payload:
+                type: object
+                required: [tool_name, caller, success]
+                properties:
+                  tool_name:
+                    type: string
+                  caller:
+                    type: string
+                    description: "'dm' or a specific character_id, per docs/design.md §8's logging requirement."
+                  success:
+                    type: boolean
+                  reason_code:
+                    type: string
+                    description: Set on failure, e.g. a governance-gate rejection reason (docs/design.md §9).
+
+    # --- system.* (docs/design.md §5) ---
+
+    SystemConnect:
+      name: system.connect
+      messageId: system_connect
+      title: Client session handshake
+      summary: First message a client sends after opening the WebSocket — identifies itself and negotiates protocol_version.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: system.connect
+              payload:
+                type: object
+                required: [client_kind, auth_token]
+                properties:
+                  client_kind:
+                    type: string
+                    description: e.g. "player_web_v1", or a third-party viewport identifying itself (docs/design.md §4).
+                  auth_token:
+                    type: string
+
+    SystemSessionState:
+      name: system.session_state
+      messageId: system_session_state
+      title: Session lifecycle state
+      summary: Connection/session lifecycle notifications (e.g. another player joined/left, campaign paused).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: system.session_state
+              payload:
+                type: object
+                required: [state]
+                properties:
+                  state:
+                    type: string
+                    enum: [joined, left, paused, resumed]
+                  character_id:
+                    type: string
+
+    SystemError:
+      name: system.error
+      messageId: system_error
+      title: Protocol/session error
+      summary: Server-side error not tied to a specific tool call (e.g. malformed message, stale protocol_version).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: system.error
+              payload:
+                type: object
+                required: [code, message]
+                properties:
+                  code:
+                    type: string
+                  message:
+                    type: string
+                  in_reply_to_message_id:
+                    type: string
+
+  schemas:
+
+    Envelope:
+      type: object
+      description: >
+        Fields every message carries (docs/design.md §5), regardless of
+        category. Concrete messages extend this via allOf and pin `type`
+        to their own const.
+      required: [protocol_version, message_id, timestamp, sender_id, campaign_id, type]
+      properties:
+        protocol_version:
+          type: string
+          description: Semver of the protocol this message was authored against, e.g. "0.1.0".
+        message_id:
+          type: string
+          description: Unique per message — enables ack/dedup and future threading/editing, independent of arrival order.
+        timestamp:
+          type: string
+          format: date-time
+        sender_id:
+          type: string
+          description: Master's own connection ID for server-originated messages, or the sending client's player/character ID.
+        campaign_id:
+          type: string
+        type:
+          type: string
+          description: Discriminator selecting which concrete message this envelope carries, e.g. "narrative.dm_prose".
+
+    VisibilityScope:
+      type: object
+      description: Knowledge-scoping metadata (docs/design.md §9.7) — persisted with the same scope it had live, so history review can't leak something private in the moment.
+      required: [scope]
+      properties:
+        scope:
+          type: string
+          enum: [public, private]
+        visible_to_character_ids:
+          type: array
+          items:
+            type: string
+          description: Set only when scope = private.
+
+    GridPosition:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: integer
+        y:
+          type: integer
+        facing:
+          type: number
+          description: Degrees, renderer-agnostic (docs/design.md §6.2) — a 3D viewport and a grid-crawler both derive their own camera/sprite handling from this.
+
+    Token:
+      type: object
+      required: [token_id, character_id, position]
+      properties:
+        token_id:
+          type: string
+        character_id:
+          type: string
+        position:
+          $ref: '#/components/schemas/GridPosition'
+
+    DieRoll:
+      type: object
+      required: [sides, result]
+      properties:
+        sides:
+          type: integer
+        result:
+          type: integer
+        label:
+          type: string
+          description: Disambiguates multi-die pools, e.g. "d20", "damage-1".
+
+    RollSpec:
+      type: object
+      description: Roll shape sourced from the system engine — not assumed d20-based (docs/design.md §4).
+      required: [dice]
+      properties:
+        dice:
+          type: array
+          items:
+            type: object
+            required: [sides, count]
+            properties:
+              sides:
+                type: integer
+              count:
+                type: integer
+        success_threshold:
+          type: integer
+          description: For pool-based systems (e.g. count successes at or above this value); omitted for simple total-vs-DC systems.
+        botch_rule:
+          type: string
+          description: Engine-defined description of botch/fumble handling, if any.
