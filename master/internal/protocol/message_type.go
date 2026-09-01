@@ -25,6 +25,8 @@ const (
 	MessageTypeSystemError         MessageType = "system.error"
 	MessageTypeSafetyFlag          MessageType = "safety.flag"
 	MessageTypeSafetyFlagBroadcast MessageType = "safety.flag_broadcast"
+	MessageTypeLogHistoryRequest   MessageType = "log.history_request"
+	MessageTypeLogHistoryResponse  MessageType = "log.history_response"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -33,7 +35,8 @@ const (
 func (t MessageType) IsValid() bool {
 	switch t {
 	case MessageTypeSystemConnect, MessageTypeSystemSessionState, MessageTypeSystemError,
-		MessageTypeSafetyFlag, MessageTypeSafetyFlagBroadcast:
+		MessageTypeSafetyFlag, MessageTypeSafetyFlagBroadcast,
+		MessageTypeLogHistoryRequest, MessageTypeLogHistoryResponse:
 		return true
 	default:
 		return false

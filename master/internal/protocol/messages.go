@@ -3,6 +3,8 @@
 
 package protocol
 
+import "encoding/json"
+
 // Message pairs an Envelope with its typed Payload, matching the flat
 // JSON shape protocol/asyncapi.yaml describes via allOf: envelope fields
 // and "payload" side by side in one object. Envelope's exported fields
@@ -80,3 +82,37 @@ type SafetyFlagBroadcastPayload struct {
 
 // SafetyFlagBroadcastMessage is a safety.flag_broadcast Message.
 type SafetyFlagBroadcastMessage = Message[SafetyFlagBroadcastPayload]
+
+// HistoryRequestPayload is the payload of a log.history_request message:
+// a client asking for a page of the durable campaign event log (design
+// doc §10) for chat-log/history review (§11). See protocol/asyncapi.yaml
+// components.messages.LogHistoryRequest.
+type HistoryRequestPayload struct {
+	// AfterSequence returns only events after this store-assigned
+	// sequence number — not a message_id or timestamp; see design doc
+	// §10 on why sequence, not client-supplied fields, is the pagination
+	// cursor. Zero means from the beginning of the campaign's log.
+	AfterSequence int64 `json:"after_sequence,omitempty"`
+	// Limit caps how many events come back; zero (or an oversized value)
+	// falls back to Master's own default/cap.
+	Limit int `json:"limit,omitempty"`
+}
+
+// HistoryRequestMessage is a log.history_request Message.
+type HistoryRequestMessage = Message[HistoryRequestPayload]
+
+// HistoryResponsePayload is the payload of a log.history_response
+// message: a page of previously recorded messages, each returned exactly
+// as it was originally sent — not re-wrapped in any further envelope, so
+// a client renders history the same way it renders anything live. See
+// protocol/asyncapi.yaml components.messages.LogHistoryResponse.
+type HistoryResponsePayload struct {
+	Events []json.RawMessage `json:"events"`
+	// NextAfterSequence is the AfterSequence to pass on the next request
+	// to continue paging; zero/omitted when Events is empty.
+	NextAfterSequence int64 `json:"next_after_sequence,omitempty"`
+	HasMore           bool  `json:"has_more"`
+}
+
+// HistoryResponseMessage is a log.history_response Message.
+type HistoryResponseMessage = Message[HistoryResponsePayload]

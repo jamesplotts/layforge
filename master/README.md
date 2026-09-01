@@ -12,15 +12,18 @@ each other: `system.connect` in, `system.session_state`/`system.error`
 out, then the connection stays open and Master routes `safety.flag` from
 any client to a `safety.flag_broadcast` delivered to every client in that
 campaign (design doc §9.2) — the first real cross-client message routing,
-via `internal/session`'s connection registry. Every message exchanged
-(handshake, flags, and broadcasts) is durably logged to SQLite. The
-generated System Engine gRPC client/server stubs build and round-trip
-correctly, but nothing in `main.go` dials a real OpenCombatEngine sidecar
-yet. Every other message category (narrative, roll, map, character,
-tool), the turn-order state machine, authoritative dice, the
-narrative-transform pipeline, and governance gates beyond safety.flag are
-all still to come — see [`docs/design.md`](../docs/design.md) §3, §5, and
-§7–§10.
+via `internal/session`'s connection registry. Any client can also page
+back through everything recorded for its campaign with
+`log.history_request`/`log.history_response` (design doc §10, §11), since
+every message exchanged (handshake, flags, and broadcasts) is durably
+logged to SQLite as it happens. The generated System Engine gRPC
+client/server stubs build and round-trip correctly, but nothing in
+`main.go` dials a real OpenCombatEngine sidecar yet. Every other message
+category (narrative, roll, map, character, tool), the turn-order state
+machine, authoritative dice, the narrative-transform pipeline (blocked on
+an actual LLM provider integration, a deliberately-deferred decision, not
+an oversight), and governance gates beyond safety.flag are all still to
+come — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 

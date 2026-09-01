@@ -37,6 +37,8 @@ tags:
     description: DM tool-use call results (docs/design.md §8).
   - name: system
     description: Connection/session lifecycle.
+  - name: log
+    description: Paging/querying the durable campaign event log for chat-log/history review (docs/design.md §10, §11).
 
 defaultContentType: application/json
 
@@ -79,6 +81,7 @@ channels:
           - $ref: '#/components/messages/ToolResult'
           - $ref: '#/components/messages/SystemSessionState'
           - $ref: '#/components/messages/SystemError'
+          - $ref: '#/components/messages/LogHistoryResponse'
     publish:
       operationId: sendClientMessage
       summary: Messages a client sends to Master.
@@ -92,6 +95,7 @@ channels:
           - $ref: '#/components/messages/CharacterUpload'
           - $ref: '#/components/messages/SafetyFlag'
           - $ref: '#/components/messages/SystemConnect'
+          - $ref: '#/components/messages/LogHistoryRequest'
 
 components:
   messages:
@@ -630,6 +634,59 @@ components:
                     type: string
                   in_reply_to_message_id:
                     type: string
+
+    # --- log.* (docs/design.md §5, §10, §11) ---
+
+    LogHistoryRequest:
+      name: log.history_request
+      messageId: log_history_request
+      title: Request a page of campaign history
+      summary: Client requests a page of the durable campaign event log (docs/design.md §10) for chat-log/history review (§11).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: log.history_request
+              payload:
+                type: object
+                properties:
+                  after_sequence:
+                    type: integer
+                    description: Return only events after this store-assigned sequence number (not a message_id or timestamp — see design doc §10 on why sequence is the pagination cursor). Omitted or zero means from the beginning of the campaign's log.
+                  limit:
+                    type: integer
+                    description: Maximum events to return. A server-enforced default and cap apply if omitted or too large.
+
+    LogHistoryResponse:
+      name: log.history_response
+      messageId: log_history_response
+      title: A page of campaign history
+      summary: Master's response to log.history_request — a page of previously recorded messages, each in its own original wire shape.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: log.history_response
+              payload:
+                type: object
+                required: [events, has_more]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      description: A previously recorded protocol message, verbatim as originally sent (its own envelope + payload) — not re-wrapped.
+                  next_after_sequence:
+                    type: integer
+                    description: Pass as after_sequence on the next request to continue paging. Omitted when events is empty.
+                  has_more:
+                    type: boolean
 
   schemas:
 

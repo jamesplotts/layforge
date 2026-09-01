@@ -7,11 +7,13 @@
 // that dispatches whatever the client sends next. See design doc §5 for
 // the protocol and §11 for what's still to come — governance-gate
 // enforcement and most message categories (narrative, roll, map, tool)
-// don't exist yet; safety.flag is the first one implemented, both
-// because design doc §9.2 makes it simple (no LLM, no rules engine
-// involved) and because it's the one message every client at the table
-// needs delivered regardless of who sent it, which is exactly what
-// package session's broadcast primitive is for.
+// don't exist yet. Two are implemented so far: safety.flag (§9.2),
+// broadcast to every client in the campaign via package session's Hub,
+// and log.history_request (§10, §11), answered from package store
+// directly to the requester. Both were reachable without an LLM or a
+// real system-engine sidecar, which most of the rest of the protocol
+// isn't — see CLAUDE.md and each dispatch case's own comments for why a
+// given message either is or isn't implemented yet.
 package server
 
 import (
@@ -217,6 +219,15 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		}
 		recordEvent(ctx, s, flag)
 		return s.broadcastSafetyFlag(ctx, campaignID, flag.Payload.Topic)
+	case protocol.MessageTypeLogHistoryRequest:
+		var req protocol.HistoryRequestMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed log.history_request payload: %w", err))
+		}
+		// Not recorded to the event log: this is a query against the
+		// log, not a game event — recording it would just be recursive
+		// noise (a request to view history, sitting in the history).
+		return s.sendHistory(ctx, conn, campaignID, envelope.MessageID, req.Payload)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
@@ -244,6 +255,64 @@ func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic stri
 		return fmt.Errorf("marshaling safety.flag_broadcast: %w", err)
 	}
 	s.hub.Broadcast(campaignID, payload)
+	return nil
+}
+
+// sendHistory answers a log.history_request with a page of campaign's
+// recorded events (design doc §10, §11), sent only to the requesting
+// connection — history is per-viewer to ask for, not broadcast. It
+// rejects the request (via sendError) if persistence is disabled, since
+// silently returning an empty page would look identical to "this
+// campaign really has no history" rather than "this feature is off".
+func (s *Server) sendHistory(ctx context.Context, conn *websocket.Conn, campaignID, inReplyTo string, req protocol.HistoryRequestPayload) error {
+	if s.events == nil {
+		return s.sendError(ctx, conn, campaignID, inReplyTo, errors.New("history unavailable: persistence is disabled"))
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = store.DefaultListLimit
+	}
+	// Cap to MaxListLimit-1, not MaxListLimit, so the "+1" probe below
+	// never gets silently clamped back down by the store itself — that
+	// would make a full last page look identical to "there's more".
+	if limit > store.MaxListLimit-1 {
+		limit = store.MaxListLimit - 1
+	}
+
+	// Fetch one extra event to learn whether more pages remain, rather
+	// than guessing from whether this page happened to come back full.
+	events, err := s.events.ListEvents(ctx, campaignID, store.ListEventsOptions{
+		AfterSequence: req.AfterSequence,
+		Limit:         limit + 1,
+	})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, inReplyTo, fmt.Errorf("fetching history: %w", err))
+	}
+
+	hasMore := len(events) > limit
+	if hasMore {
+		events = events[:limit]
+	}
+
+	raw := make([]json.RawMessage, len(events))
+	var nextAfter int64
+	for i, e := range events {
+		raw[i] = e.Raw
+		nextAfter = e.Sequence
+	}
+
+	msg, err := newMessage(campaignID, protocol.MessageTypeLogHistoryResponse, protocol.HistoryResponsePayload{
+		Events:            raw,
+		NextAfterSequence: nextAfter,
+		HasMore:           hasMore,
+	})
+	if err != nil {
+		return err
+	}
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		return fmt.Errorf("writing log.history_response: %w", err)
+	}
 	return nil
 }
 

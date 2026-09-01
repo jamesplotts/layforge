@@ -5,6 +5,8 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -409,6 +411,189 @@ func TestServe_UnsupportedMessageType_RespondsWithErrorAndKeepsConnectionOpen(t 
 	if gotBroadcast.Type != protocol.MessageTypeSafetyFlagBroadcast {
 		t.Errorf("Type = %q, want %q", gotBroadcast.Type, protocol.MessageTypeSafetyFlagBroadcast)
 	}
+}
+
+func TestServe_LogHistoryRequest_ReturnsRecordedEventsInOrder(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	events, err := store.OpenSQLiteEventStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = events.Close() })
+
+	ts := httptest.NewServer(server.New(logger, events).Handler())
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-history", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	flag := protocol.SafetyFlagMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "flag-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-history",
+			Type:            protocol.MessageTypeSafetyFlag,
+		},
+	}
+	if err := wsjson.Write(ctx, conn, flag); err != nil {
+		t.Fatalf("Write(safety.flag) error = %v", err)
+	}
+	var broadcast protocol.SafetyFlagBroadcastMessage
+	if err := wsjson.Read(ctx, conn, &broadcast); err != nil {
+		t.Fatalf("Read(safety.flag_broadcast) error = %v", err)
+	}
+
+	// By now three events are on record for this campaign: this
+	// connection's own system.connect, the system.session_state Master
+	// replied with, and the safety.flag just sent (its broadcast landed
+	// as a fourth, but arrived after this request would be built, so
+	// isn't asserted on below to keep the test independent of exactly
+	// when Master finishes persisting it relative to this request).
+	histReq := protocol.HistoryRequestMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "hist-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-history",
+			Type:            protocol.MessageTypeLogHistoryRequest,
+		},
+	}
+	if err := wsjson.Write(ctx, conn, histReq); err != nil {
+		t.Fatalf("Write(log.history_request) error = %v", err)
+	}
+
+	var got protocol.HistoryResponseMessage
+	if err := wsjson.Read(ctx, conn, &got); err != nil {
+		t.Fatalf("Read(log.history_response) error = %v", err)
+	}
+	if got.Type != protocol.MessageTypeLogHistoryResponse {
+		t.Errorf("Type = %q, want %q", got.Type, protocol.MessageTypeLogHistoryResponse)
+	}
+	if len(got.Payload.Events) < 3 {
+		t.Fatalf("len(Events) = %d, want at least 3 (connect, session_state, safety.flag)", len(got.Payload.Events))
+	}
+
+	wantTypes := []string{"system.connect", "system.session_state", "safety.flag"}
+	for i, wantType := range wantTypes {
+		var envelope protocol.Envelope
+		if err := json.Unmarshal(got.Payload.Events[i], &envelope); err != nil {
+			t.Fatalf("Events[%d]: Unmarshal() error = %v", i, err)
+		}
+		if string(envelope.Type) != wantType {
+			t.Errorf("Events[%d].type = %q, want %q", i, envelope.Type, wantType)
+		}
+	}
+}
+
+func TestServe_LogHistoryRequest_Pagination(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	events, err := store.OpenSQLiteEventStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = events.Close() })
+
+	ts := httptest.NewServer(server.New(logger, events).Handler())
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-page", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Two events are already on record from the handshake (connect,
+	// session_state). Request page 1 with limit=1: should return exactly
+	// the first event and report more remain.
+	page1, err := requestHistory(ctx, conn, "campaign-page", "player-a", protocol.HistoryRequestPayload{Limit: 1})
+	if err != nil {
+		t.Fatalf("requestHistory(page1) error = %v", err)
+	}
+	if len(page1.Events) != 1 {
+		t.Fatalf("page1: len(Events) = %d, want 1", len(page1.Events))
+	}
+	if !page1.HasMore {
+		t.Error("page1: HasMore = false, want true")
+	}
+
+	page2, err := requestHistory(ctx, conn, "campaign-page", "player-a", protocol.HistoryRequestPayload{
+		AfterSequence: page1.NextAfterSequence,
+		Limit:         10,
+	})
+	if err != nil {
+		t.Fatalf("requestHistory(page2) error = %v", err)
+	}
+	if len(page2.Events) != 1 {
+		t.Fatalf("page2: len(Events) = %d, want 1 (the session_state event)", len(page2.Events))
+	}
+	if page2.HasMore {
+		t.Error("page2: HasMore = true, want false (that was the last event)")
+	}
+}
+
+func TestServe_LogHistoryRequest_PersistenceDisabled_RespondsWithError(t *testing.T) {
+	ts := newTestServer(t) // uses server.New(logger, nil) — no store
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := requestHistory(ctx, conn, "campaign-1", "player-a", protocol.HistoryRequestPayload{})
+	if err == nil {
+		t.Fatal("requestHistory() succeeded, want a system.error response")
+	}
+}
+
+// requestHistory sends a log.history_request on conn and returns either
+// the log.history_response payload or an error built from a system.error
+// response.
+func requestHistory(ctx context.Context, conn *websocket.Conn, campaignID, sender string, payload protocol.HistoryRequestPayload) (protocol.HistoryResponsePayload, error) {
+	req := protocol.HistoryRequestMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "hist-" + sender,
+			Timestamp:       time.Now().UTC(),
+			SenderID:        sender,
+			CampaignID:      campaignID,
+			Type:            protocol.MessageTypeLogHistoryRequest,
+		},
+		Payload: payload,
+	}
+	if err := wsjson.Write(ctx, conn, req); err != nil {
+		return protocol.HistoryResponsePayload{}, fmt.Errorf("writing request: %w", err)
+	}
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		return protocol.HistoryResponsePayload{}, fmt.Errorf("reading response: %w", err)
+	}
+
+	var envelope protocol.Envelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return protocol.HistoryResponsePayload{}, fmt.Errorf("unmarshaling envelope: %w", err)
+	}
+	if envelope.Type == protocol.MessageTypeSystemError {
+		var errMsg protocol.SystemErrorMessage
+		if err := json.Unmarshal(data, &errMsg); err != nil {
+			return protocol.HistoryResponsePayload{}, fmt.Errorf("unmarshaling system.error: %w", err)
+		}
+		return protocol.HistoryResponsePayload{}, fmt.Errorf("server rejected request: %s", errMsg.Payload.Message)
+	}
+
+	var resp protocol.HistoryResponseMessage
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return protocol.HistoryResponsePayload{}, fmt.Errorf("unmarshaling log.history_response: %w", err)
+	}
+	return resp.Payload, nil
 }
 
 // dialAndJoin dials ts, completes the handshake for campaignID
