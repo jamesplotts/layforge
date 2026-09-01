@@ -57,3 +57,26 @@ type SystemErrorPayload struct {
 
 // SystemErrorMessage is a system.error Message.
 type SystemErrorMessage = Message[SystemErrorPayload]
+
+// SafetyFlagPayload is the payload of a safety.flag message: any client
+// may send this at any time to invoke the X-card/veil safety tool. See
+// design doc §9.2 and protocol/asyncapi.yaml components.messages.SafetyFlag.
+type SafetyFlagPayload struct {
+	// Topic is an optional topic tag; omitted for a bare X-card.
+	Topic string `json:"topic,omitempty"`
+}
+
+// SafetyFlagMessage is a safety.flag Message.
+type SafetyFlagMessage = Message[SafetyFlagPayload]
+
+// SafetyFlagBroadcastPayload is the payload of a safety.flag_broadcast
+// message: Master's rebroadcast of a received safety.flag to every
+// client in the campaign, deliberately not naming who sent it. See
+// design doc §9.2 and protocol/asyncapi.yaml
+// components.messages.SafetyFlagBroadcast.
+type SafetyFlagBroadcastPayload struct {
+	Topic string `json:"topic,omitempty"`
+}
+
+// SafetyFlagBroadcastMessage is a safety.flag_broadcast Message.
+type SafetyFlagBroadcastMessage = Message[SafetyFlagBroadcastPayload]

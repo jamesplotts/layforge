@@ -19,10 +19,12 @@ type MessageType string
 // Master implements more of it; an unrecognized type on the wire is
 // rejected by IsValid, not silently accepted.
 const (
-	MessageTypeUnspecified        MessageType = ""
-	MessageTypeSystemConnect      MessageType = "system.connect"
-	MessageTypeSystemSessionState MessageType = "system.session_state"
-	MessageTypeSystemError        MessageType = "system.error"
+	MessageTypeUnspecified         MessageType = ""
+	MessageTypeSystemConnect       MessageType = "system.connect"
+	MessageTypeSystemSessionState  MessageType = "system.session_state"
+	MessageTypeSystemError         MessageType = "system.error"
+	MessageTypeSafetyFlag          MessageType = "safety.flag"
+	MessageTypeSafetyFlagBroadcast MessageType = "safety.flag_broadcast"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -30,7 +32,8 @@ const (
 // MessageTypeUnspecified.
 func (t MessageType) IsValid() bool {
 	switch t {
-	case MessageTypeSystemConnect, MessageTypeSystemSessionState, MessageTypeSystemError:
+	case MessageTypeSystemConnect, MessageTypeSystemSessionState, MessageTypeSystemError,
+		MessageTypeSafetyFlag, MessageTypeSafetyFlagBroadcast:
 		return true
 	default:
 		return false

@@ -2,12 +2,16 @@
 // Licensed under the MIT License. See LICENSE in the repository root.
 
 // Package server implements Master's client-facing WebSocket endpoint:
-// accepting connections and running the protocol handshake
-// (system.connect -> system.session_state, or system.error on
-// rejection). See design doc §5 for the protocol and §11 for what's
-// still to come — only the handshake is implemented so far; there is no
-// session orchestration, tool-use dispatch, or governance-gate
-// enforcement yet.
+// the protocol handshake (system.connect -> system.session_state, or
+// system.error on rejection), followed by a per-connection message loop
+// that dispatches whatever the client sends next. See design doc §5 for
+// the protocol and §11 for what's still to come — governance-gate
+// enforcement and most message categories (narrative, roll, map, tool)
+// don't exist yet; safety.flag is the first one implemented, both
+// because design doc §9.2 makes it simple (no LLM, no rules engine
+// involved) and because it's the one message every client at the table
+// needs delivered regardless of who sent it, which is exactly what
+// package session's broadcast primitive is for.
 package server
 
 import (
@@ -23,17 +27,21 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/jamesplotts/layforge/master/internal/protocol"
+	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
 )
 
 // masterSenderID is the sender_id Master uses on messages it originates
-// during the handshake, before any richer per-connection identity exists.
+// (session-state notifications, errors, and broadcasts), since none of
+// them are attributed to a specific human sender — see
+// broadcastSafetyFlag for why that matters for safety.flag specifically.
 const masterSenderID = "master"
 
 // Server serves Master's client-facing WebSocket endpoint.
 type Server struct {
 	logger *slog.Logger
 	events store.EventStore
+	hub    *session.Hub
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -42,7 +50,7 @@ type Server struct {
 // log) — every message Server exchanges is still handled normally either
 // way, since recording is best-effort (see recordEvent).
 func New(logger *slog.Logger, events store.EventStore) *Server {
-	return &Server{logger: logger, events: events}
+	return &Server{logger: logger, events: events, hub: session.NewHub()}
 }
 
 // Handler returns the http.Handler that serves the WebSocket endpoint,
@@ -68,11 +76,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleConnection runs one client connection's protocol handshake. A
-// panic while handling a single connection (e.g. from a pathological
-// message) is recovered here so it can't take Master down for every
-// other player at the table — see CLAUDE.md's error-handling
-// conventions for why this is the one place a recover() belongs.
+// handleConnection runs one client connection: the protocol handshake,
+// then (if it succeeds) the post-handshake message loop in serve. A
+// panic anywhere in that call chain (e.g. from a pathological message)
+// is recovered here so it can't take Master down for every other player
+// at the table — see CLAUDE.md's error-handling conventions for why this
+// is the one place a recover() belongs. Note this only covers the
+// goroutine handleConnection itself runs on; serve's write pump runs on
+// its own goroutine and recovers separately (see serve).
 func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -104,12 +115,14 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 		"campaign_id", connect.CampaignID,
 	)
 
-	return s.sendSessionState(ctx, conn, campaignID, protocol.SessionStateJoined)
+	if err := s.sendSessionState(ctx, conn, campaignID, protocol.SessionStateJoined); err != nil {
+		return err
+	}
+
+	return s.serve(ctx, conn, campaignID)
 }
 
-// sendSessionState sends a system.session_state message to conn and, for
-// V0's handshake-only implementation, closes the connection normally
-// afterward — there is nothing else implemented for it to do yet.
+// sendSessionState sends a system.session_state message to conn.
 func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, campaignID string, state protocol.SessionState) error {
 	msg, err := newMessage(campaignID, protocol.MessageTypeSystemSessionState, protocol.SystemSessionStatePayload{
 		State: state,
@@ -121,8 +134,137 @@ func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, cam
 	if err := wsjson.Write(ctx, conn, msg); err != nil {
 		return fmt.Errorf("writing session_state: %w", err)
 	}
+	return nil
+}
 
-	conn.Close(websocket.StatusNormalClosure, "handshake complete; nothing else implemented yet")
+// serve runs the post-handshake message loop for a joined connection: a
+// write pump delivering session.Hub broadcasts to this client, and a
+// read loop dispatching each inbound message by type. It returns once
+// the connection ends, for any reason — client disconnect, a read/write
+// error, or ctx cancellation.
+func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID string) error {
+	client := s.hub.Register(campaignID)
+	defer s.hub.Unregister(client)
+
+	writeDone := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				writeDone <- fmt.Errorf("recovered from panic in write pump: %v", r)
+			}
+		}()
+		writeDone <- s.writePump(ctx, conn, client)
+	}()
+
+	readErr := s.readLoop(ctx, conn, campaignID)
+
+	// Unregister (above, via defer) closes client's outbox once serve
+	// returns, which ends writePump's range loop — but that hasn't run
+	// yet at this point, so wait for it now rather than returning (and
+	// letting the caller close conn) while it might still be writing.
+	writeErr := <-writeDone
+
+	if readErr != nil {
+		return readErr
+	}
+	return writeErr
+}
+
+// writePump delivers every message sent to client's outbox to conn,
+// until the outbox is closed (by Hub.Unregister) or a write fails.
+func (s *Server) writePump(ctx context.Context, conn *websocket.Conn, client *session.Client) error {
+	for payload := range client.Outbox() {
+		if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
+			return fmt.Errorf("writing broadcast message: %w", err)
+		}
+	}
+	return nil
+}
+
+// readLoop reads messages from conn until one read fails (including the
+// client disconnecting, or ctx being canceled), dispatching each to
+// dispatch. dispatch itself only returns an error for a genuine
+// transport failure while responding to the sender — a message that's
+// merely malformed or unsupported gets a system.error reply and the loop
+// continues, so one bad message doesn't end the connection.
+func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, campaignID string) error {
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			return fmt.Errorf("reading message: %w", err)
+		}
+		if err := s.dispatch(ctx, conn, campaignID, data); err != nil {
+			return err
+		}
+	}
+}
+
+// dispatch decodes one inbound message and routes it by type.
+func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID string, data []byte) error {
+	var envelope protocol.Envelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return s.sendError(ctx, conn, campaignID, "", fmt.Errorf("malformed message: %w", err))
+	}
+	if verr := envelope.Validate(); verr != nil {
+		return s.sendError(ctx, conn, campaignID, envelope.MessageID, verr)
+	}
+
+	switch envelope.Type {
+	case protocol.MessageTypeSafetyFlag:
+		var flag protocol.SafetyFlagMessage
+		if err := json.Unmarshal(data, &flag); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed safety.flag payload: %w", err))
+		}
+		recordEvent(ctx, s, flag)
+		return s.broadcastSafetyFlag(ctx, campaignID, flag.Payload.Topic)
+	default:
+		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
+	}
+}
+
+// broadcastSafetyFlag builds and persists a safety.flag_broadcast
+// message and delivers it to every client currently registered under
+// campaignID — deliberately including whichever client sent the
+// triggering safety.flag, since design doc §9.2 wants the scene
+// interrupted for everyone at the table, sender included, and
+// deliberately not naming who sent it: the broadcast is attributed to
+// masterSenderID like every other Master-originated message, not to the
+// flagging client.
+func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic string) error {
+	msg, err := newMessage(campaignID, protocol.MessageTypeSafetyFlagBroadcast, protocol.SafetyFlagBroadcastPayload{
+		Topic: topic,
+	})
+	if err != nil {
+		return err
+	}
+	recordEvent(ctx, s, msg)
+
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshaling safety.flag_broadcast: %w", err)
+	}
+	s.hub.Broadcast(campaignID, payload)
+	return nil
+}
+
+// sendError sends a system.error message to conn — the sender only, not
+// a broadcast — explaining why their message was rejected, then returns
+// nil so the read loop continues. It only returns a non-nil error if
+// writing the rejection itself fails, since that indicates a real
+// transport problem rather than a client mistake.
+func (s *Server) sendError(ctx context.Context, conn *websocket.Conn, campaignID, inReplyTo string, cause error) error {
+	msg, err := newMessage(campaignID, protocol.MessageTypeSystemError, protocol.SystemErrorPayload{
+		Code:               "message_rejected",
+		Message:            cause.Error(),
+		InReplyToMessageID: inReplyTo,
+	})
+	if err != nil {
+		return err
+	}
+	recordEvent(ctx, s, msg)
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		return fmt.Errorf("writing rejection: %w", err)
+	}
 	return nil
 }
 
