@@ -232,6 +232,30 @@ context at all — it gets a bare success confirmation, since it has no
 actual use for the URL (Master already broadcasts `narrative.scene_image`
 to the table separately).
 
+A local-only admin/operator settings panel (design doc §3.3) now exists
+too — a second HTTP listener, `-admin-addr` (default `127.0.0.1:8090`),
+serving a small tabbed web UI (Campaign / Security / System —
+[`admin-web/`](admin-web/)) over a JSON API (`internal/admin`) backed by
+two new SQLite tables (`internal/store/admin_settings.go`). Campaign and
+Security tab changes (PvP policy, maturity-tier prompts, per-campaign
+room passwords) apply immediately: `admin.PolicyProvider`/
+`admin.AuthProvider` wrap whatever `-campaign-policies`/`-room-passwords`
+already resolved to as a fallback, so nothing configured that way stops
+working, and a live end-to-end test confirmed a room password saved
+through the Security tab is genuinely enforced by the real `/ws`
+listener on the very next join attempt, no restart. System tab changes
+(listen address, LLM/System-Engine/ComfyUI endpoints) persist to the same
+database but only take effect on a restart, since each is wired into a
+long-lived client or listener exactly once at startup — the panel's own
+"Save & Restart" button triggers one itself: a graceful shutdown followed
+by Master re-executing itself with the same argv (not `syscall.Exec`,
+which would skip the cleanup Master's shutdown path already does). Live
+end-to-end verified: a System-tab value saved and restarted with came
+back correctly in the new process (overriding the flag default it booted
+with the first time), and the admin page's own poll-and-reload picked the
+new process back up automatically. See `main.go`'s package doc comment
+for a systemd `KillMode` caveat this self-restart interacts with.
+
 Every other message category (map) and the rest of §9 (§9.4's review
 panel, §9.6 spotlight balance, §9.7 knowledge scoping) are still to come
 — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
@@ -265,9 +289,17 @@ internal/systemenginepb/      generated gRPC/protobuf stubs for
                               protocol/system_engine.proto (gitignored;
                               regenerate with protocol/generate.sh) plus a
                               hand-written round-trip test
+internal/admin/                the local-only admin/operator settings panel's
+                              JSON API (design doc §3.3) — Campaign/Security
+                              tab providers that wrap the JSON-file-loaded
+                              auth/policy providers as a fallback, plus the
+                              System tab and restart trigger
 web/                          the V1 web client (design doc §4) — plain
                               HTML/CSS/JS, no build step, served by Master
                               itself from disk (not embedded — see below)
+admin-web/                    the admin panel's own web UI — same plain
+                              HTML/CSS/JS, no build step, but served from a
+                              completely separate listener (-admin-addr)
 ```
 
 ## Running
@@ -322,6 +354,18 @@ resolution/character import. grpc-go dials lazily, so Master makes one
 real `GetCharacterSchema` call at startup to actually confirm
 reachability — an unreachable or not-yet-started sidecar logs a warning
 and Master still starts normally, the same way a missing `-web-dir` does.
+
+`-admin-addr` (default `127.0.0.1:8090`) opens the admin/operator
+settings panel described in the Status section above — open
+`http://127.0.0.1:8090/` (or wherever you pointed it) locally on the same
+machine Master is running on. It's deliberately not meant to be reachable
+any other way: there's no login of its own, only the bind address stands
+between it and anyone who can reach it, so **never** reverse-proxy or
+otherwise expose this listener the way you might the main one. Pass
+`-admin-addr=""` to disable it entirely. `-admin-web-dir` mirrors
+`-web-dir`'s own reasoning (a directory next to the binary, not the
+current working directory); leave it pointed at [`admin-web/`](admin-web/)
+unless you're restyling that UI too.
 
 ## Testing
 

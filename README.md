@@ -75,10 +75,15 @@ actually wired up rather than sitting unreachable in the engine. The DM
 can also illustrate a scene — `generate_scene_image` calls a pluggable
 image-gen provider (a self-hosted ComfyUI instance is the reference
 implementation) and broadcasts the result to the table, now verified
-live against a real running ComfyUI instance. A
+live against a real running ComfyUI instance. A local-only admin/operator
+settings panel now exists too — a second, `127.0.0.1`-only listener
+serving a tabbed web UI (Campaign/Security/System) for changing PvP
+policy, maturity-tier prompts, and room passwords live, or process-level
+settings (LLM/System-Engine/ComfyUI endpoints, listen address) via a
+self-triggered graceful restart. A
 player's own roll still doesn't apply its own damage outside the DM
 pass, there's no human review step on imported characters (that needs an
-account/operator concept that doesn't exist yet), and no full markdown
+account/operator concept the admin panel doesn't cover yet), and no full markdown
 campaign-pack directory tree (§6.4) — policy configuration today is a
 flat JSON file, not `campaign.md` front matter. See
 [`master/README.md`](master/README.md) for the full picture, including

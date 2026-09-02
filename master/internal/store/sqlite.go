@@ -58,6 +58,20 @@ var initStatements = []string{
 		updated_at     TEXT NOT NULL
 	);`,
 	`CREATE INDEX IF NOT EXISTS idx_characters_campaign ON characters (campaign_id);`,
+	`CREATE TABLE IF NOT EXISTS campaign_settings (
+		campaign_id                TEXT PRIMARY KEY,
+		pvp_policy                 TEXT NOT NULL DEFAULT '',
+		pvp_consent                TEXT NOT NULL DEFAULT '[]',
+		maturity_tier_prompt       TEXT NOT NULL DEFAULT '',
+		image_maturity_tier_prompt TEXT NOT NULL DEFAULT '',
+		room_password              TEXT NOT NULL DEFAULT '',
+		updated_at                 TEXT NOT NULL
+	);`,
+	`CREATE TABLE IF NOT EXISTS system_settings (
+		key        TEXT PRIMARY KEY,
+		value      TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	);`,
 }
 
 // SQLiteEventStore is the SQLite-backed EventStore — Master's

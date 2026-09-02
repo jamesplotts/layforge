@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Layforge Admin</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Local-only admin/operator settings panel (design doc §3.3). Served
+       from a separate, localhost-bound listener (-admin-addr) — never
+       the same listener as the player-facing web client — see app.js's
+       top-of-file comment for the API surface this drives. -->
+  <header class="admin-header">
+    <h1>Layforge Admin</h1>
+    <span class="admin-tagline">Local-only operator settings</span>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab-button active" data-tab="campaign" type="button" role="tab">Campaign</button>
+    <button class="tab-button" data-tab="security" type="button" role="tab">Security</button>
+    <button class="tab-button" data-tab="system" type="button" role="tab">System</button>
+  </nav>
+
+  <main>
+    <!-- Campaign and Security tabs both act on whichever campaign_id is
+         selected here — one picker shared by both tabs rather than two
+         separate ones, since it's always the same campaign either way. -->
+    <div class="campaign-picker">
+      <label>
+        Campaign
+        <select id="campaign-select"></select>
+      </label>
+      <label>
+        Or a new campaign_id
+        <input id="campaign-manual" type="text" placeholder="not joined yet" />
+      </label>
+      <button id="campaign-manual-use" type="button" class="secondary">Use</button>
+      <span id="campaign-picker-note" class="note"></span>
+    </div>
+
+    <section class="tab-panel" data-tab="campaign">
+      <p class="panel-hint">Applies immediately — no restart needed.</p>
+      <label>
+        PvP Policy
+        <select id="pvp-policy">
+          <option value="pve_only">pve_only — hostile actions against other players are always blocked</option>
+          <option value="pvp_allowed">pvp_allowed — hostile actions are always permitted</option>
+          <option value="pvp_with_consent">pvp_with_consent — permitted only against a consenting player</option>
+        </select>
+      </label>
+      <label>
+        PvP Consent (comma-separated player sender_ids — only used by pvp_with_consent)
+        <input id="pvp-consent" type="text" placeholder="player-a, player-b" />
+      </label>
+      <label>
+        Maturity Tier Prompt (appended to the DM's narration system prompt)
+        <textarea id="maturity-tier-prompt" rows="3" placeholder="e.g. Keep content suitable for all ages."></textarea>
+      </label>
+      <label>
+        Image Maturity Tier Prompt (overrides the above for generate_scene_image calls only; leave blank to reuse it)
+        <textarea id="image-maturity-tier-prompt" rows="3" placeholder="e.g. No graphic violence in illustrations."></textarea>
+      </label>
+      <button id="campaign-save" type="button">Save</button>
+      <span id="campaign-save-status" class="save-status"></span>
+    </section>
+
+    <section class="tab-panel" data-tab="security" hidden>
+      <p class="panel-hint">Applies immediately — no restart needed.</p>
+      <label>
+        Room Password (leave blank for no password — anyone can join)
+        <input id="room-password" type="password" autocomplete="off" />
+      </label>
+      <button id="security-save" type="button">Save</button>
+      <span id="security-save-status" class="save-status"></span>
+    </section>
+
+    <section class="tab-panel" data-tab="system" hidden>
+      <p class="panel-hint panel-hint-warning">
+        Every setting on this tab requires a restart to take effect, which disconnects every
+        currently connected player — the web client has no automatic reconnect.
+      </p>
+      <label>
+        Listen Address
+        <input id="sys-addr" type="text" placeholder=":8080" />
+      </label>
+      <label>
+        Ollama LLM URL
+        <input id="sys-llm-url" type="text" placeholder="http://192.168.1.56:11434" />
+      </label>
+      <label>
+        Ollama Model
+        <input id="sys-llm-model" type="text" placeholder="qwen2.5:32b" />
+      </label>
+      <label>
+        System Engine Address
+        <input id="sys-system-engine-addr" type="text" placeholder="localhost:5265" />
+      </label>
+      <label>
+        ComfyUI URL
+        <input id="sys-comfyui-url" type="text" placeholder="http://localhost:8188" />
+      </label>
+      <label>
+        ComfyUI Workflow Path
+        <input id="sys-comfyui-workflow" type="text" placeholder="/path/to/workflow.json" />
+      </label>
+      <div class="system-actions">
+        <button id="system-save" type="button" class="secondary">Save (no restart)</button>
+        <button id="system-save-restart" type="button" class="danger">Save &amp; Restart</button>
+      </div>
+      <span id="system-save-status" class="save-status"></span>
+      <div id="restart-banner" class="restart-banner" hidden>
+        Restarting Master&hellip; this page will reload automatically once it's back.
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

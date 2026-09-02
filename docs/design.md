@@ -73,12 +73,21 @@ Everything beyond the core loop — rendering, rules system, campaign content, i
 - Implements its own **privileged operator views**, separate from the general "player" view:
   - A firewalled player view for the Master's own human — no visibility into DM secrets other players can't see.
   - A separate **character-review panel** for approving/rejecting imported characters (see §9.4).
+  - A local-only **admin settings panel** for changing campaign governance and process configuration without hand-editing files — see §3.3.
 
 ### 3.2 Suggested implementation
 - **Go** as the primary candidate for the Master process: compiles to a single static binary per target OS/arch with no runtime dependency to install, first-class WebSocket/concurrency support for the connection-heavy Master role, and trivially cross-compiles for Linux/macOS/Windows from one machine — a good fit for an MIT repo other people will self-host without wanting to install a language runtime first. Rust is a reasonable alternative with the same static-binary/cross-platform properties at the cost of steeper development speed; Node/TypeScript is worth considering only if the WebSocket/JS ecosystem tooling outweighs wanting a single compiled binary.
 - Deliberately **not** .NET/C#/VB for the Master or client codebases — keeps the harness itself free of a language-runtime dependency for self-hosters, independent of what any individual system-engine plugin happens to be written in (see §6.1 for how this affects the OpenCombatEngine integration specifically).
 - Reverse-proxied via existing infrastructure pattern (e.g. Caddy/nginx, same pattern as `ironclad`) for TLS termination and rate-limiting. Cloudflare Tunnel is a reasonable alternative to avoid inbound port-forwarding, especially since self-hosters won't all be comfortable with NAT/firewall config.
 - Persistence: repository/DAO abstraction over storage rather than direct file I/O — SQLite as the zero-config default, Postgres as an option for larger/concurrent deployments.
+
+### 3.3 Admin/Operator Settings Panel
+
+The concrete realization of §3.1's "privileged operator views," beyond the character-review panel: a second HTTP listener, bound to `127.0.0.1` only and never reverse-proxied alongside the player-facing listener (§3.2's reverse-proxy guidance applies to the WebSocket/HTTP listener, not this one — exposing this one publicly would let anyone on the internet rewrite Master's governance settings), serving a small tabbed web UI — Campaign, Security, System — for the settings that today only exist as CLI flags or hand-edited JSON files.
+
+- **Access control is the bind address, not a login.** Anyone who can reach `127.0.0.1` on the host already has operator-level trust (they can edit the config files or flags directly today); a password on top of that boundary would be theater. The one real threat this does defend against is a same-machine browser tab, opened to an untrusted page, issuing a same-origin-policy-evading `fetch()` at the admin port — mutating requests are rejected unless their `Origin`/`Referer` header is empty or matches the admin listener's own origin.
+- **Campaign and Security tab settings apply live**, no restart: PvP policy, PvP consent list, maturity-tier prompts (§9.1, §9.5), and per-campaign room passwords (§6.6) move from "loaded once into an immutable map from a JSON file" to SQLite-backed lookups resolved fresh on every use. The existing `-room-passwords`/`-campaign-policies` flags keep working unchanged as a fallback for a campaign with no admin-set row — the admin panel is additive, not a replacement for scripted/headless deployments.
+- **System tab settings require a restart**, because each one (LLM endpoint/model, System Engine address, image-gen endpoint, the listen address itself) is wired into a long-lived client or listener exactly once at process start. Saving one persists it to SQLite and triggers a graceful shutdown followed by Master re-executing itself with the same argv — not `exec()`-style image replacement, since that would skip the cleanup Master's normal shutdown path already does (closing the database, the System Engine connection, in-flight requests). A saved System setting takes effect on every future boot regardless of what the launch flags say, the same way a router's web UI settings persist across power cycles independent of any factory-default script; flags remain how a from-scratch install bootstraps its first configuration. This unavoidably disconnects every connected client (no client in this repo has reconnect logic — see `master/web/README.md`'s known limitations), so the panel says so plainly before doing it.
 
 ---
 
@@ -237,7 +246,7 @@ All of the following are **campaign-pack-scoped settings**, controllable only by
 - Other future system engines may expose real permadeath-vs-not semantics; `get_character_status()` as a contract accommodates that without D&D needing to configure anything.
 
 ### 9.4 Character Import Veto
-- `validate_character()` (system engine, mechanical) + DM narrative-flag pass (freeform, e.g. lore-breaking backstory content) both surface to a **privileged review panel** on the Master client only.
+- `validate_character()` (system engine, mechanical) + DM narrative-flag pass (freeform, e.g. lore-breaking backstory content) both surface to a **privileged review panel** on the Master client only — the same operator-only surface as §3.3's admin settings panel, though this review queue is not itself one of that panel's tabs.
 - Master's human operator approves/rejects/requests changes before an imported character enters shared play (`character.pending_review` → `approved`/`rejected`).
 - Uploaded characters are personal **library** data (keyed to the player's account/Discord ID), not campaign state — joining a campaign snapshots the library character into that campaign's session state, so mutations (damage, XP, loot) in one campaign don't bleed into another.
 
@@ -279,6 +288,7 @@ See §6.5. Governs both DM text generation and image-gen calls; enforced via pro
 - Character upload/import with schema validation + Master veto/review panel
 - Chat log / history review
 - PvP policy, safety tools, death/turn handling, content maturity tiers — all as campaign-pack-scoped governance settings enforced at the tool layer
+- Local-only admin/operator settings panel (§3.3) for the above governance settings plus process-level configuration, live-apply where possible and a graceful restart where not
 - DM tool-use API (generalized, beyond just the system engine)
 - Protocol versioned from message 1
 

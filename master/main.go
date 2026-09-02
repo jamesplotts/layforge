@@ -42,6 +42,19 @@
 // itself. Leave both unset (today's default) to run without the
 // generate_scene_image DM tool at all.
 //
+// A second, local-only HTTP listener serves the admin/operator settings
+// panel (design doc §3.3, -admin-addr, default 127.0.0.1:8090) — see
+// package admin. Campaign/Security tab changes made there apply live;
+// System tab changes persist to the same SQLite database and take effect
+// on the next restart, which the panel can trigger itself (a graceful
+// shutdown followed by re-executing this same binary with the same
+// argv — see this file's restartRequested handling in run). Note for
+// systemd deployments: the default KillMode (control-group) can kill the
+// freshly spawned replacement process along with this one when it exits,
+// since both share the unit's cgroup — set KillMode=process (or use
+// Restart=on-success and let systemd itself relaunch instead of this
+// self-restart) if that matters for your deployment.
+//
 // See package server's own doc comment for what's implemented so far by
 // protocol area, and docs/design.md §11 for the overall roadmap.
 package main
@@ -55,11 +68,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/jamesplotts/layforge/master/internal/admin"
 	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/imagegen"
 	"github.com/jamesplotts/layforge/master/internal/llm"
@@ -81,10 +96,12 @@ func main() {
 	campaignPoliciesPath := flag.String("campaign-policies", "", "path to a JSON file mapping campaign_id to governance settings (design doc §9.1's PvP policy, §9.5's maturity-tier prompt constraint), e.g. {\"my-campaign\": {\"pvp_policy\": \"pvp_with_consent\", \"pvp_consent\": [\"player-a\"], \"maturity_tier_prompt\": \"Keep content suitable for all ages.\"}}. pvp_policy is one of pve_only, pvp_allowed, pvp_with_consent. A campaign not listed (or this flag left empty, today's default) gets pve_only with no maturity constraint — the strictest safe default.")
 	comfyUIURL := flag.String("comfyui-url", "", "base URL of a self-hosted ComfyUI instance (design doc §6.3), e.g. http://localhost:8188. Leave empty to run without image generation (today's default) — the generate_scene_image DM tool is then simply not offered. Requires -comfyui-workflow.")
 	comfyUIWorkflowPath := flag.String("comfyui-workflow", "", "path to an API-format ComfyUI workflow JSON file (exported from ComfyUI's own UI via \"Save (API Format)\"), containing the literal token %%LAYFORGE_PROMPT%% in place of the positive-prompt node's text value. Master has no way to know your checkpoint/sampler/node graph, so it never constructs a workflow itself — see package imagegen. Required if -comfyui-url is set.")
+	adminAddr := flag.String("admin-addr", "127.0.0.1:8090", "address for the local-only admin/operator settings panel (design doc §3.3) — deliberately not 0.0.0.0: this listener has no login of its own, only the bind address stands between it and anyone who can reach it, so it must never be reverse-proxied or otherwise exposed off the host. Leave empty to disable the admin panel entirely.")
+	adminWebDir := flag.String("admin-web-dir", defaultAdminWebDir(), "directory to serve the admin panel's web UI from, mirroring -web-dir's own reasoning; empty disables serving it (the JSON API under /api/ on -admin-addr still works, useful for headless/scripted admin access).")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -167,11 +184,23 @@ func defaultWebDir() string {
 	return filepath.Join(filepath.Dir(exe), "web")
 }
 
+// defaultAdminWebDir mirrors defaultWebDir exactly, for the admin
+// panel's own static UI directory (design doc §3.3) — an "admin-web"
+// directory next to the binary rather than the current working
+// directory, for the same reason defaultWebDir isn't cwd-relative.
+func defaultAdminWebDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "admin-web"
+	}
+	return filepath.Join(filepath.Dir(exe), "admin-web")
+}
+
 // run opens the event store, starts the HTTP/WebSocket listener, and
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir string, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -226,12 +255,42 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("campaign policies loaded", "path", campaignPoliciesPath, "campaign_count", len(policies))
 	}
 
+	// restartRequested is nil (every case reading it in this function's
+	// final select blocks forever, matching Go's nil-channel semantics)
+	// unless -admin-addr enables the admin panel below — see that block.
+	var restartRequested chan struct{}
+
+	// The admin panel (design doc §3.3) layers SQLite-backed, live-editable
+	// versions of authProvider/policyProvider on top of whichever of them
+	// was just constructed above (or nil) as a fallback — wrapping happens
+	// here, before either is handed to server.New, so every caller
+	// downstream just sees "the" auth/policy provider and doesn't need to
+	// know an admin panel exists. Skipped entirely when -admin-addr is
+	// empty: authProvider/policyProvider stay exactly what they were built
+	// as above, so a self-hoster not using this feature sees no behavior
+	// change at all.
+	var adminServer *admin.Server
+	if adminAddr != "" {
+		authProvider = admin.NewAuthProvider(events, authProvider)
+		policyProvider = admin.NewPolicyProvider(events, policyProvider)
+		restartRequested = make(chan struct{}, 1)
+		systemSeed := map[string]string{
+			admin.SystemKeyAddr:             addr,
+			admin.SystemKeyLLMURL:           llmURL,
+			admin.SystemKeyLLMModel:         llmModel,
+			admin.SystemKeySystemEngineAddr: systemEngineAddr,
+			admin.SystemKeyComfyUIURL:       comfyUIURL,
+			admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
+		}
+		adminServer = admin.New(logger, events, adminWebDir, adminAddr, systemSeed, restartRequested)
+	}
+
 	// imageGenProvider stays nil (no image generation, the
 	// generate_scene_image DM tool simply isn't offered) unless
 	// -comfyui-url is set — same opt-in reasoning as every other
-	// optional dependency above. Not verified against a live ComfyUI
-	// instance as of this writing (design doc §6.3) — see package
-	// imagegen's doc comment.
+	// optional dependency above. Verified live against a real running
+	// ComfyUI instance (design doc §6.3) — see package imagegen's doc
+	// comment.
 	var imageGenProvider imagegen.Provider
 	if comfyUIURL != "" {
 		if comfyUIWorkflowPath == "" {
@@ -306,6 +365,19 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		Handler: mux,
 	}
 
+	// adminHTTPServer stays nil unless adminServer was constructed above
+	// (-admin-addr non-empty) — a second, independent *http.Server bound
+	// to a different address, not a route mounted on httpServer's own
+	// mux, so a public listener misconfiguration can never accidentally
+	// expose this one (design doc §3.3).
+	var adminHTTPServer *http.Server
+	if adminServer != nil {
+		adminHTTPServer = &http.Server{
+			Addr:    adminAddr,
+			Handler: adminServer.Handler(),
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -314,6 +386,18 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("master listening", "addr", addr)
 		serveErr <- httpServer.ListenAndServe()
 	}()
+	if adminHTTPServer != nil {
+		go func() {
+			logger.Info("admin panel listening", "addr", adminAddr)
+			// Not fed into serveErr: the admin panel is a convenience,
+			// same as -web-dir — a failure to bind it (e.g. the port's
+			// already in use) shouldn't take down the player-facing
+			// listener that's Master's actual job.
+			if err := adminHTTPServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Warn("admin panel listener stopped", "error", err)
+			}
+		}()
+	}
 
 	select {
 	case err := <-serveErr:
@@ -325,6 +409,43 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if adminHTTPServer != nil {
+			if err := adminHTTPServer.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("shutting down admin listener", "error", err)
+			}
+		}
 		return httpServer.Shutdown(shutdownCtx)
+	case <-restartRequested:
+		// design doc §3.3: a System-tab settings change was just
+		// persisted (by adminServer's own restart handler) and needs a
+		// fresh process to take effect — every such setting is wired
+		// into a long-lived client/listener exactly once, above. Spawn a
+		// replacement with the same argv (so it re-reads the same flags
+		// plus whatever was just saved to the settings DB) and exit this
+		// one cleanly, rather than syscall.Exec-style image replacement,
+		// which would skip this function's deferred DB/gRPC cleanup and
+		// has no real equivalent on Windows.
+		logger.Info("restarting for a settings change")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if adminHTTPServer != nil {
+			if err := adminHTTPServer.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("shutting down admin listener for restart", "error", err)
+			}
+		}
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("shutting down main listener for restart", "error", err)
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("restarting: resolving executable path: %w", err)
+		}
+		cmd := exec.Command(exe, os.Args[1:]...)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("restarting: spawning replacement process: %w", err)
+		}
+		logger.Info("spawned replacement process", "pid", cmd.Process.Pid)
+		return nil
 	}
 }
