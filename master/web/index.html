@@ -88,11 +88,10 @@
           <button id="roll-check-button" type="button" disabled>Roll Check</button>
           <label class="dice-skin-picker">
             Skin
-            <select id="dice-skin-select">
-              <option value="ivory">Ivory</option>
-              <option value="obsidian">Obsidian</option>
-              <option value="emerald">Emerald</option>
-            </select>
+            <!-- Options populated at load from Dice.listSkins() (see
+                 dice-skins.js) rather than hardcoded here, so adding a
+                 community skin never requires touching this file. -->
+            <select id="dice-skin-select"></select>
           </label>
         </div>
         <div id="dice-tray-result" class="dice-tray-result"></div>
@@ -105,7 +104,12 @@
     </form>
   </section>
 
-  <script src="dice.js"></script>
-  <script src="app.js"></script>
+  <!-- Both modules: dice.js imports three.js/cannon-es as ES modules
+       (vendor/, see vendor/README.md) and must be one itself; app.js is
+       one too so its execution is guaranteed to wait until after dice.js
+       has attached window.Dice — module scripts run in document order,
+       after parsing, unlike a plain classic script. -->
+  <script type="module" src="dice.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

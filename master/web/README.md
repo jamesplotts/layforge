@@ -3,7 +3,9 @@
 The default Slave client (design doc §4): no LLM credentials, no rules
 engine, no local game logic — renders what Master sends over the
 protocol. Plain HTML/CSS/JS, no build step, matching the protocol's own
-"devtools-readable" ethos (design doc §6).
+"devtools-readable" ethos (design doc §6) — the dice tray's two
+dependencies (`vendor/`, see `vendor/README.md`) are plain ES modules
+loaded via `<script type="module">`, not an npm/bundler toolchain.
 
 Lives under `master/` and is served by Master itself by default (see
 `../README.md`'s Running section) — plain files on disk, not embedded
@@ -24,10 +26,13 @@ control (`safety.flag` → `safety.flag_broadcast`), history: on join,
 the most recent page loads automatically (design doc §10's tail default,
 not the campaign's first message), with a "Load earlier history" button
 to page further back (`log.history_request`'s `before_sequence`); and now
-a dice tray — a real CSS 3D d20 (`dice.js`/`dice.css`, actual icosahedron
-geometry, not a sprite) that rolls an ability check via
-`roll.check_request` and animates to the authoritative
-`roll.request`/`roll.result` outcome from Master. Since there's no real
+a dice tray — a real WebGL d20 (`dice.js`, three.js's own
+`IcosahedronGeometry` — a proper shared-vertex mesh, not hand-rolled
+transforms) that physically tumbles (cannon-es) then settles on the
+authoritative face once `roll.check_request` gets back
+`roll.request`/`roll.result` from Master. The physics is purely cosmetic,
+same as the tumble itself — the settle is always forced to the server's
+actual result, never determined by the simulation. Since there's no real
 character-creation UI yet, `onJoined` silently uploads a minimal stock
 character (`character.upload`) so the roll has something to roll for —
 see the stopgap note at the top of `app.js`.
@@ -66,17 +71,37 @@ Go, a rebuild, or even a restart:
 
 ### Dice skins
 
-The dice tray takes this further: a die's *material* (face color, edge
-color, ink color, sheen) is entirely CSS custom properties scoped under
-`:root[data-dice-skin="<name>"]` in `dice.css` — `dice.js` only ever sets
-that attribute (and remembers the choice in `localStorage`), it never
-touches a color itself. Adding a community skin is one new
-`:root[data-dice-skin="mint"] { --die-face-bg: ...; --die-edge-color:
-...; --die-ink-color: ...; --die-shine-opacity: ...; }` block (see
-`dice.css`'s three built-in presets — ivory, obsidian, emerald) plus one
-`<option>` in `index.html`'s skin `<select>`. No JS, no geometry
-knowledge required — this is the same "restyle without touching code"
-contract as the rest of this directory, just scoped to one component.
+The dice tray takes this further: a die's *material* is entirely
+data-driven from `dice-skins.js` — the only file a community skin needs
+to touch (plus optional PNGs alongside it), never `dice.js` itself. Each
+entry is:
+
+```js
+{
+  id: "mint",
+  label: "Mint",
+  baseColor: "#bdead9",       // fallback/base material color
+  baseTexture: null,          // optional PNG: marble, wood grain, metal, ...
+  numberTexture: null,        // optional PNG: a 5x4 grid of hand-drawn digits 1-20
+  font: "700 72px Georgia, serif", // used only when numberTexture is null
+  numberColor: "#204030",     // used only when numberTexture is null
+}
+```
+
+The skin `<select>` on the join screen is populated from this list at
+load (`Dice.listSkins()`), so a new entry shows up with no `index.html`
+change either. Full field reference is the comment at the top of
+`dice-skins.js`.
+
+**Honest limitation:** the three built-in skins (ivory, obsidian,
+emerald) only exercise the color+font path — this repo has no way to
+author actual PNG texture art, so `baseTexture`/`numberTexture` are
+fully implemented (loaded via `THREE.TextureLoader`, applied as a
+standard material map / atlas UV window) but untested against real
+community art. `baseTexture` also isn't unwrapped per-face — it's a
+single UV map across the whole mesh, so expect some stretching; that's
+an acceptable v1 tradeoff for a general material look, not a promise of
+per-facet precision.
 
 Master doesn't cache these files beyond what `http.FileServer` does — a
 browser reload picks up the change immediately. To run a genuinely
@@ -107,7 +132,12 @@ and point `-web-dir` at the copy instead.
   record rather than reusing one.
 - **The d20's face numbering is synthetic**, not a claim to reproduce any
   particular physical die's layout (opposite faces on a real d20 sum to
-  21; this one doesn't) — see the comment on `buildDie` in `dice.js`.
+  21; this one doesn't) — see `extractFaces`'s doc comment in `dice.js`.
 - **The die only shows results from checks (d20).** Nothing here rolls
   damage dice or any non-d20 shape yet — `roll.check_request` only
   triggers `ResolveCheck`, not `ApplyEffect`.
+- **Physics uses a sphere collider, not the true icosahedron shape** —
+  cannon-es doesn't need face-accurate collision for a small cosmetic
+  tumble to read as believable, and a sphere is dramatically simpler/more
+  stable than convex-polyhedron collision. The *visible* mesh is a real
+  icosahedron regardless; only the invisible physics body is approximate.

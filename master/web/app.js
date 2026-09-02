@@ -47,7 +47,7 @@ const state = {
   rollCharacterId: null,
   pendingCharacterUploadMessageId: null,
   pendingRollMessageId: null,
-  dieEl: null,
+  dieHandle: null,
 };
 
 const el = {
@@ -85,15 +85,26 @@ el.safetyFlagSend.addEventListener("click", onSafetyFlagSend);
 el.inputForm.addEventListener("submit", onInputSubmit);
 el.loadEarlierButton.addEventListener("click", onLoadEarlierClick);
 el.rollCheckButton.addEventListener("click", onRollCheckClick);
-el.diceSkinSelect.addEventListener("change", () => applyDiceSkin(el.diceSkinSelect.value));
+el.diceSkinSelect.addEventListener("change", () => {
+  Dice.applyDiceSkin(state.dieHandle, el.diceSkinSelect.value);
+  Dice.saveDiceSkin(el.diceSkinSelect.value);
+});
 
-// The die is built once at load — building it doesn't require the chat
-// screen to be visible, and dice.js's geometry functions are pure/cheap.
-state.dieEl = buildDie();
-el.diceStage.appendChild(state.dieEl);
-const savedSkin = loadSavedDiceSkin("ivory");
+// Populate the skin picker from the manifest (dice-skins.js) rather than
+// hardcoding <option>s in index.html — see that file for how a community
+// skin gets added.
+for (const skin of Dice.listSkins()) {
+  const option = document.createElement("option");
+  option.value = skin.id;
+  option.textContent = skin.label;
+  el.diceSkinSelect.appendChild(option);
+}
+const savedSkin = Dice.loadSavedDiceSkin(Dice.DEFAULT_SKIN_ID);
 el.diceSkinSelect.value = savedSkin;
-applyDiceSkin(savedSkin);
+// The die is mounted once at load — .dice-tray-stage's CSS size (110x110)
+// is fixed regardless of the chat screen's visibility, so this doesn't
+// need to wait for onJoined to show it.
+state.dieHandle = Dice.mountDie(el.diceStage, savedSkin);
 
 function defaultWsUrl() {
   // location.host is empty when opened via file://, and there's no
@@ -459,7 +470,7 @@ function onRollCheckClick() {
 }
 
 function onRollRequest() {
-  startTumble(state.dieEl);
+  Dice.startTumble(state.dieHandle);
 }
 
 function onRollResult(msg) {
@@ -470,7 +481,7 @@ function onRollResult(msg) {
   const rolls = payload.rolls || [];
   const firstDie = rolls[0];
 
-  settleOnResult(state.dieEl, firstDie ? firstDie.result : 1, () => {
+  Dice.settleOnResult(state.dieHandle, firstDie ? firstDie.result : 1, () => {
     const dieText = firstDie ? `d${firstDie.sides}: ${firstDie.result}` : "";
     el.diceTrayResult.innerHTML = "";
     const strongTotal = document.createElement("strong");

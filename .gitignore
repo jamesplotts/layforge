@@ -17,6 +17,14 @@ build/
 .env.*
 !.env.example
 
+# master/web/vendor/ collides with the Go "vendor/" pattern above, but is
+# unrelated to it: it's third-party JS the dice tray imports as plain ES
+# modules (three.js, cannon-es — see master/web/vendor/README.md), meant
+# to be committed and shipped like any other client asset, the same way
+# protocol/third_party/ vendors and commits its .proto dependencies
+# rather than fetching them at build/run time.
+!/master/web/vendor/
+
 # gRPC/protobuf generated code (regenerate via protocol/generate.sh,
 # don't commit). Go stubs land inside master/internal/systemenginepb/
 # alongside a hand-written test — ignore by extension, not by directory,
