@@ -6,8 +6,8 @@
 // auth -> system.session_state, or system.error on rejection), followed
 // by a per-connection message loop that dispatches whatever the client
 // sends next. See design doc §5 for the protocol and §11 for what's
-// still to come — the map message category and governance gates beyond
-// safety.flag don't exist yet. Implemented so far, by area:
+// still to come — the map message category still doesn't exist.
+// Implemented so far, by area:
 //
 //   - safety.flag (§9.2): broadcast to the campaign via package
 //     session's Hub.
@@ -46,6 +46,20 @@
 //     Dexterity checks, skipping unconscious/dying/dead characters — is
 //     Master's own, independent of the DM model's judgment. Broadcasts
 //     turn.state. In-memory only; doesn't survive a Master restart.
+//   - Governance gates (§9, see package policy and campaignPolicy):
+//     §9.1's PvP policy is a real mechanical gate in dmApplyEffect — a
+//     hostile apply_effect against a different player's character is
+//     blocked outright unless the campaign's configured policy permits
+//     it, never left to the DM model to self-police. §9.5's maturity
+//     tier is (by design doc's own description) prompting-only, not a
+//     hard filter — an operator-authored constraint string appended to
+//     both narrative passes' system prompts when configured. Both
+//     resolve from a flat JSON file (design doc §6.6's precedent for a
+//     per-campaign operator setting), not yet §6.4's full campaign-pack
+//     directory tree — see package policy's JSONFileProvider doc
+//     comment. §9.2 (safety.flag) predates this and lives separately;
+//     the rest of §9 (death/turn handling is §9.3, already covered
+//     above; §9.4/§9.6/§9.7/§9.8) is still to come.
 //
 // See CLAUDE.md and each dispatch case's own comments for why a given
 // message either is or isn't implemented yet.
@@ -68,6 +82,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/llm"
+	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
@@ -92,6 +107,12 @@ type Server struct {
 	narrativeModel string
 
 	systemEngine systemenginepb.SystemEngineClient
+
+	// policy resolves each campaign's governance settings (design doc §9
+	// — see package policy). May be nil to apply policy.Default() (the
+	// strictest PvP setting, no maturity constraint) to every campaign,
+	// same nil-means-disabled pattern as auth/systemEngine above.
+	policy policy.Provider
 
 	// turnOrders holds each campaign's live turn-order state (turn_order.go,
 	// design doc §3.1, §9.3), guarded by turnOrdersMu since it's mutated
@@ -119,8 +140,10 @@ type Server struct {
 // character.upload then gets a system.error explaining import is
 // unavailable, same as narrative.player_input does without an llmProvider.
 // characterStore may independently be nil to run without character
-// persistence at all, same reasoning as events being nil.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore) *Server {
+// persistence at all, same reasoning as events being nil. policyProvider
+// may be nil to apply policy.Default() to every campaign (design doc §9
+// — see package policy and campaignPolicy).
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
@@ -130,8 +153,40 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		narrativeModel: narrativeModel,
 		auth:           authProvider,
 		systemEngine:   systemEngineClient,
+		policy:         policyProvider,
 		turnOrders:     make(map[string]*turnOrder),
 	}
+}
+
+// campaignPolicy resolves campaignID's governance policy (design doc
+// §9), falling back to policy.Default() — the strictest PvP setting and
+// no maturity constraint — both when no policy.Provider is configured at
+// all (s.policy == nil) and when a configured Provider itself errors,
+// since a governance gate should fail closed, not open.
+func (s *Server) campaignPolicy(ctx context.Context, campaignID string) policy.CampaignPolicy {
+	if s.policy == nil {
+		return policy.Default()
+	}
+	pol, err := s.policy.Policy(ctx, campaignID)
+	if err != nil {
+		s.logger.Warn("failed to resolve campaign policy, falling back to the safe default", "error", err, "campaign_id", campaignID)
+		return policy.Default()
+	}
+	return pol
+}
+
+// withMaturityConstraint appends pol's maturity-tier prompt constraint
+// (design doc §9.5, §6.5) to basePrompt when one is configured — shared
+// by both narrative passes (renderPlayerBubble's fast pass and
+// runSlowPass's slow pass), since §9.5 governs "DM text generation"
+// broadly, not just the DM's own reaction. Returns basePrompt unchanged
+// when pol.MaturityTierPrompt is empty, matching this codebase's
+// behavior before campaign policy existed.
+func withMaturityConstraint(basePrompt string, pol policy.CampaignPolicy) string {
+	if pol.MaturityTierPrompt == "" {
+		return basePrompt
+	}
+	return basePrompt + "\n\nContent guidance for this table: " + pol.MaturityTierPrompt
 }
 
 // Handler returns the http.Handler that serves the WebSocket endpoint,
@@ -416,7 +471,7 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 
 	completion, err := s.llm.Complete(ctx, llm.CompletionRequest{
 		Model:        s.narrativeModel,
-		SystemPrompt: narrativeFastPassSystemPrompt,
+		SystemPrompt: withMaturityConstraint(narrativeFastPassSystemPrompt, s.campaignPolicy(ctx, campaignID)),
 		UserPrompt:   input.Payload.Text,
 	})
 	if err != nil {

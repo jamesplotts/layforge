@@ -53,16 +53,20 @@ mechanical presence on the fly — `create_npc` (after `get_character_schema`
 so the model authors a document that actually matches the campaign's
 schema, never a guessed shape) persists it the same way a player's own
 character upload does, so it can then be referenced by `resolve_check`,
-`apply_effect`, or `start_combat` like any other character. There's
-still no rules resolution *automatically* tied to a check outside the DM
-pass (a player's own roll doesn't apply its own damage),
-no PvP-policy or maturity-tier governance gate behind the DM tools yet
-(only campaign-scoping is enforced today — a documented gap, not a
-silent omission), no human review step on imported characters (that
-needs an account/operator concept that doesn't exist yet), and no
-campaign packs or maturity tiers either. See
-[`master/README.md`](master/README.md) for the full picture, including
-exact roadmap gaps.
+`apply_effect`, or `start_combat` like any other character. A campaign
+can now also configure a real PvP policy — `pve_only`/`pvp_allowed`/
+`pvp_with_consent` — that mechanically gates whether the DM can damage
+one player's character on another's behalf, and a maturity-tier text
+constraint injected into DM narration, both via a per-campaign JSON
+config file (`-campaign-policies`); an unconfigured campaign gets the
+strictest PvP setting by default, not an open one. There's still no
+rules resolution *automatically* tied to a check outside the DM pass (a
+player's own roll doesn't apply its own damage), no human review step on
+imported characters (that needs an account/operator concept that doesn't
+exist yet), and no full markdown campaign-pack directory tree (§6.4) —
+policy configuration today is a flat JSON file, not `campaign.md` front
+matter. See [`master/README.md`](master/README.md) for the full picture,
+including exact roadmap gaps.
 
 ## Layout
 

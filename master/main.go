@@ -25,16 +25,18 @@
 // A System Engine gRPC sidecar (design doc §6.1, e.g. OpenCombatEngine's
 // GrpcSidecar) can optionally be configured via -system-engine-addr —
 // see package systemengine for the client and this file's connectivity
-// check at startup. Nothing in package server dispatches to it yet, since
-// dice/rules resolution is design doc §11 future work; it's wired in now
-// so that work has somewhere real to call.
+// check at startup, and package server for what calls it (character
+// import/validation, authoritative dice, the DM tool-use API).
 //
-// The client-handshake WebSocket endpoint, safety.flag broadcast,
-// campaign history paging, and the narrative-transform pipeline's fast
-// pass (package server) are wired up so far — session orchestration
-// beyond that, the turn-order state machine, authoritative dice, the
-// narrative-transform pipeline's slow pass, and tool-use dispatch are
-// all still to come (docs/design.md §11).
+// A campaign's PvP policy and maturity-tier prompt constraint (design
+// doc §9.1, §9.5) can optionally be configured via -campaign-policies —
+// see package policy. A campaign not listed there (or the flag left
+// unset entirely) gets the strictest safe default, not an open one; see
+// policy.Default's doc comment for why that differs from
+// -room-passwords' own unconfigured-is-open default just above.
+//
+// See package server's own doc comment for what's implemented so far by
+// protocol area, and docs/design.md §11 for the overall roadmap.
 package main
 
 import (
@@ -53,6 +55,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/llm"
+	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/server"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemengine"
@@ -67,10 +70,11 @@ func main() {
 	webDir := flag.String("web-dir", defaultWebDir(), "directory to serve at / — the reference web client (design doc §4). Defaults to a \"web\" directory next to this binary, so a self-hoster can restyle it in place (see the package doc comment). Pass a different path to point at another copy (e.g. master/web itself, when iterating on the client via 'go run .' from within master/), or an empty string to disable serving it.")
 	roomPasswordsPath := flag.String("room-passwords", "", "path to a JSON file mapping campaign_id to a required join password (design doc §6.6's room-code auth provider), e.g. {\"my-campaign\": \"hunter2\"}. A campaign not listed is open to anyone. Leave empty to require no password anywhere (today's default).")
 	systemEngineAddr := flag.String("system-engine-addr", "", "host:port of a System Engine gRPC sidecar (design doc §6.1), e.g. localhost:5265 for a locally running OpenCombatEngine.GrpcSidecar. Leave empty to run without one (today's default) — nothing calls it yet, since dice/rules dispatch is still design doc §11 future work.")
+	campaignPoliciesPath := flag.String("campaign-policies", "", "path to a JSON file mapping campaign_id to governance settings (design doc §9.1's PvP policy, §9.5's maturity-tier prompt constraint), e.g. {\"my-campaign\": {\"pvp_policy\": \"pvp_with_consent\", \"pvp_consent\": [\"player-a\"], \"maturity_tier_prompt\": \"Keep content suitable for all ages.\"}}. pvp_policy is one of pve_only, pvp_allowed, pvp_with_consent. A campaign not listed (or this flag left empty, today's default) gets pve_only with no maturity constraint — the strictest safe default.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -94,6 +98,50 @@ func loadRoomPasswords(path string) (map[string]string, error) {
 	return passwords, nil
 }
 
+// rawCampaignPolicy is the JSON shape -campaign-policies' file uses per
+// campaign — a thin, string-keyed mirror of policy.CampaignPolicy so the
+// package itself doesn't need JSON struct tags on its own domain type.
+type rawCampaignPolicy struct {
+	PvPPolicy          string   `json:"pvp_policy"`
+	PvPConsent         []string `json:"pvp_consent,omitempty"`
+	MaturityTierPrompt string   `json:"maturity_tier_prompt,omitempty"`
+}
+
+// loadCampaignPolicies reads and parses the JSON file at path into a
+// campaign_id -> policy.CampaignPolicy map (design doc §9.1, §9.5). Same
+// "fail startup outright rather than silently misconfigure" behavior as
+// loadRoomPasswords, plus validation loadRoomPasswords doesn't need: an
+// unrecognized pvp_policy value is fatal here too, since a self-hoster
+// who mistyped it should never end up with a silently-wrong PvP setting.
+// An omitted pvp_policy defaults to policy.PvPPolicyPveOnly, the same
+// safe default policy.Default() applies to an unlisted campaign.
+func loadCampaignPolicies(path string) (map[string]policy.CampaignPolicy, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading campaign-policies file: %w", err)
+	}
+	var raw map[string]rawCampaignPolicy
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parsing campaign-policies file: %w", err)
+	}
+	policies := make(map[string]policy.CampaignPolicy, len(raw))
+	for campaignID, p := range raw {
+		pvp := policy.PvPPolicy(p.PvPPolicy)
+		switch {
+		case pvp == policy.PvPPolicyUnspecified:
+			pvp = policy.PvPPolicyPveOnly
+		case !pvp.IsValid():
+			return nil, fmt.Errorf("campaign-policies file: campaign %q: invalid pvp_policy %q (want pve_only, pvp_allowed, or pvp_with_consent)", campaignID, p.PvPPolicy)
+		}
+		policies[campaignID] = policy.CampaignPolicy{
+			PvPPolicy:          pvp,
+			PvPConsent:         p.PvPConsent,
+			MaturityTierPrompt: p.MaturityTierPrompt,
+		}
+	}
+	return policies, nil
+}
+
 // defaultWebDir returns the path to the reference web client that ships
 // alongside this binary: a "web" directory next to the executable
 // itself, not relative to the current working directory — so `./master`
@@ -113,7 +161,7 @@ func defaultWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath string, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -150,6 +198,22 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		}
 		authProvider = auth.NewRoomPasswordProvider(passwords)
 		logger.Info("room passwords loaded", "path", roomPasswordsPath, "campaign_count", len(passwords))
+	}
+
+	// policyProvider stays nil (every campaign gets policy.Default() —
+	// pve_only, no maturity constraint) unless -campaign-policies is set,
+	// same opt-in-per-self-hoster reasoning as authProvider above, except
+	// the *unconfigured* default itself is deliberately restrictive
+	// rather than permissive — see policy.Default's doc comment for why
+	// PvP specifically shouldn't default open the way join auth does.
+	var policyProvider policy.Provider
+	if campaignPoliciesPath != "" {
+		policies, err := loadCampaignPolicies(campaignPoliciesPath)
+		if err != nil {
+			return err
+		}
+		policyProvider = policy.NewJSONFileProvider(policies)
+		logger.Info("campaign policies loaded", "path", campaignPoliciesPath, "campaign_count", len(policies))
 	}
 
 	// systemEngineClient stays nil (no rules-resolution or character-import
@@ -189,7 +253,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events).Handler())
+	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider).Handler())
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {

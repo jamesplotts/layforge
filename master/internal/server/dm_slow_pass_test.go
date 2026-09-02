@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
+	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/server"
 	"github.com/jamesplotts/layforge/master/internal/store"
@@ -26,8 +27,11 @@ import (
 // in-memory SQLite store, an llm.Provider, and (optionally, may be nil)
 // a system engine client — enough to exercise the DM slow pass
 // end-to-end (design doc §7, §8) without a real Ollama server or gRPC
-// sidecar.
-func newTestServerWithLLMAndSystemEngine(t *testing.T, llmProvider llm.Provider, fakeEngine *fakeSystemEngineClient) (*httptest.Server, *store.SQLiteEventStore) {
+// sidecar. policyProvider is optional (variadic so existing call sites
+// with none don't need updating) — pass one to test governance-gate
+// behavior (design doc §9.1, §9.5); omitted, campaigns get
+// policy.Default().
+func newTestServerWithLLMAndSystemEngine(t *testing.T, llmProvider llm.Provider, fakeEngine *fakeSystemEngineClient, policyProvider ...policy.Provider) (*httptest.Server, *store.SQLiteEventStore) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st, err := store.OpenSQLiteEventStore(":memory:")
@@ -36,11 +40,16 @@ func newTestServerWithLLMAndSystemEngine(t *testing.T, llmProvider llm.Provider,
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
+	var policyP policy.Provider
+	if len(policyProvider) > 0 {
+		policyP = policyProvider[0]
+	}
+
 	var systemEngineClient systemenginepb.SystemEngineClient
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP).Handler())
 	return ts, st
 }
 

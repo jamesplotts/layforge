@@ -71,8 +71,9 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	// guessed at an ID and every tool call failed with
 	// character_not_found.
 	userContent := fmt.Sprintf("Character ID: %s\nPlayer action: %s", input.Payload.CharacterID, input.Payload.Text)
+	systemPrompt := withMaturityConstraint(dmSlowPassSystemPrompt, s.campaignPolicy(ctx, campaignID))
 	messages := []llm.Message{
-		{Role: llm.RoleSystem, Content: dmSlowPassSystemPrompt},
+		{Role: llm.RoleSystem, Content: systemPrompt},
 		{Role: llm.RoleUser, Content: userContent},
 	}
 
@@ -104,7 +105,7 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 
 		messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: resp.Text, ToolCalls: resp.ToolCalls})
 		for _, call := range resp.ToolCalls {
-			result, success, reasonCode := s.callDMTool(ctx, campaignID, call)
+			result, success, reasonCode := s.callDMTool(ctx, campaignID, input.SenderID, call)
 			s.broadcastToolResult(ctx, campaignID, call.Name, success, reasonCode)
 			messages = append(messages, llm.Message{Role: llm.RoleTool, Content: result, ToolCallID: call.ID})
 		}

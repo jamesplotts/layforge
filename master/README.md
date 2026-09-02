@@ -132,9 +132,40 @@ field — `looksLikeMalformedToolCall` in `dm_slow_pass.go` catches the
 common shapes and drops that turn's narration rather than broadcasting
 the artifact to the table.
 
-Every other message category (map) and governance gates beyond
-safety.flag and DM-tool campaign-scoping are still to come — see
-[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+Two more governance gates now exist too (design doc §9.1, §9.5 — see
+package `policy` and `campaignPolicy`/`withMaturityConstraint` in
+`server.go`): PvP policy is a real mechanical gate — `dmApplyEffect`
+blocks a hostile (damage) `apply_effect` against a *different* player's
+own character outright unless the campaign's configured policy permits
+it (`pve_only`/`pvp_allowed`/`pvp_with_consent`, checked against a
+pre-declared consent list for the consent case), never left to the DM
+model to self-police; healing another player, or any effect against an
+NPC/monster or the acting player's own character, is unaffected. The
+maturity tier is (by design doc's own description) prompting-only, not a
+hard filter — an operator-authored constraint string appended to both
+narrative passes' system prompts when configured, verified live to
+actually reach and influence a real model's output on both passes. Both
+resolve from a flat JSON file (`-campaign-policies`, design doc §6.6's
+precedent for a per-campaign operator setting), not yet §6.4's full
+campaign-pack directory tree — see `policy.JSONFileProvider`'s doc
+comment for why. A campaign not listed in that file (or the flag left
+unset entirely) gets `policy.Default()` — `pve_only` and no maturity
+constraint, deliberately the *strictest* PvP setting rather than an open
+one, unlike `-room-passwords`' own unconfigured-is-open default.
+**A known, honestly-scoped gap:** exercising the PvP gate against a real
+DM conversation isn't currently reachable, for the same reason
+`create_npc` was needed for monsters — `runSlowPass` only tells the
+model about the *acting* player's own character_id, with no campaign
+roster, so the DM model has no real way to reference a *different*
+player's character in a live conversation today. The gate itself is
+real and thoroughly tested (an 8-case table-driven integration test
+covers the full policy matrix against the actual `dmApplyEffect` code
+path), just not exercisable end-to-end against a live LLM without also
+building roster context — a separate, larger piece of work.
+
+Every other message category (map) and the rest of §9 (§9.4's review
+panel, §9.6 spotlight balance, §9.7 knowledge scoping) are still to come
+— see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 

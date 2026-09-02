@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
+	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
@@ -49,7 +51,7 @@ func dmTools() []llm.Tool {
 		},
 		{
 			Name:        "apply_effect",
-			Description: "Apply damage or healing to a character. Only call this after a resolve_check result justifies it (e.g. a failed save takes damage), or for a narratively-clear effect (e.g. drinking a healing potion) — never invent hit point changes without calling this.",
+			Description: "Apply damage or healing to a character. Only call this after a resolve_check result justifies it (e.g. a failed save takes damage), or for a narratively-clear effect (e.g. drinking a healing potion) — never invent hit point changes without calling this. Damaging a different player's own character (as opposed to a monster/NPC) is subject to this campaign's PvP policy and may be rejected.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"required": ["character_id", "effect_type", "amount"],
@@ -141,12 +143,18 @@ func (s *Server) campaignCharacter(ctx context.Context, campaignID, characterID 
 // the model (see llm.Message's RoleTool), whether the call succeeded,
 // and — on failure — a short machine-readable reason code for
 // tool.result's ReasonCode (design doc §8's call-logging requirement).
-func (s *Server) callDMTool(ctx context.Context, campaignID string, call llm.ToolCall) (result string, success bool, reasonCode string) {
+// actingSenderID is the sender_id of the player whose narrative.
+// player_input triggered this slow pass — apply_effect's PvP gate
+// (design doc §9.1) needs it to tell "the DM affecting a different
+// player's character" apart from ordinary NPC/monster damage, since
+// nothing else in a tool call's own arguments identifies who initiated
+// the action.
+func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID string, call llm.ToolCall) (result string, success bool, reasonCode string) {
 	switch call.Name {
 	case "resolve_check":
 		return s.dmResolveCheck(ctx, campaignID, call.Arguments)
 	case "apply_effect":
-		return s.dmApplyEffect(ctx, campaignID, call.Arguments)
+		return s.dmApplyEffect(ctx, campaignID, actingSenderID, call.Arguments)
 	case "get_character_status":
 		return s.dmGetCharacterStatus(ctx, campaignID, call.Arguments)
 	case "start_combat":
@@ -234,7 +242,7 @@ func (s *Server) dmResolveCheck(ctx context.Context, campaignID string, argsJSON
 	return string(payload), true, ""
 }
 
-func (s *Server) dmApplyEffect(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+func (s *Server) dmApplyEffect(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage) (string, bool, string) {
 	var args struct {
 		CharacterID string `json:"character_id"`
 		EffectType  string `json:"effect_type"`
@@ -248,6 +256,27 @@ func (s *Server) dmApplyEffect(ctx context.Context, campaignID string, argsJSON 
 	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
 	if err != nil {
 		return err.Error(), false, "character_not_found"
+	}
+
+	// PvP gate (design doc §9.1): damage against a DIFFERENT player's
+	// own character is a hostile PvP action, permitted only per the
+	// campaign's configured policy — never left to the DM model's own
+	// judgment (CLAUDE.md's "gates over prompting"). Healing another
+	// player's character, or any effect against an NPC/monster
+	// (OwnerID == masterSenderID, see dmCreateNPC) or the acting
+	// player's own character, is unaffected.
+	if args.EffectType == "damage" && character.OwnerID != "" && character.OwnerID != masterSenderID && character.OwnerID != actingSenderID {
+		pol := s.campaignPolicy(ctx, campaignID)
+		switch pol.PvPPolicy {
+		case policy.PvPPolicyAllowed:
+			// proceed
+		case policy.PvPPolicyWithConsent:
+			if !slices.Contains(pol.PvPConsent, character.OwnerID) {
+				return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP damage", character.OwnerID), false, "pvp_no_consent"
+			}
+		default: // PvPPolicyPveOnly, or an unrecognized/unspecified value — fail closed
+			return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to damage another player's character (%s)", character.OwnerID), false, "pvp_blocked"
+		}
 	}
 
 	characterData := &structpb.Struct{}
