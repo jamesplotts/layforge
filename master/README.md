@@ -101,7 +101,19 @@ already reports incapacitated rather than failing the whole call.
 dead the same way (§9.3's actual requirement), and ends combat
 automatically once nobody active is left. Every state change broadcasts
 `turn.state`. In-memory only, scoped like `session.Hub`'s connection
-registry — a Master restart mid-combat loses it. **A real limitation
+registry — a Master restart mid-combat loses it.
+
+Once combat is active, it's now actually enforced on players too, not
+just bookkept: `enforceTurnOrder` rejects a player's own
+`roll.check_request`/`character.apply_effect` for their character unless
+it's currently that character's turn — a player can't roll or act out of
+turn once initiative has been rolled, though they act freely outside
+combat as before. The DM's own tool calls are deliberately not gated the
+same way — see `enforceTurnOrder`'s doc comment for why forcing the
+identical mechanical restriction on DM-narrated reactions would be wrong
+rather than protective.
+
+**A real limitation
 found via live testing, not a hypothetical:** every `character_id` passed
 to `start_combat` must be a real `store.Character`. That gap is now
 closed: two more DM tools, `get_character_schema` and `create_npc` (see
@@ -161,7 +173,15 @@ player's character in a live conversation today. The gate itself is
 real and thoroughly tested (an 8-case table-driven integration test
 covers the full policy matrix against the actual `dmApplyEffect` code
 path), just not exercisable end-to-end against a live LLM without also
-building roster context — a separate, larger piece of work.
+building roster context — a separate, larger piece of work. Turn-order
+enforcement hits the same wall for the same reason: a live two-player
+"combat starts including both, the wrong one's out-of-turn roll gets
+rejected" scenario isn't reachable through natural conversation today
+either. Verified live instead was that ordinary out-of-combat play stays
+unaffected (a solo `roll.check_request` still succeeds normally when no
+`turn.state` is active); the enforcement logic itself is covered by four
+integration tests exercising the real `enforceTurnOrder` code path
+end-to-end (rejection and success, for both gated message types).
 
 Every other message category (map) and the rest of §9 (§9.4's review
 panel, §9.6 spotlight balance, §9.7 knowledge scoping) are still to come

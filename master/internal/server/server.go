@@ -45,7 +45,11 @@
 //     it, but the mechanical bookkeeping — initiative order from real
 //     Dexterity checks, skipping unconscious/dying/dead characters — is
 //     Master's own, independent of the DM model's judgment. Broadcasts
-//     turn.state. In-memory only; doesn't survive a Master restart.
+//     turn.state. In-memory only; doesn't survive a Master restart. Once
+//     combat is active, enforceTurnOrder rejects a player's own
+//     roll.check_request/character.apply_effect unless it's that
+//     character's turn — the DM's own tool calls are deliberately not
+//     gated this way (see enforceTurnOrder's doc comment for why).
 //   - Governance gates (§9, see package policy and campaignPolicy):
 //     §9.1's PvP policy is a real mechanical gate in dmApplyEffect — a
 //     hostile apply_effect against a different player's character is
@@ -577,12 +581,14 @@ func (s *Server) importCharacter(ctx context.Context, conn *websocket.Conn, camp
 // req.Payload.CharacterID (rejecting the request if senderID doesn't own
 // that character — design doc §9.4's OwnerID is the only ownership
 // concept this codebase has, but it's real and enforced here, not
-// aspirational), calls the System Engine's ResolveCheck for it, and
-// broadcasts the outcome to the whole campaign as roll.request (so every
-// client's dice tray can pre-stage an animation) followed by roll.result
-// (the authoritative outcome, design doc §3.1, §4) — never just to the
-// requester, since design doc §4's dice tray is meant to be a shared,
-// visible-to-everyone table event, not a private roll.
+// aspirational), rejects it if structured combat is active and it isn't
+// that character's turn (enforceTurnOrder, design doc §3.1, §9.3), calls
+// the System Engine's ResolveCheck for it, and broadcasts the outcome to
+// the whole campaign as roll.request (so every client's dice tray can
+// pre-stage an animation) followed by roll.result (the authoritative
+// outcome, design doc §3.1, §4) — never just to the requester, since
+// design doc §4's dice tray is meant to be a shared, visible-to-everyone
+// table event, not a private roll.
 //
 // roll.request's RollSpec is derived from the real, already-resolved
 // Outcome.Rolls (grouped by die size), not assumed — Master never
@@ -597,6 +603,9 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 
 	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "roll checks for")
 	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
+	}
+	if err := s.enforceTurnOrder(campaignID, character.ID); err != nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}
 
@@ -770,11 +779,13 @@ func (s *Server) sendCharacterState(ctx context.Context, conn *websocket.Conn, c
 
 // applyCharacterEffect handles a character.apply_effect message: applies
 // an engine-defined effect (design doc §6.1's apply_effect()) to a
-// character the sender owns, persists the resulting state, and replies
-// privately with character.state — not broadcast to the campaign. Wider
-// table-visible effect notifications are design doc §9.7 Knowledge
-// Scoping territory, not decided yet, so this stays as private as
-// character.get rather than guessing at a broadcast policy.
+// character the sender owns — rejecting it if structured combat is
+// active and it isn't that character's turn, same enforceTurnOrder gate
+// resolveCheck uses (design doc §3.1, §9.3) — persists the resulting
+// state, and replies privately with character.state — not broadcast to
+// the campaign. Wider table-visible effect notifications are design doc
+// §9.7 Knowledge Scoping territory, not decided yet, so this stays as
+// private as character.get rather than guessing at a broadcast policy.
 func (s *Server) applyCharacterEffect(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.CharacterApplyEffectMessage) error {
 	if s.systemEngine == nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("applying effects unavailable: no system engine configured"))
@@ -785,6 +796,9 @@ func (s *Server) applyCharacterEffect(ctx context.Context, conn *websocket.Conn,
 
 	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "apply effects to")
 	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
+	}
+	if err := s.enforceTurnOrder(campaignID, character.ID); err != nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}
 

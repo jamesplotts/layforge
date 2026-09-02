@@ -222,3 +222,41 @@ func (s *Server) broadcastTurnState(ctx context.Context, campaignID string, payl
 	recordEvent(ctx, s, msg)
 	return broadcastMessage(s, msg)
 }
+
+// currentTurnCharacterID reports whose turn it currently is for
+// campaignID, and whether structured combat is active there at all. Safe
+// to call from any goroutine — reads s.turnOrders under s.turnOrdersMu,
+// the same lock startCombat/advanceTurn/endCombat use to mutate it.
+func (s *Server) currentTurnCharacterID(campaignID string) (characterID string, active bool) {
+	s.turnOrdersMu.Lock()
+	defer s.turnOrdersMu.Unlock()
+	state, ok := s.turnOrders[campaignID]
+	if !ok || !state.active {
+		return "", false
+	}
+	return state.order[state.currentIndex], true
+}
+
+// enforceTurnOrder rejects a player action on behalf of characterID when
+// structured combat (design doc §3.1, §9.3) is active for campaignID and
+// it is not currently that character's turn. A player acts freely
+// outside combat, or on their own turn once it's active, but not out of
+// turn once initiative has been rolled — used by resolveCheck and
+// applyCharacterEffect (server.go), the two player-initiated mechanical
+// actions.
+//
+// The DM's own tool calls (dm_tools.go) are deliberately NOT gated this
+// way: the DM already narrates whose turn it is and calls advance_turn
+// itself once a turn is over, so it's trusted with the same latitude a
+// human GM has to call for a reaction or interrupt that doesn't strictly
+// happen on the acting character's own turn — forcing the identical
+// mechanical gate there would just block legitimate DM narration, not
+// prevent a real abuse the way it does for a player spamming actions out
+// of turn.
+func (s *Server) enforceTurnOrder(campaignID, characterID string) error {
+	current, active := s.currentTurnCharacterID(campaignID)
+	if !active || characterID == current {
+		return nil
+	}
+	return fmt.Errorf("it is not your turn — it is character %q's turn", current)
+}

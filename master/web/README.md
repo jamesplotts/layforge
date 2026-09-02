@@ -73,7 +73,14 @@ attached to it.
 There's also now a `turn.state` note (design doc §3.1, §9.3) — whenever
 the DM starts, advances, or ends structured combat, a "⚔ Round N —
 {name}'s turn" (or "⚔ Combat ends") line appears in the log, resolving
-the current character's name the same way narrative bubbles do.
+the current character's name the same way narrative bubbles do. Once
+combat is active, an out-of-turn Roll Check or Take Damage/Heal click
+now gets genuinely rejected server-side — it just surfaces as an
+ordinary error note (`appendErrorNote`), the same as any other
+rejection reason (e.g. not owning the character); there's no dedicated
+"it's not your turn" UI treatment, and the Roll Check/Take Damage/Heal
+buttons aren't disabled out of turn — a player can still click them,
+they just get told no.
 
 Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's
