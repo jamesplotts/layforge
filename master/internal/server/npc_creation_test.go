@@ -218,6 +218,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPCThenStartCombat_IncludesRe
 			Actor: &systemenginepb.Actor{ActorId: "engine-assigned-id", CharacterData: npcData, SchemaVersion: "opencombatengine-v1"},
 		},
 		getCharacterStatusResp: &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE},
+		startTurnResp:          &systemenginepb.StartTurnResponse{Success: true},
 		resolveCheckFunc: func(req *systemenginepb.ResolveCheckRequest) (*systemenginepb.ResolveCheckResponse, error) {
 			total := int32(8)
 			if req.Actor.ActorId != "char-a" {

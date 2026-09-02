@@ -43,13 +43,18 @@
 //   - The turn-order state machine (§3.1, §9.3, see turn_order.go):
 //     start_combat/advance_turn/end_combat DM tools (dm_tools.go) drive
 //     it, but the mechanical bookkeeping — initiative order from real
-//     Dexterity checks, skipping unconscious/dying/dead characters — is
-//     Master's own, independent of the DM model's judgment. Broadcasts
-//     turn.state. In-memory only; doesn't survive a Master restart. Once
-//     combat is active, enforceTurnOrder rejects a player's own
-//     roll.check_request/character.apply_effect unless it's that
-//     character's turn — the DM's own tool calls are deliberately not
-//     gated this way (see enforceTurnOrder's doc comment for why).
+//     Dexterity checks, skipping only dead characters — is Master's own,
+//     independent of the DM model's judgment. Landing a turn on any
+//     non-dead character (startTurnFor) calls the System Engine's
+//     StartTurn, which automatically rolls a death save for an
+//     unconscious/dying character (SRD's own rule, real and broadcast as
+//     a genuine roll.result — never invented) rather than skipping their
+//     turn outright. Broadcasts turn.state. In-memory only; doesn't
+//     survive a Master restart. Once combat is active, enforceTurnOrder
+//     rejects a player's own roll.check_request/character.apply_effect
+//     unless it's that character's turn — the DM's own tool calls are
+//     deliberately not gated this way (see enforceTurnOrder's doc
+//     comment for why).
 //   - Governance gates (§9, see package policy and campaignPolicy):
 //     §9.1's PvP policy is a real mechanical gate in dmApplyEffect — a
 //     hostile apply_effect against a different player's character is

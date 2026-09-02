@@ -75,6 +75,18 @@ type fakeSystemEngineClient struct {
 	// lastApplyEffectRequest captures the most recent ApplyEffect() call's
 	// request, for asserting on what Server actually sent the engine.
 	lastApplyEffectRequest *systemenginepb.ApplyEffectRequest
+
+	startTurnResp *systemenginepb.StartTurnResponse
+	startTurnErr  error
+	// startTurnFunc, when set, computes the response per call instead of
+	// the fixed startTurnResp/startTurnErr above — needed by tests where
+	// different characters starting their turn must get different
+	// results in the same test.
+	startTurnFunc func(*systemenginepb.StartTurnRequest) (*systemenginepb.StartTurnResponse, error)
+	// startTurnRequests captures every StartTurn() call's request, in
+	// order — for tests asserting on which characters' turns actually
+	// started and in what sequence.
+	startTurnRequests []*systemenginepb.StartTurnRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -121,6 +133,17 @@ func (f *fakeSystemEngineClient) GetCharacterStatus(_ context.Context, in *syste
 		return nil, f.getCharacterStatusErr
 	}
 	return f.getCharacterStatusResp, nil
+}
+
+func (f *fakeSystemEngineClient) StartTurn(_ context.Context, in *systemenginepb.StartTurnRequest, _ ...grpc.CallOption) (*systemenginepb.StartTurnResponse, error) {
+	f.startTurnRequests = append(f.startTurnRequests, in)
+	if f.startTurnFunc != nil {
+		return f.startTurnFunc(in)
+	}
+	if f.startTurnErr != nil {
+		return nil, f.startTurnErr
+	}
+	return f.startTurnResp, nil
 }
 
 func (f *fakeSystemEngineClient) ValidateCharacter(context.Context, *systemenginepb.ValidateCharacterRequest, ...grpc.CallOption) (*systemenginepb.ValidateCharacterResponse, error) {

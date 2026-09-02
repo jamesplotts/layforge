@@ -46,12 +46,16 @@ RPCs already wired for players, with every call broadcast to the table as
 `tool.result` and the final reaction as `narrative.dm_prose`. The DM can
 also start real structured turn order (`start_combat`) — rolling
 initiative through the System Engine rather than trusting the model to
-order it, skipping incapacitated characters automatically as combat
-advances (`advance_turn`, design doc §9.3) — broadcast to everyone as
-`turn.state`, and now actually enforced on players too: once combat is
-active, a player's own roll or effect on their character is rejected
-unless it's currently that character's turn. The DM can also give a
-narrated monster/NPC a real
+order it — broadcast to everyone as `turn.state`, and now actually
+enforced on players too: once combat is active, a player's own roll or
+effect on their character is rejected unless it's currently that
+character's turn (`advance_turn`, design doc §9.3). An unconscious/dying
+character isn't skipped — they get a turn that automatically rolls a
+death saving throw instead (a real System Engine RPC, `StartTurn`,
+newly added so OpenCombatEngine's own SRD death-save logic — previously
+built but unreachable — is actually wired up), broadcast as a genuine
+roll just like any other. The DM can also give a narrated monster/NPC a
+real
 mechanical presence on the fly — `create_npc` (after `get_character_schema`
 so the model authors a document that actually matches the campaign's
 schema, never a guessed shape) persists it the same way a player's own

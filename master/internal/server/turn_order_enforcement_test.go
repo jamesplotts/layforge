@@ -59,6 +59,7 @@ func newCombatFakeEngine() *fakeSystemEngineClient {
 			}, nil
 		},
 		getCharacterStatusResp: &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE},
+		startTurnResp:          &systemenginepb.StartTurnResponse{Success: true},
 	}
 }
 

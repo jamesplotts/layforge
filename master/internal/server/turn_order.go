@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -49,13 +50,19 @@ func (t turnOrder) toPayload() protocol.TurnStatePayload {
 	return payload
 }
 
-// characterIsActive reports whether character's current mechanical
-// status is exactly CHARACTER_STATUS_ACTIVE, per get_character_status
-// (design doc §9.3) — the one deterministic gate both startCombat
-// (excluding already-incapacitated characters from initiative) and
-// advanceTurn (skipping them on their would-be turn) rely on, so a
-// downed character is never trusted to the DM's own judgment either way.
-func (s *Server) characterIsActive(ctx context.Context, character store.Character) (bool, error) {
+// characterIsDead reports whether character's current mechanical status
+// is exactly CHARACTER_STATUS_DEAD, per get_character_status (design doc
+// §9.3) — the one status that removes a character from turn-order
+// rotation entirely, used by both startCombat (excluding the dead from
+// initiative) and advanceTurn (skipping them on their would-be turn).
+// Unconscious/dying characters are deliberately NOT excluded here: real
+// SRD play still gives them a turn — they roll a death saving throw
+// instead of acting — which is exactly what startTurnFor's StartTurn
+// call does automatically. Treating "not active" as "skip" (an earlier
+// version of this function did) would mean an unconscious character
+// never gets another turn once downed, so they'd never roll toward
+// stabilizing or dying — stuck at 0 HP for the rest of the encounter.
+func (s *Server) characterIsDead(ctx context.Context, character store.Character) (bool, error) {
 	characterData := &structpb.Struct{}
 	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
 		return false, fmt.Errorf("parsing stored character data for %q: %w", character.ID, err)
@@ -66,7 +73,61 @@ func (s *Server) characterIsActive(ctx context.Context, character store.Characte
 	if err != nil {
 		return false, fmt.Errorf("checking status for %q: %w", character.ID, err)
 	}
-	return resp.Status == systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE, nil
+	return resp.Status == systemenginepb.CharacterStatus_CHARACTER_STATUS_DEAD, nil
+}
+
+// startTurnFor runs the system engine's own start-of-turn bookkeeping
+// for characterID (StartTurn, design doc §9.3) — most notably, an
+// automatic death saving throw if the character is unconscious/dying,
+// the SRD rule that this happens every turn without the DM having to
+// remember it. Persists the character's updated state (action-economy
+// reset, condition ticks, and any death-save mutation all live in the
+// same character_data StartTurn returns) and broadcasts the death save
+// as a real roll.request/roll.result (design doc §3.1, §4) if one was
+// rolled, so the whole table sees it animate on the dice tray exactly
+// like any other roll — never applied silently.
+func (s *Server) startTurnFor(ctx context.Context, campaignID, characterID string) error {
+	character, err := s.campaignCharacter(ctx, campaignID, characterID)
+	if err != nil {
+		return err
+	}
+
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Errorf("parsing stored character data for %q: %w", characterID, err)
+	}
+
+	resp, err := s.systemEngine.StartTurn(ctx, &systemenginepb.StartTurnRequest{
+		RequestId:  "turn-start-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+	})
+	if err != nil {
+		return fmt.Errorf("calling system engine StartTurn for %q: %w", characterID, err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("starting turn for %q: %s", characterID, resp.Error)
+	}
+
+	if resp.Actor != nil {
+		newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+		if err != nil {
+			return fmt.Errorf("marshaling updated character data for %q: %w", characterID, err)
+		}
+		character.CharacterData = newCharacterData
+		character.UpdatedAt = time.Now().UTC()
+		if err := s.characters.SaveCharacter(ctx, character); err != nil {
+			return fmt.Errorf("saving character %q after start-of-turn bookkeeping: %w", characterID, err)
+		}
+	}
+
+	if resp.DeathSaveRolled && resp.DeathSaveOutcome != nil {
+		if err := s.broadcastRollOutcome(ctx, campaignID, characterID, resp.DeathSaveOutcome); err != nil {
+			s.logger.Warn("failed to broadcast automatic death save roll", "error", err, "campaign_id", campaignID, "character_id", characterID)
+		}
+	}
+
+	return nil
 }
 
 // startCombat establishes initiative order for campaignID from
@@ -74,10 +135,12 @@ func (s *Server) characterIsActive(ctx context.Context, character store.Characte
 // character through the system engine — never trusts the DM model to
 // invent or eyeball an order (CLAUDE.md's "gates over prompting") — then
 // sorts descending by total. A character get_character_status already
-// reports as unconscious/dying/dead is silently excluded from initiative
-// rather than failing the whole call, the same way advanceTurn would
-// skip them on their turn anyway. Replaces any turn order already
-// running for campaignID (a fresh encounter starting mid-scene, e.g.).
+// reports dead is silently excluded from initiative rather than failing
+// the whole call, the same way advanceTurn would skip them on their
+// turn anyway; unconscious/dying characters are included (see
+// characterIsDead's doc comment for why). Replaces any turn order
+// already running for campaignID (a fresh encounter starting
+// mid-scene, e.g.).
 func (s *Server) startCombat(ctx context.Context, campaignID string, characterIDs []string) (protocol.TurnStatePayload, error) {
 	if len(characterIDs) == 0 {
 		return protocol.TurnStatePayload{}, errors.New("start_combat requires at least one character_id")
@@ -93,11 +156,11 @@ func (s *Server) startCombat(ctx context.Context, campaignID string, characterID
 		if err != nil {
 			return protocol.TurnStatePayload{}, err
 		}
-		active, err := s.characterIsActive(ctx, character)
+		dead, err := s.characterIsDead(ctx, character)
 		if err != nil {
 			return protocol.TurnStatePayload{}, err
 		}
-		if !active {
+		if dead {
 			continue
 		}
 
@@ -131,7 +194,7 @@ func (s *Server) startCombat(ctx context.Context, campaignID string, characterID
 	}
 
 	if len(rolls) == 0 {
-		return protocol.TurnStatePayload{}, errors.New("no active characters to start combat with")
+		return protocol.TurnStatePayload{}, errors.New("no non-dead characters to start combat with")
 	}
 
 	sort.SliceStable(rolls, func(i, j int) bool { return rolls[i].total > rolls[j].total })
@@ -145,6 +208,11 @@ func (s *Server) startCombat(ctx context.Context, campaignID string, characterID
 	s.turnOrders[campaignID] = state
 	s.turnOrdersMu.Unlock()
 
+	// Combat starting also starts order[0]'s own turn.
+	if err := s.startTurnFor(ctx, campaignID, order[0]); err != nil {
+		s.logger.Warn("failed to run start-of-turn bookkeeping for the first character in initiative", "error", err, "campaign_id", campaignID, "character_id", order[0])
+	}
+
 	payload := state.toPayload()
 	if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {
 		s.logger.Warn("failed to broadcast turn.state", "error", err, "campaign_id", campaignID)
@@ -152,12 +220,15 @@ func (s *Server) startCombat(ctx context.Context, campaignID string, characterID
 	return payload, nil
 }
 
-// advanceTurn moves campaignID's turn order to the next character whose
-// get_character_status reports active — design doc §9.3's requirement
-// that unconscious/dying/dead characters are skipped mechanically, not
-// left to the DM to remember. If every character in order is
-// incapacitated, combat ends automatically: there is no one left who
-// could take a turn.
+// advanceTurn moves campaignID's turn order to the next character who
+// isn't dead — design doc §9.3's requirement that this bookkeeping is
+// mechanical, not left to the DM to remember. Landing on an unconscious/
+// dying character still starts their turn (startTurnFor): SRD play has
+// them roll a death saving throw instead of acting, which is exactly
+// what that call does automatically — see characterIsDead's doc comment
+// for why they aren't skipped the way a dead character is. If every
+// character in order is dead, combat ends automatically: there is no
+// one left who could take a turn.
 func (s *Server) advanceTurn(ctx context.Context, campaignID string) (protocol.TurnStatePayload, error) {
 	s.turnOrdersMu.Lock()
 	state, ok := s.turnOrders[campaignID]
@@ -176,12 +247,16 @@ func (s *Server) advanceTurn(ctx context.Context, campaignID string) (protocol.T
 		if err != nil {
 			return protocol.TurnStatePayload{}, err
 		}
-		active, err := s.characterIsActive(ctx, character)
+		dead, err := s.characterIsDead(ctx, character)
 		if err != nil {
 			return protocol.TurnStatePayload{}, err
 		}
-		if !active {
+		if dead {
 			continue
+		}
+
+		if err := s.startTurnFor(ctx, campaignID, character.ID); err != nil {
+			s.logger.Warn("failed to run start-of-turn bookkeeping", "error", err, "campaign_id", campaignID, "character_id", character.ID)
 		}
 
 		payload := state.toPayload()

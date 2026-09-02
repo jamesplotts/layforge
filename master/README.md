@@ -96,12 +96,30 @@ bookkeeping is Master's own, independent of the model's judgment.
 `start_combat` rolls a real Dexterity check per character through the
 System Engine and sorts descending — never trusts the model to invent or
 eyeball an order — and silently excludes anyone `get_character_status`
-already reports incapacitated rather than failing the whole call.
-`advance_turn` walks to the next character, skipping unconscious/dying/
-dead the same way (§9.3's actual requirement), and ends combat
-automatically once nobody active is left. Every state change broadcasts
-`turn.state`. In-memory only, scoped like `session.Hub`'s connection
-registry — a Master restart mid-combat loses it.
+already reports dead rather than failing the whole call. `advance_turn`
+walks to the next non-dead character and ends combat automatically once
+nobody's left. Every state change broadcasts `turn.state`. In-memory
+only, scoped like `session.Hub`'s connection registry — a Master restart
+mid-combat loses it.
+
+Unconscious/dying characters are deliberately *not* skipped the way an
+earlier version of this codebase treated them — real SRD play still
+gives them a turn, they just roll a death saving throw instead of
+acting, and skipping them outright would leave them stuck at 0 HP
+forever. That death save is now real: a new System Engine RPC,
+`StartTurn` (added to `protocol/system_engine.proto` and implemented in
+OpenCombatEngine's own `StandardCreature.StartTurn()` — see that repo's
+own `feat(creatures): expose StartTurn's automatic death save over gRPC`
+commit), runs automatically whenever `startCombat`/`advanceTurn` land a
+turn on a character (`startTurnFor` in `turn_order.go`) — SRD's own
+mechanic that a dying character re-rolls a death save *every* turn,
+never left to the DM to remember or invent. The engine already had this
+logic; it just had no RPC exposing it and no way to report what
+happened, so it was completely unreachable before this. A rolled death
+save persists the character's updated state and broadcasts as a real
+`roll.request`/`roll.result` — verified live: bringing a character to 0
+HP and advancing the turn produced a real, unprompted death-save roll on
+the dice tray, with no explicit player or DM action requested.
 
 Once combat is active, it's now actually enforced on players too, not
 just bookkept: `enforceTurnOrder` rejects a player's own
