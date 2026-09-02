@@ -38,6 +38,26 @@ func testEvent(campaignID, messageID string) store.Event {
 	}
 }
 
+// appendSequence appends one event per id, in order, and returns the
+// Sequence assigned to each — a common setup step for the pagination
+// tests below, which need real sequence numbers to anchor on.
+func appendSequence(t *testing.T, s *store.SQLiteEventStore, campaignID string, ids ...string) []int64 {
+	t.Helper()
+	ctx := context.Background()
+	sequences := make([]int64, len(ids))
+	for i, id := range ids {
+		if err := s.AppendEvent(ctx, testEvent(campaignID, id)); err != nil {
+			t.Fatalf("AppendEvent(%s) error = %v", id, err)
+		}
+		got, _, err := s.ListEvents(ctx, campaignID, store.ListEventsOptions{BeforeSequence: 0, Limit: 1})
+		if err != nil {
+			t.Fatalf("ListEvents() error = %v", err)
+		}
+		sequences[i] = got[len(got)-1].Sequence
+	}
+	return sequences
+}
+
 func TestSQLiteEventStore_AppendEvent(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -116,13 +136,26 @@ func TestSQLiteEventStore_AppendEvent_SameMessageIDDifferentCampaign_Succeeds(t 
 
 func TestSQLiteEventStore_ListEvents_MissingCampaignID_ReturnsCampaignIDRequired(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.ListEvents(context.Background(), "", store.ListEventsOptions{})
+	_, _, err := s.ListEvents(context.Background(), "", store.ListEventsOptions{})
 	if !errors.Is(err, store.ErrCampaignIDRequired) {
 		t.Errorf("ListEvents() error = %v, want error wrapping ErrCampaignIDRequired", err)
 	}
 }
 
-func TestSQLiteEventStore_ListEvents_ReturnsInSequenceOrder(t *testing.T) {
+func TestSQLiteEventStore_ListEvents_ConflictingBounds_ReturnsError(t *testing.T) {
+	s := newTestStore(t)
+	sequences := appendSequence(t, s, "campaign-1", "msg-1", "msg-2")
+
+	_, _, err := s.ListEvents(context.Background(), "campaign-1", store.ListEventsOptions{
+		AfterSequence:  sequences[0],
+		BeforeSequence: sequences[1],
+	})
+	if !errors.Is(err, store.ErrConflictingPagination) {
+		t.Errorf("ListEvents() error = %v, want error wrapping ErrConflictingPagination", err)
+	}
+}
+
+func TestSQLiteEventStore_ListEvents_Default_ReturnsInSequenceOrder(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -132,9 +165,12 @@ func TestSQLiteEventStore_ListEvents_ReturnsInSequenceOrder(t *testing.T) {
 		}
 	}
 
-	got, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{})
+	got, hasMore, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{})
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if hasMore {
+		t.Error("hasMore = true, want false (fewer events than the default limit)")
 	}
 	if len(got) != 3 {
 		t.Fatalf("len(got) = %d, want 3", len(got))
@@ -154,6 +190,32 @@ func TestSQLiteEventStore_ListEvents_ReturnsInSequenceOrder(t *testing.T) {
 	}
 }
 
+func TestSQLiteEventStore_ListEvents_Default_ReturnsMostRecentEvents(t *testing.T) {
+	s := newTestStore(t)
+	appendSequence(t, s, "campaign-1", "msg-1", "msg-2", "msg-3", "msg-4", "msg-5")
+
+	// No bound set at all, and a limit smaller than the total event
+	// count: the natural first page for a chat-style scrollback is
+	// "where things stand now" (the tail), not the campaign's very first
+	// message.
+	got, hasMore, err := s.ListEvents(context.Background(), "campaign-1", store.ListEventsOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if !hasMore {
+		t.Error("hasMore = false, want true (3 older events exist)")
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	// Still oldest-first within the returned page, per the interface's
+	// documented contract, even though the page itself is anchored at
+	// the newest end of the campaign.
+	if got[0].MessageID != "msg-4" || got[1].MessageID != "msg-5" {
+		t.Errorf("got = [%s, %s], want [msg-4, msg-5]", got[0].MessageID, got[1].MessageID)
+	}
+}
+
 func TestSQLiteEventStore_ListEvents_ScopedToCampaign(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -165,7 +227,7 @@ func TestSQLiteEventStore_ListEvents_ScopedToCampaign(t *testing.T) {
 		t.Fatalf("AppendEvent(campaign-2) error = %v", err)
 	}
 
-	got, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{})
+	got, _, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{})
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}
@@ -179,29 +241,82 @@ func TestSQLiteEventStore_ListEvents_ScopedToCampaign(t *testing.T) {
 
 func TestSQLiteEventStore_ListEvents_AfterSequence_ReturnsOnlyLaterEvents(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	sequences := appendSequence(t, s, "campaign-1", "msg-1", "msg-2", "msg-3")
 
-	for _, id := range []string{"msg-1", "msg-2", "msg-3"} {
-		if err := s.AppendEvent(ctx, testEvent("campaign-1", id)); err != nil {
-			t.Fatalf("AppendEvent(%s) error = %v", id, err)
-		}
-	}
-
-	all, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{})
-	if err != nil {
-		t.Fatalf("ListEvents() error = %v", err)
-	}
-	firstSequence := all[0].Sequence
-
-	got, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{AfterSequence: firstSequence})
+	got, hasMore, err := s.ListEvents(context.Background(), "campaign-1", store.ListEventsOptions{AfterSequence: sequences[0]})
 	if err != nil {
 		t.Fatalf("ListEvents(AfterSequence) error = %v", err)
+	}
+	if hasMore {
+		t.Error("hasMore = true, want false (no events newer than msg-3)")
 	}
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2", len(got))
 	}
 	if got[0].MessageID != "msg-2" || got[1].MessageID != "msg-3" {
 		t.Errorf("got = %+v, want [msg-2, msg-3]", got)
+	}
+}
+
+func TestSQLiteEventStore_ListEvents_AfterSequence_HasMoreWhenTruncated(t *testing.T) {
+	s := newTestStore(t)
+	sequences := appendSequence(t, s, "campaign-1", "msg-1", "msg-2", "msg-3", "msg-4")
+
+	got, hasMore, err := s.ListEvents(context.Background(), "campaign-1", store.ListEventsOptions{
+		AfterSequence: sequences[0],
+		Limit:         2,
+	})
+	if err != nil {
+		t.Fatalf("ListEvents(AfterSequence) error = %v", err)
+	}
+	if !hasMore {
+		t.Error("hasMore = false, want true (msg-4 is still newer than what was returned)")
+	}
+	if len(got) != 2 || got[0].MessageID != "msg-2" || got[1].MessageID != "msg-3" {
+		t.Errorf("got = %+v, want [msg-2, msg-3]", got)
+	}
+}
+
+func TestSQLiteEventStore_ListEvents_BeforeSequence_ReturnsPrecedingEventsInOrder(t *testing.T) {
+	s := newTestStore(t)
+	sequences := appendSequence(t, s, "campaign-1", "msg-1", "msg-2", "msg-3", "msg-4")
+
+	// Anchored on msg-4: "load earlier" from there.
+	got, hasMore, err := s.ListEvents(context.Background(), "campaign-1", store.ListEventsOptions{
+		BeforeSequence: sequences[3],
+		Limit:          2,
+	})
+	if err != nil {
+		t.Fatalf("ListEvents(BeforeSequence) error = %v", err)
+	}
+	if !hasMore {
+		t.Error("hasMore = false, want true (msg-1 is still older than what was returned)")
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	// Nearest-to-the-anchor two events, still returned oldest-first.
+	if got[0].MessageID != "msg-2" || got[1].MessageID != "msg-3" {
+		t.Errorf("got = [%s, %s], want [msg-2, msg-3]", got[0].MessageID, got[1].MessageID)
+	}
+}
+
+func TestSQLiteEventStore_ListEvents_BeforeSequence_HasMoreFalseAtStart(t *testing.T) {
+	s := newTestStore(t)
+	sequences := appendSequence(t, s, "campaign-1", "msg-1", "msg-2", "msg-3")
+
+	got, hasMore, err := s.ListEvents(context.Background(), "campaign-1", store.ListEventsOptions{
+		BeforeSequence: sequences[2],
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("ListEvents(BeforeSequence) error = %v", err)
+	}
+	if hasMore {
+		t.Error("hasMore = true, want false (msg-1 and msg-2 are all there is before msg-3)")
+	}
+	if len(got) != 2 || got[0].MessageID != "msg-1" || got[1].MessageID != "msg-2" {
+		t.Errorf("got = %+v, want [msg-1, msg-2]", got)
 	}
 }
 
@@ -227,7 +342,7 @@ func TestSQLiteEventStore_ListEvents_LimitCapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{Limit: tt.limit})
+			got, _, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{Limit: tt.limit})
 			if err != nil {
 				t.Fatalf("ListEvents() error = %v", err)
 			}
@@ -248,7 +363,7 @@ func TestSQLiteEventStore_AppendThenList_RawPayloadRoundTrips(t *testing.T) {
 		t.Fatalf("AppendEvent() error = %v", err)
 	}
 
-	got, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{})
+	got, _, err := s.ListEvents(ctx, "campaign-1", store.ListEventsOptions{})
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}

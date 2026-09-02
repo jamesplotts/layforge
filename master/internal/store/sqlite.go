@@ -118,10 +118,15 @@ func (s *SQLiteEventStore) AppendEvent(ctx context.Context, event Event) error {
 	return nil
 }
 
-// ListEvents implements EventStore.
-func (s *SQLiteEventStore) ListEvents(ctx context.Context, campaignID string, opts ListEventsOptions) ([]Event, error) {
+// ListEvents implements EventStore. See that method's doc comment for
+// the direction/default semantics; this just dispatches to the forward
+// or backward query shape and leaves the SQL to listForward/listBackward.
+func (s *SQLiteEventStore) ListEvents(ctx context.Context, campaignID string, opts ListEventsOptions) ([]Event, bool, error) {
 	if campaignID == "" {
-		return nil, ErrCampaignIDRequired
+		return nil, false, ErrCampaignIDRequired
+	}
+	if opts.AfterSequence != 0 && opts.BeforeSequence != 0 {
+		return nil, false, ErrConflictingPagination
 	}
 
 	limit := opts.Limit
@@ -132,19 +137,94 @@ func (s *SQLiteEventStore) ListEvents(ctx context.Context, campaignID string, op
 		limit = MaxListLimit
 	}
 
+	if opts.AfterSequence != 0 {
+		return s.listForward(ctx, campaignID, opts.AfterSequence, limit)
+	}
+	return s.listBackward(ctx, campaignID, opts.BeforeSequence, limit)
+}
+
+// listForward returns events with Sequence > afterSequence, oldest
+// first, plus whether more (newer) events exist beyond the page.
+func (s *SQLiteEventStore) listForward(ctx context.Context, campaignID string, afterSequence int64, limit int) ([]Event, bool, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT sequence, campaign_id, message_id, message_type, sender_id, occurred_at, payload
 		 FROM events
 		 WHERE campaign_id = ? AND sequence > ?
 		 ORDER BY sequence ASC
 		 LIMIT ?`,
-		campaignID, opts.AfterSequence, limit,
+		campaignID, afterSequence, limit+1,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("store: listing events: %w", err)
+		return nil, false, fmt.Errorf("store: listing events: %w", err)
 	}
 	defer rows.Close()
 
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(events) > limit
+	if hasMore {
+		events = events[:limit]
+	}
+	return events, hasMore, nil
+}
+
+// listBackward returns the Limit events with Sequence < beforeSequence
+// nearest to it (or, if beforeSequence is zero, the most recent Limit
+// events in the campaign — the tail/default case), oldest first, plus
+// whether more (older) events exist beyond the page.
+func (s *SQLiteEventStore) listBackward(ctx context.Context, campaignID string, beforeSequence int64, limit int) ([]Event, bool, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if beforeSequence != 0 {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT sequence, campaign_id, message_id, message_type, sender_id, occurred_at, payload
+			 FROM events
+			 WHERE campaign_id = ? AND sequence < ?
+			 ORDER BY sequence DESC
+			 LIMIT ?`,
+			campaignID, beforeSequence, limit+1,
+		)
+	} else {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT sequence, campaign_id, message_id, message_type, sender_id, occurred_at, payload
+			 FROM events
+			 WHERE campaign_id = ?
+			 ORDER BY sequence DESC
+			 LIMIT ?`,
+			campaignID, limit+1,
+		)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("store: listing events: %w", err)
+	}
+	defer rows.Close()
+
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	// Rows arrive newest-first (closest to beforeSequence first), so the
+	// (limit+1)th row, if present, is the farthest/oldest one — trim it
+	// with events[:limit] while still in this descending order (that's
+	// "drop the last element"), then reverse to the ascending order
+	// ListEvents always returns.
+	hasMore := len(events) > limit
+	if hasMore {
+		events = events[:limit]
+	}
+	reverseEvents(events)
+	return events, hasMore, nil
+}
+
+// scanEvents drains rows into Events, shared by listForward and
+// listBackward regardless of the SQL ORDER BY direction each used —
+// callers reverse the result themselves if they queried descending.
+func scanEvents(rows *sql.Rows) ([]Event, error) {
 	var events []Event
 	for rows.Next() {
 		var e Event
@@ -164,6 +244,15 @@ func (s *SQLiteEventStore) ListEvents(ctx context.Context, campaignID string, op
 		return nil, fmt.Errorf("store: reading event rows: %w", err)
 	}
 	return events, nil
+}
+
+// reverseEvents reverses events in place — used to turn a descending
+// (newest-first) query result back into the ascending (oldest-first)
+// order ListEvents always returns, regardless of paging direction.
+func reverseEvents(events []Event) {
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
 }
 
 // isUniqueConstraintErr reports whether err is a SQLite UNIQUE

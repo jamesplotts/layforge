@@ -641,7 +641,7 @@ components:
       name: log.history_request
       messageId: log_history_request
       title: Request a page of campaign history
-      summary: Client requests a page of the durable campaign event log (docs/design.md §10) for chat-log/history review (§11).
+      summary: Client requests a page of the durable campaign event log (docs/design.md §10) for chat-log/history review (§11). Set at most one of after_sequence / before_sequence — they're opposite paging directions.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -655,7 +655,10 @@ components:
                 properties:
                   after_sequence:
                     type: integer
-                    description: Return only events after this store-assigned sequence number (not a message_id or timestamp — see design doc §10 on why sequence is the pagination cursor). Omitted or zero means from the beginning of the campaign's log.
+                    description: Return events after this store-assigned sequence number (not a message_id or timestamp — see design doc §10 on why sequence is the pagination cursor) — "continue toward now from here." Typically a previous response's next_after_sequence.
+                  before_sequence:
+                    type: integer
+                    description: Return events before this sequence number — "load earlier." Typically a previous response's next_before_sequence. Mutually exclusive with after_sequence; setting both gets a system.error.
                   limit:
                     type: integer
                     description: Maximum events to return. A server-enforced default and cap apply if omitted or too large.
@@ -681,12 +684,16 @@ components:
                     type: array
                     items:
                       type: object
-                      description: A previously recorded protocol message, verbatim as originally sent (its own envelope + payload) — not re-wrapped.
+                      description: A previously recorded protocol message, verbatim as originally sent (its own envelope + payload) — not re-wrapped. Always oldest-first regardless of paging direction, or of neither after_sequence nor before_sequence being set — which returns the most recent messages (the natural first page for a chat-style scrollback), not the campaign's very first message.
+                  next_before_sequence:
+                    type: integer
+                    description: Pass as before_sequence on a follow-up request to continue paging toward older history ("load earlier"). Omitted when events is empty.
                   next_after_sequence:
                     type: integer
-                    description: Pass as after_sequence on the next request to continue paging. Omitted when events is empty.
+                    description: Pass as after_sequence on a follow-up request to continue paging toward newer history. Omitted when events is empty.
                   has_more:
                     type: boolean
+                    description: Whether more events exist in the direction this request paged — newer if after_sequence was set, older otherwise (including the default/tail case).
 
   schemas:
 

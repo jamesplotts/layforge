@@ -85,14 +85,21 @@ type SafetyFlagBroadcastMessage = Message[SafetyFlagBroadcastPayload]
 
 // HistoryRequestPayload is the payload of a log.history_request message:
 // a client asking for a page of the durable campaign event log (design
-// doc §10) for chat-log/history review (§11). See protocol/asyncapi.yaml
+// doc §10) for chat-log/history review (§11). Set at most one of
+// AfterSequence / BeforeSequence — they're opposite paging directions;
+// setting both gets a system.error. See protocol/asyncapi.yaml
 // components.messages.LogHistoryRequest.
 type HistoryRequestPayload struct {
-	// AfterSequence returns only events after this store-assigned
-	// sequence number — not a message_id or timestamp; see design doc
-	// §10 on why sequence, not client-supplied fields, is the pagination
-	// cursor. Zero means from the beginning of the campaign's log.
+	// AfterSequence, if non-zero, returns events after this store-
+	// assigned sequence number — not a message_id or timestamp; see
+	// design doc §10 on why sequence, not client-supplied fields, is the
+	// pagination cursor. Typically a previous response's
+	// NextAfterSequence.
 	AfterSequence int64 `json:"after_sequence,omitempty"`
+	// BeforeSequence, if non-zero, returns events before this sequence
+	// number — "load earlier," typically a previous response's
+	// NextBeforeSequence.
+	BeforeSequence int64 `json:"before_sequence,omitempty"`
 	// Limit caps how many events come back; zero (or an oversized value)
 	// falls back to Master's own default/cap.
 	Limit int `json:"limit,omitempty"`
@@ -104,14 +111,26 @@ type HistoryRequestMessage = Message[HistoryRequestPayload]
 // HistoryResponsePayload is the payload of a log.history_response
 // message: a page of previously recorded messages, each returned exactly
 // as it was originally sent — not re-wrapped in any further envelope, so
-// a client renders history the same way it renders anything live. See
-// protocol/asyncapi.yaml components.messages.LogHistoryResponse.
+// a client renders history the same way it renders anything live.
+// Events is always oldest-first, regardless of which direction the
+// request paged, or of neither being set — which returns the most
+// recent messages (the natural first page for a chat-style scrollback),
+// not the campaign's very first message. See protocol/asyncapi.yaml
+// components.messages.LogHistoryResponse.
 type HistoryResponsePayload struct {
 	Events []json.RawMessage `json:"events"`
-	// NextAfterSequence is the AfterSequence to pass on the next request
-	// to continue paging; zero/omitted when Events is empty.
+	// NextBeforeSequence: pass as BeforeSequence on a follow-up request
+	// to continue paging toward older history ("load earlier").
+	// Omitted when Events is empty.
+	NextBeforeSequence int64 `json:"next_before_sequence,omitempty"`
+	// NextAfterSequence: pass as AfterSequence on a follow-up request to
+	// continue paging toward newer history. Omitted when Events is
+	// empty.
 	NextAfterSequence int64 `json:"next_after_sequence,omitempty"`
-	HasMore           bool  `json:"has_more"`
+	// HasMore indicates whether more events exist in the direction this
+	// request paged: newer if the request set AfterSequence, older
+	// otherwise (including the default/tail case).
+	HasMore bool `json:"has_more"`
 }
 
 // HistoryResponseMessage is a log.history_response Message.

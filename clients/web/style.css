@@ -231,9 +231,14 @@ button.secondary {
   text-align: center;
 }
 
-#load-more-button {
-  align-self: center;
-  margin-bottom: 8px;
+.load-earlier {
+  display: block;
+  margin: 10px auto 0;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 6px 14px;
 }
 
 .input-form {
@@ -283,10 +288,4 @@ button:disabled {
 #safety-flag-button {
   background: var(--danger-bg);
   color: var(--danger);
-}
-
-#load-more-button {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  color: var(--text-dim);
 }

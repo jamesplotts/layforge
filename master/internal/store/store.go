@@ -55,11 +55,20 @@ type Event struct {
 	Raw json.RawMessage
 }
 
-// ListEventsOptions controls pagination for ListEvents.
+// ListEventsOptions controls pagination for ListEvents. Set at most one
+// of AfterSequence / BeforeSequence — they express opposite paging
+// directions, and setting both is rejected as ErrConflictingPagination.
 type ListEventsOptions struct {
-	// AfterSequence returns only events with Sequence > AfterSequence.
-	// Zero means "from the beginning of the campaign's log".
+	// AfterSequence, if non-zero, returns events with Sequence >
+	// AfterSequence, oldest-first — "continue toward now from here."
+	// Typically the NextAfterSequence a previous page returned.
 	AfterSequence int64
+	// BeforeSequence, if non-zero, returns the Limit events with
+	// Sequence < BeforeSequence that are nearest to it, still returned
+	// oldest-first — "what came before this," e.g. anchored on the
+	// oldest event a previous page returned, for a "load earlier"
+	// scrollback control (design doc §10, §11).
+	BeforeSequence int64
 	// Limit caps the number of events returned. Zero or negative uses
 	// DefaultListLimit; anything above MaxListLimit is capped to it.
 	Limit int
@@ -72,6 +81,10 @@ var (
 	ErrCampaignIDRequired = errors.New("store: campaign_id is required")
 	ErrMessageIDRequired  = errors.New("store: message_id is required")
 	ErrDuplicateMessage   = errors.New("store: an event with this message_id already exists for this campaign")
+	// ErrConflictingPagination is returned when ListEventsOptions sets
+	// both AfterSequence and BeforeSequence, which express opposite
+	// paging directions in a single call.
+	ErrConflictingPagination = errors.New("store: after_sequence and before_sequence are mutually exclusive")
 )
 
 // EventStore is Master's durable, append-only campaign event log — the
@@ -87,8 +100,14 @@ type EventStore interface {
 	// a duplicate here indicates a retry or a bug, not a new event.
 	AppendEvent(ctx context.Context, event Event) error
 
-	// ListEvents returns events for campaignID in Sequence order,
-	// starting after opts.AfterSequence, oldest first. It fails with
-	// ErrCampaignIDRequired if campaignID is empty.
-	ListEvents(ctx context.Context, campaignID string, opts ListEventsOptions) ([]Event, error)
+	// ListEvents returns a page of events for campaignID, always
+	// oldest-first regardless of paging direction, plus whether more
+	// events exist beyond that page in the direction opts implies:
+	// newer if AfterSequence was set, older otherwise — including the
+	// default case where neither bound is set, which returns the most
+	// recent Limit events (the natural first page for a chat-style
+	// scrollback: "where things stand now," not the campaign's very
+	// first message). It fails with ErrCampaignIDRequired if campaignID
+	// is empty, and ErrConflictingPagination per ListEventsOptions.
+	ListEvents(ctx context.Context, campaignID string, opts ListEventsOptions) (events []Event, hasMore bool, err error)
 }

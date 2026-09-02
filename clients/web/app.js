@@ -22,6 +22,10 @@ const state = {
   characterId: "",
   joined: false,
   pendingInputMessageId: null,
+  // oldestLoadedSequence/hasMoreOlder track the "load earlier" cursor —
+  // see the History paging section below.
+  oldestLoadedSequence: null,
+  hasMoreOlder: false,
 };
 
 const el = {
@@ -35,6 +39,7 @@ const el = {
   chatCampaignLabel: document.getElementById("chat-campaign-label"),
   chatStatus: document.getElementById("chat-status"),
   log: document.getElementById("log"),
+  loadEarlierButton: document.getElementById("load-earlier-button"),
   safetyFlagButton: document.getElementById("safety-flag-button"),
   safetyFlagPanel: document.getElementById("safety-flag-panel"),
   safetyFlagTopic: document.getElementById("safety-flag-topic"),
@@ -51,6 +56,7 @@ el.safetyFlagButton.addEventListener("click", openSafetyFlagPanel);
 el.safetyFlagCancel.addEventListener("click", closeSafetyFlagPanel);
 el.safetyFlagSend.addEventListener("click", onSafetyFlagSend);
 el.inputForm.addEventListener("submit", onInputSubmit);
+el.loadEarlierButton.addEventListener("click", onLoadEarlierClick);
 
 function defaultWsUrl() {
   // location.host is empty when opened via file://, and there's no
@@ -204,7 +210,10 @@ function onJoined() {
   el.chatScreen.hidden = false;
   el.chatCampaignLabel.textContent = state.campaignId;
   setStatus("connected", "connected");
-  requestHistory(0);
+  // No bounds set: Master returns the most recent page (design doc §10)
+  // — "where things stand now," the natural first page for a chat-style
+  // scrollback, not the campaign's very first message.
+  requestHistory({});
 }
 
 function onSystemError(msg) {
@@ -226,44 +235,72 @@ function onNarrativeBubble(msg) {
 
 // --- History paging ---
 //
-// log.history_request only supports forward pagination (after_sequence),
-// not "give me the most recent N" or "load earlier" — see
-// docs/design.md §10 and protocol/asyncapi.yaml. So on join this walks
-// every page from the beginning automatically rather than offering a
-// "load more" control whose direction (older vs. newer) would be
-// confusing given what the backend actually supports.
-function requestHistory(afterSequence) {
+// Master's log.history_request/response (design doc §10) supports two
+// paging directions: after_sequence ("continue toward now") and
+// before_sequence ("load earlier"). This client only ever uses the
+// latter plus the no-bounds tail default — live updates already arrive
+// via broadcast, so there's never a need to ask Master "what's newer
+// than X" the way a client resuming from cached history might.
+//
+// Every history response, including the very first (tail) one, is
+// content that belongs *before* whatever's currently in the log — so
+// onHistoryResponse always prepends. Insert-before-firstChild degrades
+// to a plain append when the log is still empty, so one code path
+// handles both "initial load" and "load earlier" without a branch.
+const HISTORY_PAGE_SIZE = 20;
+
+function requestHistory(bounds) {
   send({
     ...newEnvelope("log.history_request"),
-    payload: { after_sequence: afterSequence || 0, limit: 50 },
+    payload: { ...bounds, limit: HISTORY_PAGE_SIZE },
   });
+}
+
+function onLoadEarlierClick() {
+  if (state.oldestLoadedSequence == null) return;
+  requestHistory({ before_sequence: state.oldestLoadedSequence });
 }
 
 function onHistoryResponse(payload) {
   const events = (payload && payload.events) || [];
-  for (const raw of events) renderHistoryEvent(raw);
+  const wasEmpty = el.log.firstChild === null;
 
-  if (payload && payload.has_more) {
-    requestHistory(payload.next_after_sequence);
-  } else {
+  const fragment = document.createDocumentFragment();
+  for (const raw of events) {
+    const rendered = renderHistoryEvent(raw);
+    if (rendered) fragment.appendChild(rendered);
+  }
+  el.log.insertBefore(fragment, el.log.firstChild);
+
+  if (payload && payload.next_before_sequence) {
+    state.oldestLoadedSequence = payload.next_before_sequence;
+  }
+  state.hasMoreOlder = !!(payload && payload.has_more);
+  el.loadEarlierButton.hidden = !state.hasMoreOlder;
+
+  // Only jump to the bottom on the very first (tail) page — loading
+  // earlier history on top of what's already visible shouldn't yank the
+  // viewport away from wherever the reader currently is. (A real
+  // implementation would preserve scroll offset around the insertion
+  // point; skipped here — see clients/web/README.md.)
+  if (wasEmpty) {
     el.log.scrollTop = el.log.scrollHeight;
   }
 }
 
+// renderHistoryEvent returns a DOM element for raw, or null if this
+// event type is deliberately not shown in scrollback — system.connect /
+// system.session_state / narrative.player_input / safety.flag /
+// log.history_* are handshake and audit-trail entries, not things a
+// player wants to see, not an oversight.
 function renderHistoryEvent(raw) {
   switch (raw.type) {
     case "narrative.player_bubble":
-      appendBubble(raw.payload.character_id, raw.payload.text);
-      break;
+      return bubbleEl(raw.payload.character_id, raw.payload.text);
     case "safety.flag_broadcast":
-      appendSafetyBanner(raw.payload ? raw.payload.topic : "");
-      break;
+      return safetyBannerEl(raw.payload ? raw.payload.topic : "");
     default:
-      // system.connect / system.session_state / narrative.player_input /
-      // safety.flag / log.history_* are handshake and audit-trail
-      // entries, not things a player wants in their scrollback —
-      // skipped deliberately, not an oversight.
-      break;
+      return null;
   }
 }
 
@@ -305,8 +342,13 @@ function onSafetyFlagSend() {
 }
 
 // --- Rendering ---
+//
+// Each *El function builds a detached element (used directly for live
+// messages, or batched into a fragment for a history page — see
+// onHistoryResponse); each append* function is the live-message case:
+// build, append to the end of the log, scroll to it.
 
-function appendBubble(characterId, text) {
+function bubbleEl(characterId, text) {
   const bubble = document.createElement("div");
   bubble.className = "bubble";
 
@@ -319,15 +361,23 @@ function appendBubble(characterId, text) {
   body.textContent = text;
 
   bubble.append(who, body);
-  el.log.appendChild(bubble);
+  return bubble;
+}
+
+function safetyBannerEl(topic) {
+  const banner = document.createElement("div");
+  banner.className = "safety-banner";
+  banner.textContent = topic ? `⚑ Safety flag raised — topic: ${topic}` : "⚑ Safety flag raised";
+  return banner;
+}
+
+function appendBubble(characterId, text) {
+  el.log.appendChild(bubbleEl(characterId, text));
   el.log.scrollTop = el.log.scrollHeight;
 }
 
 function appendSafetyBanner(topic) {
-  const banner = document.createElement("div");
-  banner.className = "safety-banner";
-  banner.textContent = topic ? `⚑ Safety flag raised — topic: ${topic}` : "⚑ Safety flag raised";
-  el.log.appendChild(banner);
+  el.log.appendChild(safetyBannerEl(topic));
   el.log.scrollTop = el.log.scrollHeight;
 }
 
@@ -341,16 +391,9 @@ function appendErrorNote(text) {
 
 function showPendingBubble() {
   clearPendingBubble();
-  const bubble = document.createElement("div");
-  bubble.className = "bubble pending";
+  const bubble = bubbleEl("DM", "…");
+  bubble.classList.add("pending");
   bubble.id = "pending-bubble";
-  const who = document.createElement("span");
-  who.className = "who";
-  who.textContent = "DM";
-  const body = document.createElement("span");
-  body.className = "text";
-  body.textContent = "…";
-  bubble.append(who, body);
   el.log.appendChild(bubble);
   el.log.scrollTop = el.log.scrollHeight;
   el.inputSend.disabled = true;

@@ -10,8 +10,10 @@ protocol. Plain HTML/CSS/JS, no build step, matching the protocol's own
 Working: join a campaign (`system.connect` handshake), narrative
 scrollback with the fast-pass narrative-transform pipeline
 (`narrative.player_input` → `narrative.player_bubble`), the safety-flag
-control (`safety.flag` → `safety.flag_broadcast`), and automatic history
-paging on join (`log.history_request`/`log.history_response`).
+control (`safety.flag` → `safety.flag_broadcast`), and history: on join,
+the most recent page loads automatically (design doc §10's tail default,
+not the campaign's first message), with a "Load earlier history" button
+to page further back (`log.history_request`'s `before_sequence`).
 
 Not implemented — Master doesn't have anything for these to talk to yet:
 schema-driven stat/inventory/spells/actions panel (no system engine),
@@ -32,12 +34,10 @@ enter Master's WebSocket URL on the join screen (e.g.
 
 ## Known limitations
 
-- **History only pages forward.** `log.history_request` supports
-  `after_sequence` (design doc §10), not "give me the most recent N" or
-  "load earlier" — so on join this client walks every page from the
-  *beginning* of the campaign automatically. Fine for small test
-  campaigns; a real "jump to recent, scroll up for more" UX needs a
-  backend change first (see `internal/store` in `master/`).
+- **Scroll position isn't preserved across "Load earlier."** New content
+  gets prepended above what's visible, but the client doesn't adjust
+  scroll offset to compensate — the viewport can jump. A real
+  implementation would anchor scroll to the insertion point.
 - **No reconnect.** If the WebSocket drops, the status line says
   "disconnected" and that's it — reload to rejoin.
 - **`sender_id` is just the character name you type in.** There's no

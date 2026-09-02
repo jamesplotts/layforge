@@ -14,10 +14,12 @@ clients via `internal/session`'s connection registry — `safety.flag`
 broadcasts to everyone in the campaign (design doc §9.2), and
 `narrative.player_input` is rendered through an LLM (design doc §7's fast
 pass only — no slow-pass DM/NPC reaction yet) and broadcast as
-`narrative.player_bubble`. Any client can also page back through
-everything recorded for its campaign with `log.history_request`/
-`log.history_response` (design doc §10, §11), since every message
-exchanged is durably logged to SQLite as it happens. There's now a real,
+`narrative.player_bubble`. Any client can also page through everything recorded for its campaign
+with `log.history_request`/`log.history_response` (design doc §10,
+§11) — the default (no bounds set) returns the most recent page, with
+`before_sequence`/`after_sequence` to page older/newer from there —
+since every message exchanged is durably logged to SQLite as it happens.
+There's now a real,
 usable client to try all of this from — see `-web-dir` below and
 [`clients/web/`](../clients/web/) — verified in an actual browser, not
 just against hand-written test clients. The generated System Engine gRPC

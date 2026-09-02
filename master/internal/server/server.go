@@ -342,44 +342,37 @@ func (s *Server) sendHistory(ctx context.Context, conn *websocket.Conn, campaign
 	if s.events == nil {
 		return s.sendError(ctx, conn, campaignID, inReplyTo, errors.New("history unavailable: persistence is disabled"))
 	}
-
-	limit := req.Limit
-	if limit <= 0 {
-		limit = store.DefaultListLimit
-	}
-	// Cap to MaxListLimit-1, not MaxListLimit, so the "+1" probe below
-	// never gets silently clamped back down by the store itself — that
-	// would make a full last page look identical to "there's more".
-	if limit > store.MaxListLimit-1 {
-		limit = store.MaxListLimit - 1
+	if req.AfterSequence != 0 && req.BeforeSequence != 0 {
+		return s.sendError(ctx, conn, campaignID, inReplyTo, store.ErrConflictingPagination)
 	}
 
-	// Fetch one extra event to learn whether more pages remain, rather
-	// than guessing from whether this page happened to come back full.
-	events, err := s.events.ListEvents(ctx, campaignID, store.ListEventsOptions{
-		AfterSequence: req.AfterSequence,
-		Limit:         limit + 1,
+	events, hasMore, err := s.events.ListEvents(ctx, campaignID, store.ListEventsOptions{
+		AfterSequence:  req.AfterSequence,
+		BeforeSequence: req.BeforeSequence,
+		Limit:          req.Limit,
 	})
 	if err != nil {
 		return s.sendError(ctx, conn, campaignID, inReplyTo, fmt.Errorf("fetching history: %w", err))
 	}
 
-	hasMore := len(events) > limit
-	if hasMore {
-		events = events[:limit]
-	}
-
 	raw := make([]json.RawMessage, len(events))
-	var nextAfter int64
+	var oldest, newest int64
+	if len(events) > 0 {
+		// events is always oldest-first regardless of paging direction
+		// (EventStore.ListEvents's contract), so the cursors are just
+		// the endpoints — no need to scan for min/max.
+		oldest = events[0].Sequence
+		newest = events[len(events)-1].Sequence
+	}
 	for i, e := range events {
 		raw[i] = e.Raw
-		nextAfter = e.Sequence
 	}
 
 	msg, err := newMessage(campaignID, protocol.MessageTypeLogHistoryResponse, protocol.HistoryResponsePayload{
-		Events:            raw,
-		NextAfterSequence: nextAfter,
-		HasMore:           hasMore,
+		Events:             raw,
+		NextBeforeSequence: oldest,
+		NextAfterSequence:  newest,
+		HasMore:            hasMore,
 	})
 	if err != nil {
 		return err

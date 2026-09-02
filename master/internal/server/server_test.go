@@ -200,7 +200,7 @@ func TestHandleWebSocket_ValidConnect_PersistsHandshakeEvents(t *testing.T) {
 	// synchronously before that write, so by the time we get here both
 	// the inbound connect and the outbound session_state are already
 	// durable — no need to poll or sleep.
-	recorded, err := events.ListEvents(ctx, "campaign-persist", store.ListEventsOptions{})
+	recorded, _, err := events.ListEvents(ctx, "campaign-persist", store.ListEventsOptions{})
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}
@@ -415,15 +415,22 @@ func TestServe_UnsupportedMessageType_RespondsWithErrorAndKeepsConnectionOpen(t 
 	}
 }
 
-func TestServe_LogHistoryRequest_ReturnsRecordedEventsInOrder(t *testing.T) {
+// newTestServerWithHistory is newTestServer, but backed by a real
+// in-memory SQLite store instead of nil — for tests that exercise
+// log.history_request, which needs actual persistence to answer from.
+func newTestServerWithHistory(t *testing.T) *httptest.Server {
+	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	events, err := store.OpenSQLiteEventStore(":memory:")
 	if err != nil {
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = events.Close() })
+	return httptest.NewServer(server.New(logger, events, nil, "").Handler())
+}
 
-	ts := httptest.NewServer(server.New(logger, events, nil, "").Handler())
+func TestServe_LogHistoryRequest_ReturnsRecordedEventsInOrder(t *testing.T) {
+	ts := newTestServerWithHistory(t)
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-history", "player-a")
@@ -493,26 +500,54 @@ func TestServe_LogHistoryRequest_ReturnsRecordedEventsInOrder(t *testing.T) {
 	}
 }
 
-func TestServe_LogHistoryRequest_Pagination(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	events, err := store.OpenSQLiteEventStore(":memory:")
-	if err != nil {
-		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
-	}
-	t.Cleanup(func() { _ = events.Close() })
+func TestServe_LogHistoryRequest_Default_ReturnsMostRecentEvents(t *testing.T) {
+	ts := newTestServerWithHistory(t)
+	defer ts.Close()
 
-	ts := httptest.NewServer(server.New(logger, events, nil, "").Handler())
+	// Generate enough traffic that a small Limit can't happen to capture
+	// everything by coincidence — the point is proving the default page
+	// picks out the tail specifically, not just "some events".
+	conn := dialAndJoin(t, ts, "campaign-tail", "player-a")
+	defer conn.CloseNow()
+	for i := 0; i < 3; i++ {
+		sendSafetyFlagAndAwaitBroadcast(t, conn, "campaign-tail", "player-a", fmt.Sprintf("flag-%d", i))
+	}
+
+	// By now: connect, session_state, then 3x (flag, broadcast) = 8
+	// events on record. Ask for just the most recent 2 with no anchor.
+	page, err := requestHistory(context.Background(), conn, "campaign-tail", "player-a", protocol.HistoryRequestPayload{Limit: 2})
+	if err != nil {
+		t.Fatalf("requestHistory() error = %v", err)
+	}
+	if !page.HasMore {
+		t.Error("HasMore = false, want true (6 older events exist)")
+	}
+	if len(page.Events) != 2 {
+		t.Fatalf("len(Events) = %d, want 2", len(page.Events))
+	}
+	wantTypes := []string{"safety.flag", "safety.flag_broadcast"}
+	for i, wantType := range wantTypes {
+		var envelope protocol.Envelope
+		if err := json.Unmarshal(page.Events[i], &envelope); err != nil {
+			t.Fatalf("Events[%d]: Unmarshal() error = %v", i, err)
+		}
+		if string(envelope.Type) != wantType {
+			t.Errorf("Events[%d].type = %q, want %q (the last thing sent, not the campaign's first message)", i, envelope.Type, wantType)
+		}
+	}
+}
+
+func TestServe_LogHistoryRequest_BeforeSequence_WalksBackward(t *testing.T) {
+	ts := newTestServerWithHistory(t)
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-page", "player-a")
 	defer conn.CloseNow()
+	ctx := context.Background()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Two events are already on record from the handshake (connect,
-	// session_state). Request page 1 with limit=1: should return exactly
-	// the first event and report more remain.
+	// Two events on record from the handshake (connect, session_state).
+	// Page 1 (default/tail, limit=1) should be session_state, the most
+	// recent, and report more (older) remain.
 	page1, err := requestHistory(ctx, conn, "campaign-page", "player-a", protocol.HistoryRequestPayload{Limit: 1})
 	if err != nil {
 		t.Fatalf("requestHistory(page1) error = %v", err)
@@ -520,22 +555,106 @@ func TestServe_LogHistoryRequest_Pagination(t *testing.T) {
 	if len(page1.Events) != 1 {
 		t.Fatalf("page1: len(Events) = %d, want 1", len(page1.Events))
 	}
+	assertEventType(t, page1.Events[0], "system.session_state")
 	if !page1.HasMore {
-		t.Error("page1: HasMore = false, want true")
+		t.Error("page1: HasMore = false, want true (system.connect is still older)")
 	}
 
+	// "Load earlier" from page1: should surface system.connect and
+	// report nothing older remains.
 	page2, err := requestHistory(ctx, conn, "campaign-page", "player-a", protocol.HistoryRequestPayload{
-		AfterSequence: page1.NextAfterSequence,
-		Limit:         10,
+		BeforeSequence: page1.NextBeforeSequence,
+		Limit:          10,
 	})
 	if err != nil {
 		t.Fatalf("requestHistory(page2) error = %v", err)
 	}
 	if len(page2.Events) != 1 {
-		t.Fatalf("page2: len(Events) = %d, want 1 (the session_state event)", len(page2.Events))
+		t.Fatalf("page2: len(Events) = %d, want 1 (system.connect)", len(page2.Events))
 	}
+	assertEventType(t, page2.Events[0], "system.connect")
 	if page2.HasMore {
-		t.Error("page2: HasMore = true, want false (that was the last event)")
+		t.Error("page2: HasMore = true, want false (system.connect is the first event in the campaign)")
+	}
+}
+
+func TestServe_LogHistoryRequest_AfterSequence_WalksForward(t *testing.T) {
+	ts := newTestServerWithHistory(t)
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-page", "player-a")
+	defer conn.CloseNow()
+	ctx := context.Background()
+
+	// A big enough limit that the default/tail page captures everything
+	// (2 events), giving a real anchor to page forward from.
+	all, err := requestHistory(ctx, conn, "campaign-page", "player-a", protocol.HistoryRequestPayload{Limit: 100})
+	if err != nil {
+		t.Fatalf("requestHistory(all) error = %v", err)
+	}
+	if len(all.Events) != 2 {
+		t.Fatalf("len(all.Events) = %d, want 2", len(all.Events))
+	}
+	assertEventType(t, all.Events[0], "system.connect")
+	assertEventType(t, all.Events[1], "system.session_state")
+
+	// all.NextBeforeSequence is the oldest event's own Sequence (i.e.
+	// system.connect's) — a real anchor to page forward from, fetching
+	// everything newer than it.
+	page, err := requestHistory(ctx, conn, "campaign-page", "player-a", protocol.HistoryRequestPayload{
+		AfterSequence: all.NextBeforeSequence,
+		Limit:         10,
+	})
+	if err != nil {
+		t.Fatalf("requestHistory(page) error = %v", err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("len(page.Events) = %d, want 1 (system.session_state)", len(page.Events))
+	}
+	assertEventType(t, page.Events[0], "system.session_state")
+	if page.HasMore {
+		t.Error("HasMore = true, want false (system.session_state is the newest event)")
+	}
+}
+
+// assertEventType unmarshals raw (one entry from a log.history_response's
+// Events) as an Envelope and checks its Type.
+func assertEventType(t *testing.T, raw json.RawMessage, wantType string) {
+	t.Helper()
+	var envelope protocol.Envelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("Unmarshal(event) error = %v", err)
+	}
+	if string(envelope.Type) != wantType {
+		t.Errorf("event.type = %q, want %q", envelope.Type, wantType)
+	}
+}
+
+// sendSafetyFlagAndAwaitBroadcast sends a safety.flag with a unique
+// message_id (messageID) on conn and reads back the resulting
+// safety.flag_broadcast — for tests that just need some real, distinct
+// traffic recorded on the campaign without caring about its content.
+func sendSafetyFlagAndAwaitBroadcast(t *testing.T, conn *websocket.Conn, campaignID, sender, messageID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	flag := protocol.SafetyFlagMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       messageID,
+			Timestamp:       time.Now().UTC(),
+			SenderID:        sender,
+			CampaignID:      campaignID,
+			Type:            protocol.MessageTypeSafetyFlag,
+		},
+	}
+	if err := wsjson.Write(ctx, conn, flag); err != nil {
+		t.Fatalf("Write(safety.flag) error = %v", err)
+	}
+	var broadcast protocol.SafetyFlagBroadcastMessage
+	if err := wsjson.Read(ctx, conn, &broadcast); err != nil {
+		t.Fatalf("Read(safety.flag_broadcast) error = %v", err)
 	}
 }
 
@@ -552,6 +671,34 @@ func TestServe_LogHistoryRequest_PersistenceDisabled_RespondsWithError(t *testin
 	_, err := requestHistory(ctx, conn, "campaign-1", "player-a", protocol.HistoryRequestPayload{})
 	if err == nil {
 		t.Fatal("requestHistory() succeeded, want a system.error response")
+	}
+}
+
+func TestServe_LogHistoryRequest_ConflictingBounds_RespondsWithErrorAndKeepsConnectionOpen(t *testing.T) {
+	ts := newTestServerWithHistory(t)
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
+	defer conn.CloseNow()
+	ctx := context.Background()
+
+	_, err := requestHistory(ctx, conn, "campaign-1", "player-a", protocol.HistoryRequestPayload{
+		AfterSequence:  1,
+		BeforeSequence: 2,
+	})
+	if err == nil {
+		t.Fatal("requestHistory() succeeded, want a system.error response (after_sequence and before_sequence are mutually exclusive)")
+	}
+
+	// Connection must still be usable afterward. 3, not 2: the rejection
+	// above is itself a persisted system.error event (recordEvent runs
+	// for every message sendError sends, same as any other rejection).
+	page, err := requestHistory(ctx, conn, "campaign-1", "player-a", protocol.HistoryRequestPayload{})
+	if err != nil {
+		t.Fatalf("requestHistory() after conflicting-bounds error = %v", err)
+	}
+	if len(page.Events) != 3 {
+		t.Errorf("len(page.Events) = %d, want 3 (connect, session_state, the rejection's system.error)", len(page.Events))
 	}
 }
 
