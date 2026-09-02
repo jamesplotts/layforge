@@ -243,3 +243,89 @@ type CharacterValidationResultPayload struct {
 // CharacterValidationResultMessage is a character.validation_result
 // Message.
 type CharacterValidationResultMessage = Message[CharacterValidationResultPayload]
+
+// RollCheckRequestPayload is the payload of a roll.check_request message:
+// a player asking Master to resolve a mechanical check for a character
+// they own (design doc §9.4's OwnerID gates this — see
+// server.importCharacter/store.Character.OwnerID). CheckType/Ability/Skill
+// are engine-agnostic strings, not an enum, mirroring the System Engine
+// gRPC contract's own engine-defined ResolveCheck params (design doc
+// §6.1) — this message isn't d20-specific. See protocol/asyncapi.yaml
+// components.messages.RollCheckRequest.
+type RollCheckRequestPayload struct {
+	CharacterID string `json:"character_id"`
+	// CheckType is engine-defined, e.g. "ability_check", "saving_throw",
+	// "death_save" — whatever the active system engine's ResolveCheck
+	// documents it accepts.
+	CheckType string `json:"check_type"`
+	// Ability is required for CheckType values that need one (e.g.
+	// "ability_check", "saving_throw").
+	Ability string `json:"ability,omitempty"`
+	// Skill is optional, for CheckType "ability_check".
+	Skill string `json:"skill,omitempty"`
+}
+
+// RollCheckRequestMessage is a roll.check_request Message.
+type RollCheckRequestMessage = Message[RollCheckRequestPayload]
+
+// RollDie describes one die in a RollSpec: sides and how many of that die
+// are rolled — not an individual result, see DieRoll for that. See
+// protocol/asyncapi.yaml components.schemas.RollSpec.
+type RollDie struct {
+	Sides int `json:"sides"`
+	Count int `json:"count"`
+}
+
+// RollSpec describes the dice about to be rolled, sourced from the system
+// engine's actual resolved Outcome (design doc §4) rather than assumed —
+// Master never hardcodes "d20" here; see server's roll.check_request
+// dispatch for how RollSpec.Dice is derived from a real ResolveCheck
+// response before RollRequestPayload is sent. See protocol/asyncapi.yaml
+// components.schemas.RollSpec.
+type RollSpec struct {
+	Dice []RollDie `json:"dice"`
+	// SuccessThreshold: for pool-based systems (count successes at or
+	// above this value); omitted for simple total-vs-DC systems.
+	SuccessThreshold *int `json:"success_threshold,omitempty"`
+	// BotchRule is an engine-defined description of botch/fumble
+	// handling, if any.
+	BotchRule string `json:"botch_rule,omitempty"`
+}
+
+// RollRequestPayload is the payload of a roll.request message: Master
+// informing every client in the campaign that a roll is about to happen,
+// so a dice-tray UI can pre-stage its animation before the actual result
+// is known (design doc §3.1, §4). See protocol/asyncapi.yaml
+// components.messages.RollRequest.
+type RollRequestPayload struct {
+	CharacterID string   `json:"character_id"`
+	RollSpec    RollSpec `json:"roll_spec"`
+}
+
+// RollRequestMessage is a roll.request Message.
+type RollRequestMessage = Message[RollRequestPayload]
+
+// DieRoll is one resolved die's face value — mirrors the System Engine
+// gRPC contract's DieRoll message field-for-field
+// (protocol/system_engine.proto), since Master forwards the engine's own
+// resolved dice rather than reinterpreting them.
+type DieRoll struct {
+	Sides  int    `json:"sides"`
+	Result int    `json:"result"`
+	Label  string `json:"label,omitempty"`
+}
+
+// RollResultPayload is the payload of a roll.result message: the
+// authoritative, server-computed outcome of a roll.check_request. Clients
+// animate their dice tray to land on this outcome; they never determine
+// it themselves (design doc §3.1, §4). See protocol/asyncapi.yaml
+// components.messages.RollResult.
+type RollResultPayload struct {
+	CharacterID   string    `json:"character_id"`
+	Rolls         []DieRoll `json:"rolls"`
+	Total         int       `json:"total"`
+	ResultSummary string    `json:"result_summary,omitempty"`
+}
+
+// RollResultMessage is a roll.result Message.
+type RollResultMessage = Message[RollResultPayload]

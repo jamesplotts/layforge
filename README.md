@@ -28,10 +28,15 @@ Master can now dial a real OpenCombatEngine gRPC sidecar
 (`-system-engine-addr`) and calls it for real: uploading a character
 (`character.upload`) gets mechanically parsed and validated by the engine
 and persisted, with the engine's warnings sent back
-(`character.validation_result`, design doc §9.4's mechanical half). There's
-still no dice, rules resolution mid-play, or turn order, no human review
-step on imported characters (that needs an account/operator concept that
-doesn't exist yet), and no campaign packs or maturity tiers either. See
+(`character.validation_result`, design doc §9.4's mechanical half), and a
+player can roll an authoritative check for a character they own
+(`roll.check_request`), with the real outcome — including individual
+dice, not just a total — broadcast to the whole table as
+`roll.request`/`roll.result`. There's still no rules resolution mid-play
+beyond a bare check (no damage application, no turn order), no human
+review step on imported characters (that needs an account/operator
+concept that doesn't exist yet), and no campaign packs or maturity tiers
+either. See
 [`master/README.md`](master/README.md) for the full picture, including
 exact roadmap gaps.
 

@@ -7,19 +7,22 @@
 // by a per-connection message loop that dispatches whatever the client
 // sends next. See design doc §5 for the protocol and §11 for what's
 // still to come — governance-gate enforcement and most message
-// categories (roll, map, tool) don't exist yet. Implemented so far:
-// safety.flag (§9.2), broadcast to every client in the campaign via
-// package session's Hub; log.history_request (§10, §11), answered from
-// package store directly to the requester; narrative.player_input (§7's
-// fast pass only — see renderPlayerBubble), rendered via package llm and
-// broadcast as narrative.player_bubble; and character.upload (§9.4's
-// mechanical half only — see importCharacter), validated via package
-// systemenginepb and answered with character.validation_result. The
+// categories (map, tool) don't exist yet. Implemented so far: safety.flag
+// (§9.2), broadcast to every client in the campaign via package session's
+// Hub; log.history_request (§10, §11), answered from package store
+// directly to the requester; narrative.player_input (§7's fast pass
+// only — see renderPlayerBubble), rendered via package llm and broadcast
+// as narrative.player_bubble; character.upload (§9.4's mechanical half
+// only — see importCharacter), validated via package systemenginepb and
+// answered with character.validation_result; and roll.check_request (see
+// resolveCheck), which calls the system engine's ResolveCheck for a
+// character the sender owns and broadcasts roll.request/roll.result. The
 // review/veto half of §9.4 (character.review_status,
 // pending_review -> approved/rejected) is NOT implemented: it needs a
-// privileged-operator concept this codebase doesn't have yet. See
-// CLAUDE.md and each dispatch case's own comments for why a given
-// message either is or isn't implemented yet.
+// privileged-operator concept this codebase doesn't have yet, and neither
+// is roll.acknowledge (no narration-sequencing pipeline exists yet to
+// feed). See CLAUDE.md and each dispatch case's own comments for why a
+// given message either is or isn't implemented yet.
 package server
 
 import (
@@ -34,6 +37,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/llm"
@@ -293,6 +297,13 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		}
 		recordEvent(ctx, s, upload)
 		return s.importCharacter(ctx, conn, campaignID, envelope.SenderID, upload)
+	case protocol.MessageTypeRollCheckRequest:
+		var req protocol.RollCheckRequestMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed roll.check_request payload: %w", err))
+		}
+		recordEvent(ctx, s, req)
+		return s.resolveCheck(ctx, conn, campaignID, envelope.SenderID, req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
@@ -314,13 +325,7 @@ func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic stri
 		return err
 	}
 	recordEvent(ctx, s, msg)
-
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("marshaling safety.flag_broadcast: %w", err)
-	}
-	s.hub.Broadcast(campaignID, payload)
-	return nil
+	return broadcastMessage(s, msg)
 }
 
 // narrativeFastPassSystemPrompt instructs the model for design doc §7's
@@ -366,13 +371,7 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 		return err
 	}
 	recordEvent(ctx, s, msg)
-
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("marshaling narrative.player_bubble: %w", err)
-	}
-	s.hub.Broadcast(campaignID, payload)
-	return nil
+	return broadcastMessage(s, msg)
 }
 
 // importCharacter handles a character.upload message: it asks the System
@@ -451,6 +450,114 @@ func (s *Server) importCharacter(ctx context.Context, conn *websocket.Conn, camp
 		return fmt.Errorf("writing character.validation_result: %w", err)
 	}
 	return nil
+}
+
+// resolveCheck handles a roll.check_request message: it looks up
+// req.Payload.CharacterID (rejecting the request if senderID doesn't own
+// that character — design doc §9.4's OwnerID is the only ownership
+// concept this codebase has, but it's real and enforced here, not
+// aspirational), calls the System Engine's ResolveCheck for it, and
+// broadcasts the outcome to the whole campaign as roll.request (so every
+// client's dice tray can pre-stage an animation) followed by roll.result
+// (the authoritative outcome, design doc §3.1, §4) — never just to the
+// requester, since design doc §4's dice tray is meant to be a shared,
+// visible-to-everyone table event, not a private roll.
+//
+// roll.request's RollSpec is derived from the real, already-resolved
+// Outcome.Rolls (grouped by die size), not assumed — Master never
+// hardcodes which dice a system engine uses (design doc §6.1, CLAUDE.md).
+func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.RollCheckRequestMessage) error {
+	if s.systemEngine == nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("dice resolution unavailable: no system engine configured"))
+	}
+	if s.characters == nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("dice resolution unavailable: character storage is disabled"))
+	}
+
+	character, err := s.characters.GetCharacter(ctx, req.Payload.CharacterID)
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("looking up character: %w", err))
+	}
+	if character.CampaignID != campaignID {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character does not belong to this campaign"))
+	}
+	if character.OwnerID != senderID {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("you can only roll checks for your own characters"))
+	}
+
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("parsing stored character data: %w", err))
+	}
+
+	paramFields := map[string]any{"checkType": req.Payload.CheckType}
+	if req.Payload.Ability != "" {
+		paramFields["ability"] = req.Payload.Ability
+	}
+	if req.Payload.Skill != "" {
+		paramFields["skill"] = req.Payload.Skill
+	}
+	params, err := structpb.NewStruct(paramFields)
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("building check params: %w", err))
+	}
+
+	resp, err := s.systemEngine.ResolveCheck(ctx, &systemenginepb.ResolveCheckRequest{
+		RequestId:  req.MessageID,
+		CampaignId: campaignID,
+		Actor: &systemenginepb.Actor{
+			ActorId:       character.ID,
+			CharacterData: characterData,
+			SchemaVersion: character.SchemaVersion,
+		},
+		Params: params,
+	})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("calling system engine ResolveCheck: %w", err))
+	}
+	if !resp.Success {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("check could not be resolved: %s", resp.Error))
+	}
+
+	rolls := make([]protocol.DieRoll, len(resp.Outcome.Rolls))
+	var diceOrder []int
+	diceCounts := make(map[int]int)
+	for i, r := range resp.Outcome.Rolls {
+		rolls[i] = protocol.DieRoll{Sides: int(r.Sides), Result: int(r.Result), Label: r.Label}
+		sides := int(r.Sides)
+		if _, seen := diceCounts[sides]; !seen {
+			diceOrder = append(diceOrder, sides)
+		}
+		diceCounts[sides]++
+	}
+	dice := make([]protocol.RollDie, len(diceOrder))
+	for i, sides := range diceOrder {
+		dice[i] = protocol.RollDie{Sides: sides, Count: diceCounts[sides]}
+	}
+
+	requestMsg, err := newMessage(campaignID, protocol.MessageTypeRollRequest, protocol.RollRequestPayload{
+		CharacterID: req.Payload.CharacterID,
+		RollSpec:    protocol.RollSpec{Dice: dice},
+	})
+	if err != nil {
+		return err
+	}
+	recordEvent(ctx, s, requestMsg)
+	if err := broadcastMessage(s, requestMsg); err != nil {
+		return err
+	}
+
+	resultMsg, err := newMessage(campaignID, protocol.MessageTypeRollResult, protocol.RollResultPayload{
+		CharacterID:   req.Payload.CharacterID,
+		Rolls:         rolls,
+		Total:         int(resp.Outcome.Total),
+		ResultSummary: resp.Outcome.ResultSummary,
+	})
+	if err != nil {
+		return err
+	}
+	recordEvent(ctx, s, resultMsg)
+	return broadcastMessage(s, resultMsg)
 }
 
 // sendHistory answers a log.history_request with a page of campaign's
@@ -581,6 +688,21 @@ func recordEvent[T any](ctx context.Context, s *Server, msg protocol.Message[T])
 	if err != nil && !errors.Is(err, store.ErrDuplicateMessage) {
 		s.logger.Warn("failed to persist event", "error", err, "message_id", msg.MessageID)
 	}
+}
+
+// broadcastMessage marshals msg and delivers it to every client currently
+// registered under msg.CampaignID via s.hub — the shared marshal-then-
+// broadcast step every Master-originated broadcast (safety.flag_broadcast,
+// narrative.player_bubble, roll.request/roll.result) needs. Like
+// recordEvent and newMessage, it is a free function rather than a Server
+// method because Go methods cannot themselves be generic.
+func broadcastMessage[T any](s *Server, msg protocol.Message[T]) error {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshaling %s: %w", msg.Type, err)
+	}
+	s.hub.Broadcast(msg.CampaignID, payload)
+	return nil
 }
 
 // newMessage builds a Message[T] envelope for a Master-originated

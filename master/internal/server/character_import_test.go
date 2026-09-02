@@ -26,15 +26,23 @@ import (
 )
 
 // fakeSystemEngineClient is a minimal systemenginepb.SystemEngineClient
-// for testing character.upload dispatch without a real gRPC sidecar. Only
-// FromJson is configurable; every other method returns an error, since
-// nothing dispatched in package server calls them yet.
+// for testing character.upload and roll.check_request dispatch without a
+// real gRPC sidecar. Only FromJson and ResolveCheck are configurable;
+// every other method returns an error, since nothing dispatched in
+// package server calls them yet.
 type fakeSystemEngineClient struct {
 	fromJsonResp *systemenginepb.FromJsonResponse
 	fromJsonErr  error
 	// lastFromJsonRequest captures the most recent FromJson() call's
 	// request, for asserting on what Server actually sent the engine.
 	lastFromJsonRequest *systemenginepb.FromJsonRequest
+
+	resolveCheckResp *systemenginepb.ResolveCheckResponse
+	resolveCheckErr  error
+	// lastResolveCheckRequest captures the most recent ResolveCheck()
+	// call's request, for asserting on what Server actually sent the
+	// engine.
+	lastResolveCheckRequest *systemenginepb.ResolveCheckRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -45,8 +53,12 @@ func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.
 	return f.fromJsonResp, nil
 }
 
-func (f *fakeSystemEngineClient) ResolveCheck(context.Context, *systemenginepb.ResolveCheckRequest, ...grpc.CallOption) (*systemenginepb.ResolveCheckResponse, error) {
-	return nil, errors.New("fakeSystemEngineClient: ResolveCheck not implemented in this fake")
+func (f *fakeSystemEngineClient) ResolveCheck(_ context.Context, in *systemenginepb.ResolveCheckRequest, _ ...grpc.CallOption) (*systemenginepb.ResolveCheckResponse, error) {
+	f.lastResolveCheckRequest = in
+	if f.resolveCheckErr != nil {
+		return nil, f.resolveCheckErr
+	}
+	return f.resolveCheckResp, nil
 }
 
 func (f *fakeSystemEngineClient) ApplyEffect(context.Context, *systemenginepb.ApplyEffectRequest, ...grpc.CallOption) (*systemenginepb.ApplyEffectResponse, error) {
@@ -73,12 +85,12 @@ func (f *fakeSystemEngineClient) StreamEvents(context.Context, *systemenginepb.S
 	return nil, errors.New("fakeSystemEngineClient: StreamEvents not implemented in this fake")
 }
 
-// newTestServerWithCharacterImport builds a Server with a real in-memory
+// newTestServerWithSystemEngine builds a Server with a real in-memory
 // SQLite store (satisfying both store.EventStore and store.CharacterStore,
 // same as production — see SQLiteEventStore's doc comment) and engine
-// wired to fakeEngine, so character.upload dispatch can be exercised
-// end-to-end without a real gRPC sidecar.
-func newTestServerWithCharacterImport(t *testing.T, fakeEngine *fakeSystemEngineClient) (*httptest.Server, *store.SQLiteEventStore) {
+// wired to fakeEngine, so character.upload and roll.check_request
+// dispatch can be exercised end-to-end without a real gRPC sidecar.
+func newTestServerWithSystemEngine(t *testing.T, fakeEngine *fakeSystemEngineClient) (*httptest.Server, *store.SQLiteEventStore) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st, err := store.OpenSQLiteEventStore(":memory:")
@@ -150,7 +162,7 @@ func TestServe_CharacterUpload_ValidCharacter_SavesAndRespondsWithValidationResu
 			},
 		},
 	}
-	ts, st := newTestServerWithCharacterImport(t, fake)
+	ts, st := newTestServerWithSystemEngine(t, fake)
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-import", "player-a")
@@ -200,7 +212,7 @@ func TestServe_CharacterUpload_EngineCannotParse_RespondsWithErrorWarningAndNoCh
 			},
 		},
 	}
-	ts, _ := newTestServerWithCharacterImport(t, fake)
+	ts, _ := newTestServerWithSystemEngine(t, fake)
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-import", "player-a")
@@ -257,7 +269,7 @@ func TestServe_CharacterUpload_NoSystemEngineConfigured_RespondsWithSystemError(
 
 func TestServe_CharacterUpload_EngineCallFails_RespondsWithErrorAndKeepsConnectionOpen(t *testing.T) {
 	fake := &fakeSystemEngineClient{fromJsonErr: errors.New("sidecar unreachable")}
-	ts, _ := newTestServerWithCharacterImport(t, fake)
+	ts, _ := newTestServerWithSystemEngine(t, fake)
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-import", "player-a")

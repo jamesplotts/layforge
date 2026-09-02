@@ -91,6 +91,7 @@ channels:
           - $ref: '#/components/messages/NarrativeRegenerateRequest'
           - $ref: '#/components/messages/MapTokenMoveRequest'
           - $ref: '#/components/messages/RollAcknowledge'
+          - $ref: '#/components/messages/RollCheckRequest'
           - $ref: '#/components/messages/AudioChunk'
           - $ref: '#/components/messages/CharacterUpload'
           - $ref: '#/components/messages/SafetyFlag'
@@ -276,6 +277,46 @@ components:
                     $ref: '#/components/schemas/GridPosition'
 
     # --- roll.* (docs/design.md §5, §4) ---
+
+    RollCheckRequest:
+      name: roll.check_request
+      messageId: roll_check_request
+      title: Player requests a mechanical check
+      summary: >
+        A player asks Master to resolve a mechanical check (ability check,
+        saving throw, or death save) for a character they own. This is the
+        trigger for the RollRequest/RollResult pair below — Master calls
+        the System Engine's resolve_check() and broadcasts the outcome to
+        the whole campaign, not just the requester, so everyone sees the
+        roll happen. check_type/ability/skill are engine-agnostic strings
+        rather than an enum, since the System Engine gRPC contract's own
+        ResolveCheck params are engine-defined (docs/design.md §6.1) — this
+        message's shape mirrors that, not a d20-specific assumption. Master
+        rejects the request (system.error) if character_id doesn't belong
+        to a character the sender uploaded (design doc §9.4's OwnerID).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: roll.check_request
+              payload:
+                type: object
+                required: [character_id, check_type]
+                properties:
+                  character_id:
+                    type: string
+                  check_type:
+                    type: string
+                    description: Engine-defined, e.g. "ability_check", "saving_throw", "death_save".
+                  ability:
+                    type: string
+                    description: Required for check_type values that need one (e.g. "ability_check", "saving_throw").
+                  skill:
+                    type: string
+                    description: Optional skill name, for check_type "ability_check".
 
     RollRequest:
       name: roll.request

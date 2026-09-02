@@ -38,9 +38,23 @@ human-veto review panel (`pending_review` → `approved`/`rejected`) isn't
 implemented, since it needs a privileged-operator/account concept this
 codebase doesn't have yet (only room-password join auth exists); building
 it without real authorization would violate CLAUDE.md's "gates over
-prompting" rule rather than satisfy it. Every other message category
-(roll, map, tool), the turn-order state machine, authoritative dice, the
-narrative-transform pipeline's slow pass, and governance gates beyond
+prompting" rule rather than satisfy it.
+
+Authoritative dice now work too: `roll.check_request` (a player asking to
+roll a check for a character they own — enforced via
+`store.Character.OwnerID`, the same ownership concept character import
+established) calls the system engine's `ResolveCheck` and broadcasts
+`roll.request` (so every client's dice tray can pre-stage an animation,
+with `roll_spec` derived from the real resolved dice, never assumed —
+Master doesn't hardcode "d20" anywhere) followed by `roll.result` (the
+authoritative outcome) to the whole campaign, not just the requester —
+see `resolveCheck`. This only exists because
+`OpenCombatEngine.Core.ICheckManager` was changed upstream to return the
+actual `DiceRollResult` (individual dice, not just the total) instead of
+a bare int — see that repo's own history for why.
+
+Every other message category (map, tool), the turn-order state machine,
+the narrative-transform pipeline's slow pass, and governance gates beyond
 safety.flag are all still to come — see
 [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 

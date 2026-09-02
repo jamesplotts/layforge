@@ -31,6 +31,9 @@ const (
 	MessageTypeNarrativePlayerBubble     MessageType = "narrative.player_bubble"
 	MessageTypeCharacterUpload           MessageType = "character.upload"
 	MessageTypeCharacterValidationResult MessageType = "character.validation_result"
+	MessageTypeRollCheckRequest          MessageType = "roll.check_request"
+	MessageTypeRollRequest               MessageType = "roll.request"
+	MessageTypeRollResult                MessageType = "roll.result"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -42,7 +45,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeSafetyFlag, MessageTypeSafetyFlagBroadcast,
 		MessageTypeLogHistoryRequest, MessageTypeLogHistoryResponse,
 		MessageTypeNarrativePlayerInput, MessageTypeNarrativePlayerBubble,
-		MessageTypeCharacterUpload, MessageTypeCharacterValidationResult:
+		MessageTypeCharacterUpload, MessageTypeCharacterValidationResult,
+		MessageTypeRollCheckRequest, MessageTypeRollRequest, MessageTypeRollResult:
 		return true
 	default:
 		return false
