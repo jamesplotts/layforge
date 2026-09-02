@@ -12,6 +12,36 @@ left to the model's discretion. See [`docs/design.md`](docs/design.md) for
 the full design document — architecture, protocol, extensibility
 interfaces, and governance model.
 
+## Prerequisites
+
+- **Go 1.24+** — the only hard requirement. Master (the only code so far)
+  compiles to a single static binary with no other runtime dependency.
+- **`protoc` + the Go protobuf/gRPC plugins**, but only to generate
+  `master/internal/systemenginepb/`: those files are gitignored, not
+  checked into this repo, and imported unconditionally — **a fresh clone
+  will not build until you run `protocol/generate.sh` once** (see Quick
+  Start below; the script prints install commands for anything missing).
+- Everything else is optional, needed only for the feature it powers —
+  see [`master/README.md`](master/README.md#prerequisites) for the full
+  list (a System Engine sidecar, an Ollama server, a ComfyUI instance).
+  No Node/npm/bundler is needed for either web client — both are
+  hand-written HTML/CSS/JS with no build step.
+
+## Quick Start
+
+```
+git clone https://github.com/jamesplotts/layforge.git
+cd layforge
+./protocol/generate.sh   # one-time: generates master/internal/systemenginepb/
+cd master
+go run .
+```
+
+Then open `http://localhost:8080/`. See
+[`master/README.md`](master/README.md) for every flag — LLM/System-Engine/
+ComfyUI endpoints, room passwords, the admin panel, and what each
+optional dependency unlocks.
+
 ## Status
 
 Multiple players can connect to the same campaign, chat, and get real
