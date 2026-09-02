@@ -31,7 +31,9 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "CharacterGet_ReturnsTrue", t: MessageTypeCharacterGet, want: true},
 		{name: "CharacterState_ReturnsTrue", t: MessageTypeCharacterState, want: true},
 		{name: "CharacterApplyEffect_ReturnsTrue", t: MessageTypeCharacterApplyEffect, want: true},
-		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("narrative.dm_prose"), want: false},
+		{name: "NarrativeDmProse_ReturnsTrue", t: MessageTypeNarrativeDmProse, want: true},
+		{name: "ToolResult_ReturnsTrue", t: MessageTypeToolResult, want: true},
+		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("map.token_state"), want: false},
 		{name: "CharacterReviewStatus_ReturnsFalse_NotImplementedYet", t: MessageType("character.review_status"), want: false},
 		{name: "RollAcknowledge_ReturnsFalse_NotImplementedYet", t: MessageType("roll.acknowledge"), want: false},
 	}

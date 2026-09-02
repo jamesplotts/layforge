@@ -44,10 +44,14 @@ const state = {
   hasMoreOlder: false,
   // --- Dice tray ---
   // rollCharacterId is Master's own store.Character.ID, assigned once the
-  // stopgap upload (see uploadStockCharacter) resolves — deliberately
-  // separate from characterId (the display name) above, which narrative
-  // messages still use unchanged; roll.check_request is the only thing
-  // that needs Master's real ID.
+  // stopgap upload (see uploadStockCharacter) resolves. Every message
+  // that references the character mechanically — roll.check_request,
+  // character.apply_effect, character.get, and narrative.player_input's
+  // character_id (see onInputSubmit) — uses this, never characterId (the
+  // display name typed at join). Sending the display name as
+  // narrative.player_input's character_id was a real bug: the DM tool-use
+  // slow pass (design doc §8) hands that value straight to the System
+  // Engine, and "Kestrel" isn't a lookup key.
   rollCharacterId: null,
   pendingCharacterUploadMessageId: null,
   pendingRollMessageId: null,
@@ -292,6 +296,12 @@ function handleMessage(msg) {
     case "character.state":
       onCharacterStateResponse(msg);
       break;
+    case "narrative.dm_prose":
+      appendDmBubble(msg.payload ? msg.payload.text : "");
+      break;
+    case "tool.result":
+      appendToolResultNote(msg.payload || {});
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -329,10 +339,24 @@ function onSystemError(msg) {
 
 function onNarrativeBubble(msg) {
   const payload = msg.payload || {};
-  if (payload.character_id === state.characterId) {
+  if (payload.character_id === state.rollCharacterId) {
     clearPendingBubble();
   }
-  appendBubble(payload.character_id, payload.text);
+  appendBubble(bubbleDisplayName(payload.character_id), payload.text);
+}
+
+// bubbleDisplayName resolves a narrative.player_bubble's character_id
+// (Master's real store ID, see onInputSubmit) to something readable in
+// the "who" tag. This client only ever knows its own character's typed
+// name (state.characterId) — there's no campaign roster/name-lookup
+// endpoint yet — so another player's bubble falls back to showing their
+// raw ID. Acceptable for the current single-character-per-connection
+// testing this client is built for; a real roster lookup is future work.
+function bubbleDisplayName(characterId) {
+  if (characterId && characterId === state.rollCharacterId) {
+    return state.characterId;
+  }
+  return characterId;
 }
 
 // --- History paging ---
@@ -398,7 +422,11 @@ function onHistoryResponse(payload) {
 function renderHistoryEvent(raw) {
   switch (raw.type) {
     case "narrative.player_bubble":
-      return bubbleEl(raw.payload.character_id, raw.payload.text);
+      return bubbleEl(bubbleDisplayName(raw.payload.character_id), raw.payload.text);
+    case "narrative.dm_prose":
+      return dmBubbleEl(raw.payload ? raw.payload.text : "");
+    case "tool.result":
+      return toolResultNoteEl(raw.payload || {});
     case "safety.flag_broadcast":
       return safetyBannerEl(raw.payload ? raw.payload.topic : "");
     default:
@@ -413,11 +441,24 @@ function onInputSubmit(event) {
   const text = el.inputText.value.trim();
   if (!text) return;
 
+  // narrative.player_input's character_id must be Master's real
+  // store.Character.ID (state.rollCharacterId), not the display name
+  // (state.characterId) — the DM tool-use slow pass (design doc §8)
+  // hands this straight to resolve_check/apply_effect/get_character_status,
+  // which look the character up by that ID. Sending the display name here
+  // was a real bug: every DM-triggered tool call failed with
+  // character_not_found because "Kestrel" isn't a store ID. Guard against
+  // submitting before uploadStockCharacter's response has set it.
+  if (!state.rollCharacterId) {
+    appendErrorNote("Still setting up your character — try again in a moment.");
+    return;
+  }
+
   const envelope = newEnvelope("narrative.player_input");
   state.pendingInputMessageId = envelope.message_id;
   send({
     ...envelope,
-    payload: { character_id: state.characterId, text, source: "typed" },
+    payload: { character_id: state.rollCharacterId, text, source: "typed" },
   });
 
   el.inputText.value = "";
@@ -584,9 +625,9 @@ function onRollResult(msg) {
 // onHistoryResponse); each append* function is the live-message case:
 // build, append to the end of the log, scroll to it.
 
-function bubbleEl(characterId, text) {
+function bubbleEl(characterId, text, extraClass) {
   const bubble = document.createElement("div");
-  bubble.className = "bubble";
+  bubble.className = extraClass ? `bubble ${extraClass}` : "bubble";
 
   const who = document.createElement("span");
   who.className = "who";
@@ -600,6 +641,15 @@ function bubbleEl(characterId, text) {
   return bubble;
 }
 
+// dmBubbleEl is narrative.dm_prose's rendering (design doc §7's slow
+// pass) — visually distinguished from a player's own narrative bubble
+// (bubbleEl's plain case) via the dm-bubble class, since it's DM/NPC
+// narration the player didn't write, not their own action rendered back
+// to them.
+function dmBubbleEl(text) {
+  return bubbleEl(null, text, "dm-bubble");
+}
+
 function safetyBannerEl(topic) {
   const banner = document.createElement("div");
   banner.className = "safety-banner";
@@ -609,6 +659,29 @@ function safetyBannerEl(topic) {
 
 function appendBubble(characterId, text) {
   el.log.appendChild(bubbleEl(characterId, text));
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+function appendDmBubble(text) {
+  el.log.appendChild(dmBubbleEl(text));
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+// toolResultNoteEl renders one design doc §8 DM tool-use call as a
+// transparency note (design doc §8: "every tool call/result is logged")
+// — not a chat bubble, since it's bookkeeping about how the DM arrived
+// at its narration, not narration itself.
+function toolResultNoteEl(payload) {
+  const note = document.createElement("div");
+  note.className = "note tool-result-note" + (payload.success ? "" : " error-note");
+  const icon = payload.success ? "🎲" : "⚠";
+  const detail = payload.success ? "" : ` (${payload.reason_code || "failed"})`;
+  note.textContent = `${icon} DM called ${payload.tool_name}${detail}`;
+  return note;
+}
+
+function appendToolResultNote(payload) {
+  el.log.appendChild(toolResultNoteEl(payload));
   el.log.scrollTop = el.log.scrollHeight;
 }
 

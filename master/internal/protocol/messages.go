@@ -407,3 +407,42 @@ type CharacterApplyEffectPayload struct {
 
 // CharacterApplyEffectMessage is a character.apply_effect Message.
 type CharacterApplyEffectMessage = Message[CharacterApplyEffectPayload]
+
+// NarrativeDmProsePayload is the payload of a narrative.dm_prose
+// message: DM/NPC narration, the slow-pass output of the narrative-
+// transform pipeline (design doc §7) — see server's runSlowPass.
+// Visibility is nil (omitted) until knowledge scoping (design doc §9.7)
+// is actually enforced, same as NarrativePlayerBubblePayload's. See
+// protocol/asyncapi.yaml components.messages.NarrativeDmProse.
+type NarrativeDmProsePayload struct {
+	Text       string           `json:"text"`
+	Visibility *VisibilityScope `json:"visibility,omitempty"`
+	// InReplyToMessageID is the message_id of the player input this
+	// narrates in response to, if any.
+	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
+}
+
+// NarrativeDmProseMessage is a narrative.dm_prose Message.
+type NarrativeDmProseMessage = Message[NarrativeDmProsePayload]
+
+// ToolResultPayload is the payload of a tool.result message: broadcast
+// of a completed DM tool-use call, for transparency/logging (design doc
+// §8). Governance-gate rejections (design doc §9) would surface here as
+// Success=false — no governance-gate engine exists yet beyond
+// safety.flag, so today Success=false only ever means the call itself
+// failed (bad arguments, an engine error), never a policy rejection. See
+// protocol/asyncapi.yaml components.messages.ToolResult.
+type ToolResultPayload struct {
+	ToolName string `json:"tool_name"`
+	// Caller is "dm" or a specific character_id (design doc §8's logging
+	// requirement) — always "dm" today, since nothing but the DM model
+	// calls these tools yet.
+	Caller  string `json:"caller"`
+	Success bool   `json:"success"`
+	// ReasonCode is set on failure, e.g. "invalid_arguments",
+	// "character_not_found", "engine_error".
+	ReasonCode string `json:"reason_code,omitempty"`
+}
+
+// ToolResultMessage is a tool.result Message.
+type ToolResultMessage = Message[ToolResultPayload]

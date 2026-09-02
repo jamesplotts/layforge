@@ -162,6 +162,147 @@ func TestOllamaProvider_Complete_OllamaErrorField_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestOllamaProvider_Complete_WithTools_SendsToolDefinitions(t *testing.T) {
+	var gotTools []any
+	ts := newFakeOllama(t, func(w http.ResponseWriter, req map[string]any) {
+		gotTools = req["tools"].([]any)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"content": "ok"},
+			"done":    true,
+		})
+	})
+	defer ts.Close()
+
+	p := llm.NewOllamaProvider(ts.URL, nil)
+	_, err := p.Complete(context.Background(), llm.CompletionRequest{
+		Model:      "test-model",
+		UserPrompt: "hi",
+		Tools: []llm.Tool{{
+			Name:        "resolve_check",
+			Description: "Resolve a check.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"ability":{"type":"string"}}}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	if len(gotTools) != 1 {
+		t.Fatalf("len(tools) = %d, want 1", len(gotTools))
+	}
+	tool := gotTools[0].(map[string]any)
+	if tool["type"] != "function" {
+		t.Errorf("tools[0].type = %v, want %q", tool["type"], "function")
+	}
+	fn := tool["function"].(map[string]any)
+	if fn["name"] != "resolve_check" {
+		t.Errorf("tools[0].function.name = %v, want %q", fn["name"], "resolve_check")
+	}
+	params := fn["parameters"].(map[string]any)
+	if params["type"] != "object" {
+		t.Errorf("tools[0].function.parameters.type = %v, want %q", params["type"], "object")
+	}
+}
+
+func TestOllamaProvider_Complete_ResponseWithToolCalls_PopulatesToolCallsNotText(t *testing.T) {
+	ts := newFakeOllama(t, func(w http.ResponseWriter, req map[string]any) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []map[string]any{
+					{
+						"id": "call_abc123",
+						"function": map[string]any{
+							"name":      "resolve_check",
+							"arguments": map[string]any{"ability": "Strength", "character_id": "char-1"},
+						},
+					},
+				},
+			},
+			"done": true,
+		})
+	})
+	defer ts.Close()
+
+	p := llm.NewOllamaProvider(ts.URL, nil)
+	got, err := p.Complete(context.Background(), llm.CompletionRequest{
+		Model:      "test-model",
+		UserPrompt: "I try to climb the wall.",
+		Tools:      []llm.Tool{{Name: "resolve_check"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if got.Text != "" {
+		t.Errorf("Text = %q, want empty (a pure tool-call turn)", got.Text)
+	}
+	if len(got.ToolCalls) != 1 {
+		t.Fatalf("len(ToolCalls) = %d, want 1", len(got.ToolCalls))
+	}
+	call := got.ToolCalls[0]
+	if call.ID != "call_abc123" || call.Name != "resolve_check" {
+		t.Errorf("ToolCalls[0] = %+v, want ID=call_abc123 Name=resolve_check", call)
+	}
+	var args map[string]any
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		t.Fatalf("unmarshaling Arguments error = %v", err)
+	}
+	if args["ability"] != "Strength" || args["character_id"] != "char-1" {
+		t.Errorf("Arguments = %+v, want ability=Strength character_id=char-1", args)
+	}
+}
+
+func TestOllamaProvider_Complete_WithMessages_SendsToolCallAndResultInHistory(t *testing.T) {
+	var gotMessages []any
+	ts := newFakeOllama(t, func(w http.ResponseWriter, req map[string]any) {
+		gotMessages = req["messages"].([]any)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"content": "You fail to find a grip and slip."},
+			"done":    true,
+		})
+	})
+	defer ts.Close()
+
+	p := llm.NewOllamaProvider(ts.URL, nil)
+	_, err := p.Complete(context.Background(), llm.CompletionRequest{
+		Model: "test-model",
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "You are a DM."},
+			{Role: llm.RoleUser, Content: "I climb the wall."},
+			{
+				Role: llm.RoleAssistant,
+				ToolCalls: []llm.ToolCall{
+					{ID: "call_1", Name: "resolve_check", Arguments: json.RawMessage(`{"ability":"Strength"}`)},
+				},
+			},
+			{Role: llm.RoleTool, Content: `{"total":8}`, ToolCallID: "call_1"},
+		},
+		Tools: []llm.Tool{{Name: "resolve_check"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	if len(gotMessages) != 4 {
+		t.Fatalf("len(messages) = %d, want 4 (SystemPrompt/UserPrompt must be ignored when Messages is set)", len(gotMessages))
+	}
+	assistantMsg := gotMessages[2].(map[string]any)
+	toolCalls := assistantMsg["tool_calls"].([]any)
+	if len(toolCalls) != 1 {
+		t.Fatalf("assistant message tool_calls length = %d, want 1", len(toolCalls))
+	}
+	toolCall := toolCalls[0].(map[string]any)
+	if toolCall["id"] != "call_1" {
+		t.Errorf("tool_calls[0].id = %v, want %q", toolCall["id"], "call_1")
+	}
+
+	toolResultMsg := gotMessages[3].(map[string]any)
+	if toolResultMsg["role"] != "tool" || toolResultMsg["tool_call_id"] != "call_1" {
+		t.Errorf("messages[3] = %+v, want role=tool tool_call_id=call_1", toolResultMsg)
+	}
+}
+
 func TestOllamaProvider_Complete_NonOKStatus_ReturnsError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

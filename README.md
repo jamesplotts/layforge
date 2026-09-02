@@ -38,11 +38,19 @@ client. A player can also read back their own character's current data
 and mechanical status, rendered as a read-only sheet generated directly
 from the system engine's own JSON Schema — no D&D-specific fields
 hardcoded into the UI — and apply a real effect (damage/heal) to it,
-persisted server-side and reflected back in the sheet. There's still no
-rules resolution *automatically* tied to a check (a hit doesn't yet
-apply its own damage, no turn order), no human review step on imported
-characters (that needs an account/operator concept that doesn't exist
-yet), and no campaign packs or maturity tiers either. See
+persisted server-side and reflected back in the sheet. A DM/NPC reaction
+pass (§7's slow pass) now runs after the fast pass: an LLM narrates what
+happens next and can call real tools — `resolve_check`, `apply_effect`,
+`get_character_status` (design doc §8) — against the same System Engine
+RPCs already wired for players, with every call broadcast to the table as
+`tool.result` and the final reaction as `narrative.dm_prose`. There's
+still no rules resolution *automatically* tied to a check outside that
+DM pass (a player's own roll doesn't apply its own damage, no turn
+order), no PvP-policy or maturity-tier governance gate behind the DM
+tools yet (only campaign-scoping is enforced today — a documented gap,
+not a silent omission), no human review step on imported characters
+(that needs an account/operator concept that doesn't exist yet), and no
+campaign packs or maturity tiers either. See
 [`master/README.md`](master/README.md) for the full picture, including
 exact roadmap gaps.
 

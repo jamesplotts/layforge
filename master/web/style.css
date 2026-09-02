@@ -210,6 +210,18 @@ button.secondary {
   opacity: 0.6;
 }
 
+/* narrative.dm_prose (design doc §7's slow pass) — visually distinct
+   from a player's own rendered bubble via a left accent bar, since it's
+   DM/NPC narration the player didn't write. */
+.bubble.dm-bubble {
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+}
+
+.tool-result-note {
+  font-style: normal;
+}
+
 .note {
   align-self: center;
   color: var(--text-dim);

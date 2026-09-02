@@ -49,11 +49,24 @@ re-renders the sheet from the response — the sheet display itself stays
 read-only (no per-field editing), this is a separate, narrower mutation
 path.
 
+There's also now the DM's side of the conversation (design doc §7's
+slow pass, §8's tool-use): after a `narrative.player_bubble` renders,
+Master's LLM narrates a DM/NPC reaction — rendered as a visually
+distinct `dm-bubble` — and along the way can call real tools
+(`resolve_check`, `apply_effect`, `get_character_status`) against the
+character's actual mechanical state. Every tool call is broadcast as
+`tool.result` and rendered as a small note in the log (🎲 on success, ⚠
+plus a reason code on failure) regardless of outcome, so a table can see
+what the DM actually did, not just read the prose that followed. A
+DM-triggered `resolve_check` reuses the same `roll.request`/`roll.result`
+broadcast a player's own roll uses, so it animates on the same dice tray.
+
 Not implemented: schema-driven sheet *editing* (still view-only, no
-per-field form submission), effects tied automatically to a check
-result (a hit doesn't apply its own damage — the tray's Roll Check and
-the sheet's Take Damage/Heal are two independent actions today), push-
-to-talk voice input (no audio pipeline).
+per-field form submission), effects tied automatically to a *player's
+own* check result (a hit doesn't apply its own damage outside the DM
+slow pass — the tray's Roll Check and the sheet's Take Damage/Heal are
+two independent actions for a player), push-to-talk voice input (no
+audio pipeline).
 
 ## Running
 
@@ -133,6 +146,15 @@ and point `-web-dir` at the copy instead.
   auth/account system yet (design doc §6.6's Discord OAuth isn't
   implemented), so nothing stops two people from joining as the same
   name.
+- **Bubble "who" labels can't resolve another player's name.** A
+  bubble's `character_id` is Master's real `store.Character.ID` (it has
+  to be — the DM tool-use slow pass hands it straight to the System
+  Engine, so it can't be a display name; see `bubbleDisplayName` in
+  `app.js`). This client only knows its *own* typed name, so it can
+  render its own bubbles correctly but falls back to the raw ID for
+  anyone else's — there's no campaign-roster/name-lookup endpoint yet.
+  Not an issue in the single-character-per-connection testing this
+  client is built for today.
 - Hand-written, not generated. Design doc §6 envisions a proper JS
   reference SDK against `protocol/asyncapi.yaml`; this predates that and
   has to be kept in sync with the protocol by hand (see

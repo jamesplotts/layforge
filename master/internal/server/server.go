@@ -6,33 +6,43 @@
 // auth -> system.session_state, or system.error on rejection), followed
 // by a per-connection message loop that dispatches whatever the client
 // sends next. See design doc §5 for the protocol and §11 for what's
-// still to come — governance-gate enforcement and most message
-// categories (map, tool) don't exist yet. Implemented so far: safety.flag
-// (§9.2), broadcast to every client in the campaign via package session's
-// Hub; log.history_request (§10, §11), answered from package store
-// directly to the requester; narrative.player_input (§7's fast pass
-// only — see renderPlayerBubble), rendered via package llm and broadcast
-// as narrative.player_bubble; character.upload (§9.4's mechanical half
-// only — see importCharacter), validated via package systemenginepb and
-// answered with character.validation_result; and roll.check_request (see
-// resolveCheck), which calls the system engine's ResolveCheck for a
-// character the sender owns and broadcasts roll.request/roll.result;
-// character.schema_request (see sendCharacterSchema), forwarding the
-// system engine's GetCharacterSchema so a client can render a schema-
-// driven sheet (§4) without any system hardcoded into the UI; and
-// character.get (see sendCharacterState), answering with a
-// sender-owned character's current data plus its GetCharacterStatus
-// (§9.3); and character.apply_effect (see applyCharacterEffect), which
-// calls the system engine's ApplyEffect for a character the sender owns,
-// persists the result, and answers privately with character.state — not
-// broadcast, since who else should see an effect land is design doc
-// §9.7 Knowledge Scoping territory, not decided yet. The review/veto
-// half of §9.4 (character.review_status,
-// pending_review -> approved/rejected) is NOT implemented: it needs a
-// privileged-operator concept this codebase doesn't have yet, and neither
-// is roll.acknowledge (no narration-sequencing pipeline exists yet to
-// feed). See CLAUDE.md and each dispatch case's own comments for why a
-// given message either is or isn't implemented yet.
+// still to come — the map message category and governance gates beyond
+// safety.flag don't exist yet. Implemented so far, by area:
+//
+//   - safety.flag (§9.2): broadcast to the campaign via package
+//     session's Hub.
+//   - log.history_request (§10, §11): answered from package store.
+//   - narrative.player_input (§7): the fast pass (see renderPlayerBubble)
+//     renders and broadcasts narrative.player_bubble synchronously, then
+//     launches the slow pass (see runSlowPass) in its own goroutine —
+//     the DM/NPC reaction, using design doc §8's DM tool-use pattern
+//     (resolve_check/apply_effect/get_character_status, see dm_tools.go)
+//     to resolve mechanical uncertainty rather than inventing outcomes,
+//     broadcasting a tool.result per call and the final reaction as
+//     narrative.dm_prose. Neither pass is fed campaign/character context
+//     beyond the player's own input yet — no persistent context-assembly
+//     exists in Master to feed it.
+//   - character.upload (§9.4's mechanical half only — see
+//     importCharacter): validated via package systemenginepb, answered
+//     with character.validation_result. The human review/veto half
+//     (character.review_status, pending_review -> approved/rejected) is
+//     NOT implemented — it needs a privileged-operator concept this
+//     codebase doesn't have yet.
+//   - roll.check_request (see resolveCheck): calls ResolveCheck for a
+//     character the sender owns, broadcasts roll.request/roll.result.
+//     roll.acknowledge is NOT implemented (no narration-sequencing
+//     pipeline exists yet to feed).
+//   - character.schema_request/character.get (see sendCharacterSchema/
+//     sendCharacterState): forwards GetCharacterSchema, and answers with
+//     a sender-owned character's data plus GetCharacterStatus.
+//   - character.apply_effect (see applyCharacterEffect): calls
+//     ApplyEffect for a character the sender owns, persists the result,
+//     answers privately with character.state — not broadcast, since
+//     effect visibility is design doc §9.7 Knowledge Scoping territory,
+//     not decided yet.
+//
+// See CLAUDE.md and each dispatch case's own comments for why a given
+// message either is or isn't implemented yet.
 package server
 
 import (
@@ -373,12 +383,16 @@ Rules:
 - Output only the narrated prose, nothing else — no preamble, no quotation marks around it.`
 
 // renderPlayerBubble runs the narrative-transform pipeline's fast pass
-// only (design doc §7): rendering the player's stated action/dialogue in
+// (design doc §7): rendering the player's stated action/dialogue in
 // third-person DM-voiced prose via s.llm, then broadcasting the result as
-// narrative.player_bubble to everyone in the campaign. There is no slow
-// pass yet — no DM/NPC reaction is generated, and no campaign/character
-// context is fed to the model beyond the player's own input, since
-// neither exists in Master yet to feed it.
+// narrative.player_bubble to everyone in the campaign. Once that
+// succeeds, it launches the slow pass (see runSlowPass) in its own
+// detached goroutine — the DM/NPC reaction, including any tool calls
+// (design doc §8), can take much longer than the fast pass and must not
+// block this connection's read loop from handling the player's next
+// message while it runs. No campaign/character context beyond the
+// player's own input is fed to either pass, since no persistent
+// campaign-context assembly exists in Master yet to feed it.
 func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, campaignID string, input protocol.NarrativePlayerInputMessage) error {
 	if s.llm == nil {
 		return s.sendError(ctx, conn, campaignID, input.MessageID, errors.New("narrative rendering unavailable: no LLM provider configured"))
@@ -402,7 +416,12 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 		return err
 	}
 	recordEvent(ctx, s, msg)
-	return broadcastMessage(s, msg)
+	if err := broadcastMessage(s, msg); err != nil {
+		return err
+	}
+
+	go s.runSlowPass(campaignID, input)
+	return nil
 }
 
 // importCharacter handles a character.upload message: it asks the System
@@ -544,10 +563,23 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("check could not be resolved: %s", resp.Error))
 	}
 
-	rolls := make([]protocol.DieRoll, len(resp.Outcome.Rolls))
+	return s.broadcastRollOutcome(ctx, campaignID, character.ID, resp.Outcome)
+}
+
+// broadcastRollOutcome announces a resolved check to every client in
+// campaignID as roll.request (so a dice tray can pre-stage an animation,
+// RollSpec derived from outcome.Rolls grouped by die size — never
+// assumed, Master doesn't hardcode which dice a system engine uses,
+// design doc §6.1, CLAUDE.md) followed by roll.result (the authoritative
+// outcome, design doc §3.1, §4). Shared by resolveCheck (a player's own
+// roll.check_request) and the DM tool-use resolve_check tool (design doc
+// §8) — a DM-triggered check is just as much a shared table event as a
+// player-triggered one, so both animate the same way.
+func (s *Server) broadcastRollOutcome(ctx context.Context, campaignID, characterID string, outcome *systemenginepb.Outcome) error {
+	rolls := make([]protocol.DieRoll, len(outcome.Rolls))
 	var diceOrder []int
 	diceCounts := make(map[int]int)
-	for i, r := range resp.Outcome.Rolls {
+	for i, r := range outcome.Rolls {
 		rolls[i] = protocol.DieRoll{Sides: int(r.Sides), Result: int(r.Result), Label: r.Label}
 		sides := int(r.Sides)
 		if _, seen := diceCounts[sides]; !seen {
@@ -561,7 +593,7 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 	}
 
 	requestMsg, err := newMessage(campaignID, protocol.MessageTypeRollRequest, protocol.RollRequestPayload{
-		CharacterID: req.Payload.CharacterID,
+		CharacterID: characterID,
 		RollSpec:    protocol.RollSpec{Dice: dice},
 	})
 	if err != nil {
@@ -573,10 +605,10 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 	}
 
 	resultMsg, err := newMessage(campaignID, protocol.MessageTypeRollResult, protocol.RollResultPayload{
-		CharacterID:   req.Payload.CharacterID,
+		CharacterID:   characterID,
 		Rolls:         rolls,
-		Total:         int(resp.Outcome.Total),
-		ResultSummary: resp.Outcome.ResultSummary,
+		Total:         int(outcome.Total),
+		ResultSummary: outcome.ResultSummary,
 	})
 	if err != nil {
 		return err

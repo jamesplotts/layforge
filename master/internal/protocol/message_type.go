@@ -39,6 +39,8 @@ const (
 	MessageTypeCharacterGet              MessageType = "character.get"
 	MessageTypeCharacterState            MessageType = "character.state"
 	MessageTypeCharacterApplyEffect      MessageType = "character.apply_effect"
+	MessageTypeNarrativeDmProse          MessageType = "narrative.dm_prose"
+	MessageTypeToolResult                MessageType = "tool.result"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -54,7 +56,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeRollCheckRequest, MessageTypeRollRequest, MessageTypeRollResult,
 		MessageTypeCharacterSchemaRequest, MessageTypeCharacterSchemaResponse,
 		MessageTypeCharacterGet, MessageTypeCharacterState,
-		MessageTypeCharacterApplyEffect:
+		MessageTypeCharacterApplyEffect,
+		MessageTypeNarrativeDmProse, MessageTypeToolResult:
 		return true
 	default:
 		return false

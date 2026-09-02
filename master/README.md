@@ -69,10 +69,30 @@ campaign: who else should see an effect land is design doc §9.7
 Knowledge Scoping territory, not decided yet, so this stays as private
 as `character.get` rather than guessing at a visibility policy.
 
-Every other message category (map, tool), the turn-order state machine,
-the narrative-transform pipeline's slow pass, and governance gates beyond
-safety.flag are all still to come — see
-[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+The narrative-transform pipeline's slow pass (design doc §7, §8) now
+runs too: after the fast pass's literal echo of the player's action,
+`runSlowPass` launches a bounded, multi-turn conversation with the LLM,
+this time offering it three real DM tools — `resolve_check`,
+`apply_effect`, `get_character_status` (see `dm_tools.go`) — backed by
+the exact same System Engine RPCs already wired to player-facing
+dispatch, not duplicated. Every tool call the model makes is executed
+for real, broadcast to the whole table as `tool.result` regardless of
+success (§8's call-logging requirement), and fed back into the
+conversation; once the model stops calling tools, its response is
+broadcast as `narrative.dm_prose`. Design doc §8 says governance gates
+(§9) are enforced at this layer — no PvP-policy or maturity-tier engine
+exists yet, so `campaignCharacter` (the DM tool lookup helper) enforces
+only campaign-scoping, deliberately without the per-owner check
+`ownedCharacter` uses for player-triggered actions, since the DM
+legitimately acts on any character at the table; this is a documented
+gap, not a silent omission. Rules/SRD lookup, procedural generation, and
+campaign-notes retrieval are §8's other named tool categories — none of
+those exist in this codebase, so they aren't stubbed out speculatively.
+
+Every other message category (map), the turn-order state machine, and
+governance gates beyond safety.flag and DM-tool campaign-scoping are all
+still to come — see [`docs/design.md`](../docs/design.md) §3, §5, and
+§7–§10.
 
 ## Layout
 

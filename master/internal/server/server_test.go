@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -798,11 +799,12 @@ func TestServe_NarrativePlayerInput_RendersAndBroadcastsBubble(t *testing.T) {
 		}
 	}
 
-	if fake.lastRequest.Model != "test-model" {
-		t.Errorf("Complete() called with Model = %q, want %q", fake.lastRequest.Model, "test-model")
+	call := fake.firstCall(t)
+	if call.Model != "test-model" {
+		t.Errorf("Complete() called with Model = %q, want %q", call.Model, "test-model")
 	}
-	if fake.lastRequest.UserPrompt != "I draw my sword." {
-		t.Errorf("Complete() called with UserPrompt = %q, want %q", fake.lastRequest.UserPrompt, "I draw my sword.")
+	if call.UserPrompt != "I draw my sword." {
+		t.Errorf("Complete() called with UserPrompt = %q, want %q", call.UserPrompt, "I draw my sword.")
 	}
 }
 
@@ -893,21 +895,72 @@ func TestServe_NarrativePlayerInput_ProviderError_RespondsWithErrorAndKeepsConne
 }
 
 // fakeLLMProvider is a minimal llm.Provider for testing narrative
-// rendering without a real Ollama server.
+// rendering without a real Ollama server. Safe for concurrent use: the
+// DM slow pass (see runSlowPass) calls Complete from its own goroutine
+// shortly after the fast pass's own synchronous call, so any test whose
+// fast pass succeeds sees a second, concurrent Complete() call — calls
+// is guarded by mu for exactly that reason, rather than a single
+// last-write-wins field.
 type fakeLLMProvider struct {
+	// response is used for every call when responses is empty — the
+	// simple single-answer case most tests need.
 	response llm.CompletionResponse
-	err      error
-	// lastRequest captures the most recent Complete() call's request,
-	// for asserting on what Server actually sent to the provider.
-	lastRequest llm.CompletionRequest
+	// responses, if non-empty, is used instead: call N gets responses[N]
+	// (clamped to the last entry once exhausted) — for tests driving a
+	// multi-turn tool-use loop (design doc §8) where each Complete() call
+	// needs a different answer (e.g. a tool call, then final narration).
+	responses []llm.CompletionResponse
+	err       error
+
+	mu    sync.Mutex
+	calls []llm.CompletionRequest
 }
 
 func (f *fakeLLMProvider) Complete(_ context.Context, req llm.CompletionRequest) (llm.CompletionResponse, error) {
-	f.lastRequest = req
+	f.mu.Lock()
+	f.calls = append(f.calls, req)
+	callIndex := len(f.calls) - 1
+	f.mu.Unlock()
+
 	if f.err != nil {
 		return llm.CompletionResponse{}, f.err
 	}
-	return f.response, nil
+	if len(f.responses) == 0 {
+		return f.response, nil
+	}
+	if callIndex >= len(f.responses) {
+		callIndex = len(f.responses) - 1
+	}
+	return f.responses[callIndex], nil
+}
+
+// callAt returns the request from Complete()'s (i+1)th invocation
+// (0-indexed) — safe to call once a test has already read a broadcast
+// that call's response caused, since that read happens-after the call
+// itself. Fails the test if Complete wasn't called at least i+1 times.
+func (f *fakeLLMProvider) callAt(t *testing.T, i int) llm.CompletionRequest {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i >= len(f.calls) {
+		t.Fatalf("Complete() was called %d time(s), want at least %d", len(f.calls), i+1)
+	}
+	return f.calls[i]
+}
+
+// firstCall returns the request from Complete()'s first invocation — the
+// fast pass's own synchronous call, which always happens (and the
+// narrative.player_bubble broadcast it produces is always read) before
+// the slow pass's later, asynchronous one. Fails the test if Complete
+// was never called.
+func (f *fakeLLMProvider) firstCall(t *testing.T) llm.CompletionRequest {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		t.Fatal("Complete() was never called")
+	}
+	return f.calls[0]
 }
 
 // dialAndJoin dials ts, completes the handshake for campaignID
