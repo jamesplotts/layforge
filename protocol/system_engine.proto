@@ -136,16 +136,25 @@ message Outcome {
 message ApplyEffectRequest {
   string request_id = 1;
   string campaign_id = 2;
-  string actor_id = 3;
+  // actor carries the current character_data to apply the effect to —
+  // this call is stateless across the RPC boundary like ResolveCheck:
+  // the engine holds no creature state of its own between calls (Master
+  // owns campaign state, docs/design.md §3.1, §10), so there is nothing
+  // for a bare actor_id to look up.
+  Actor actor = 3;
   // Damage/heal/condition payload; engine-defined shape.
   google.protobuf.Struct effect = 4;
 }
 
 message ApplyEffectResponse {
   bool success = 1;
-  // Updated relevant character state fields only, not necessarily the
-  // full character_data — engine decides what's relevant to the effect.
-  google.protobuf.Struct resulting_state = 2;
+  // The actor's full character_data after the effect was applied — the
+  // new authoritative state for Master to persist. Deliberately the
+  // whole actor, not a partial diff: a diff would require Master to know
+  // how to merge it back into its own copy, which is exactly the
+  // engine-specific knowledge this contract exists to avoid Master
+  // needing.
+  Actor actor = 2;
   string error = 3;
 }
 
