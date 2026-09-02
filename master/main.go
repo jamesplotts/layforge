@@ -34,10 +34,11 @@ func main() {
 	dbPath := flag.String("db", "layforge.db", "path to the SQLite event-log database (design doc §10's zero-config default); use :memory: to disable persistence across restarts")
 	llmURL := flag.String("llm-url", "", "base URL of an Ollama server for the narrative-transform pipeline (design doc §7), e.g. http://192.168.1.56:11434; leave empty to disable narrative rendering")
 	llmModel := flag.String("llm-model", "qwen3.8:27b", "Ollama model tag to use for narrative rendering; ignored if -llm-url is empty")
+	webDir := flag.String("web-dir", "", "directory to serve at / (e.g. ../clients/web when run via 'go run .' from this directory) — a dev convenience for trying the V1 web client against this Master with one command; leave empty to serve nothing there. Slave clients are otherwise independent of Master (design doc §4) and don't need to be deployed together.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -47,7 +48,7 @@ func main() {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir string, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -74,6 +75,17 @@ func run(addr, dbPath, llmURL, llmModel string, logger *slog.Logger) error {
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel).Handler())
+
+	if webDir != "" {
+		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {
+			// Not fatal: a missing dev-convenience directory shouldn't
+			// stop Master from serving the actual protocol endpoint.
+			logger.Warn("web-dir not found, not serving static client files", "web_dir", webDir, "error", statErr)
+		} else {
+			mux.Handle("/", http.FileServer(http.Dir(webDir)))
+			logger.Info("serving static client files", "web_dir", webDir)
+		}
+	}
 
 	httpServer := &http.Server{
 		Addr:    addr,

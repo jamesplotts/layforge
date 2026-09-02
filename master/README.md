@@ -17,13 +17,16 @@ pass only — no slow-pass DM/NPC reaction yet) and broadcast as
 `narrative.player_bubble`. Any client can also page back through
 everything recorded for its campaign with `log.history_request`/
 `log.history_response` (design doc §10, §11), since every message
-exchanged is durably logged to SQLite as it happens. The generated System
-Engine gRPC client/server stubs build and round-trip correctly, but
-nothing in `main.go` dials a real OpenCombatEngine sidecar yet. Every
-other message category (roll, map, character, tool), the turn-order
-state machine, authoritative dice, the narrative-transform pipeline's
-slow pass, and governance gates beyond safety.flag are all still to
-come — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+exchanged is durably logged to SQLite as it happens. There's now a real,
+usable client to try all of this from — see `-web-dir` below and
+[`clients/web/`](../clients/web/) — verified in an actual browser, not
+just against hand-written test clients. The generated System Engine gRPC
+client/server stubs build and round-trip correctly, but nothing in
+`main.go` dials a real OpenCombatEngine sidecar yet. Every other message
+category (roll, map, character, tool), the turn-order state machine,
+authoritative dice, the narrative-transform pipeline's slow pass, and
+governance gates beyond safety.flag are all still to come — see
+[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 
@@ -52,8 +55,13 @@ internal/systemenginepb/      generated gRPC/protobuf stubs for
 ## Running
 
 ```
-go run . -addr :8080 -db layforge.db -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
+go run . -addr :8080 -db layforge.db -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b -web-dir ../clients/web
 ```
+
+then open `http://localhost:8080/` for the [V1 web client](../clients/web/)
+(`-web-dir` is a dev convenience, off by default — see that flag's help
+text and `clients/web/README.md` for why Master serving its own client is
+not the intended production deployment shape).
 
 `-db` defaults to `layforge.db` in the working directory — SQLite,
 zero-config, created on first run. Every message the WebSocket endpoint

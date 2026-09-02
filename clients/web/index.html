@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Layforge</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Join screen: gathers campaign_id / character_id / sender_id before
+       opening the WebSocket and running the system.connect handshake
+       (protocol/asyncapi.yaml, design doc §5). -->
+  <section id="join-screen" class="screen">
+    <div class="join-card">
+      <h1>Layforge</h1>
+      <p class="tagline">Connect to a Master.</p>
+      <label>
+        Master WebSocket URL
+        <input id="join-url" type="text" />
+      </label>
+      <label>
+        Campaign ID
+        <input id="join-campaign" type="text" placeholder="e.g. my-campaign" />
+      </label>
+      <label>
+        Character name
+        <input id="join-character" type="text" placeholder="e.g. Kestrel" />
+      </label>
+      <button id="join-button" type="button">Join</button>
+      <p id="join-error" class="error" hidden></p>
+    </div>
+  </section>
+
+  <!-- Chat screen: narrative scrollback (design doc §4's V1 client),
+       history paging, and a safety-flag control (§9.2). No stat panel,
+       dice tray, or push-to-talk yet — Master doesn't implement the
+       system-engine or audio paths those need. -->
+  <section id="chat-screen" class="screen" hidden>
+    <header class="chat-header">
+      <div>
+        <strong id="chat-campaign-label"></strong>
+        <span id="chat-status" class="status">connecting…</span>
+      </div>
+      <button id="safety-flag-button" type="button" title="X-card / veil — interrupts the scene for everyone">
+        Safety Flag
+      </button>
+    </header>
+
+    <!-- Inline, non-modal panel — deliberately not window.prompt(): a
+         native dialog blocks the page's whole JS thread until dismissed,
+         which is both bad UX and breaks anything driving the page
+         programmatically (browser automation, tests). -->
+    <div id="safety-flag-panel" class="safety-panel" hidden>
+      <label>
+        Topic (optional — leave blank for a bare X-card)
+        <input id="safety-flag-topic" type="text" placeholder="e.g. combat" />
+      </label>
+      <div class="safety-panel-actions">
+        <button id="safety-flag-cancel" type="button" class="secondary">Cancel</button>
+        <button id="safety-flag-send" type="button">Raise Flag</button>
+      </div>
+    </div>
+
+    <div id="log" class="log"></div>
+
+    <form id="input-form" class="input-form">
+      <input id="input-text" type="text" placeholder="What do you do?" autocomplete="off" />
+      <button id="input-send" type="submit">Send</button>
+    </form>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
