@@ -22,14 +22,17 @@ since every message exchanged is durably logged to SQLite as it happens.
 There's now a real,
 usable client to try all of this from, served by Master itself by
 default — see [`web/`](web/) and the Running section below — verified in
-an actual browser, not just against hand-written test clients. The
-generated System Engine gRPC
-client/server stubs build and round-trip correctly, but nothing in
-`main.go` dials a real OpenCombatEngine sidecar yet. Every other message
-category (roll, map, character, tool), the turn-order state machine,
-authoritative dice, the narrative-transform pipeline's slow pass, and
-governance gates beyond safety.flag are all still to come — see
-[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+an actual browser, not just against hand-written test clients. Joining a
+campaign can optionally require a password (`-room-passwords`, design doc
+§6.6's room-code auth provider) — that's also the seam a future
+Discord-OAuth-backed provider is meant to plug into, per that same
+section, without reshaping anything (see `internal/auth`). The generated
+System Engine gRPC client/server stubs build and round-trip correctly,
+but nothing in `main.go` dials a real OpenCombatEngine sidecar yet. Every
+other message category (roll, map, character, tool), the turn-order state
+machine, authoritative dice, the narrative-transform pipeline's slow
+pass, and governance gates beyond safety.flag are all still to come —
+see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 
@@ -49,6 +52,9 @@ internal/store/                repository/DAO abstraction over storage (design
                               the zero-config default (pure-Go driver, no cgo)
 internal/llm/                  LLM-provider contract (design doc §3.1) +
                               OllamaProvider, the first implementation
+internal/auth/                  join-authorization contract (design doc §6.6) +
+                              RoomPasswordProvider, the first implementation —
+                              the seam a future Discord OAuth provider plugs into
 internal/systemenginepb/      generated gRPC/protobuf stubs for
                               protocol/system_engine.proto (gitignored;
                               regenerate with protocol/generate.sh) plus a
@@ -93,6 +99,15 @@ testing, a 7B "instruct" model produced reliably garbled output on
 RPG-narrative-style prompts while a 27B model handled the same prompts
 correctly; if narrative bubbles come back corrupted, try a different/
 larger model before assuming the pipeline itself is broken.
+
+`-room-passwords` points at a JSON file mapping `campaign_id` to a
+required join password, e.g. `{"my-campaign": "hunter2"}` — a campaign
+not listed stays open to anyone, so protecting one is opt-in per
+campaign, not a server-wide switch. Leave it unset (the default) to
+require no password anywhere. A missing or malformed file fails Master's
+startup outright rather than silently running unprotected — a
+self-hoster who asked for this shouldn't lose it to a typo without
+noticing.
 
 ## Testing
 

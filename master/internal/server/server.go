@@ -2,18 +2,19 @@
 // Licensed under the MIT License. See LICENSE in the repository root.
 
 // Package server implements Master's client-facing WebSocket endpoint:
-// the protocol handshake (system.connect -> system.session_state, or
-// system.error on rejection), followed by a per-connection message loop
-// that dispatches whatever the client sends next. See design doc §5 for
-// the protocol and §11 for what's still to come — governance-gate
-// enforcement and most message categories (roll, map, character, tool)
-// don't exist yet. Implemented so far: safety.flag (§9.2), broadcast to
-// every client in the campaign via package session's Hub;
-// log.history_request (§10, §11), answered from package store directly
-// to the requester; and narrative.player_input (§7's fast pass only —
-// see renderPlayerBubble), rendered via package llm and broadcast as
-// narrative.player_bubble. See CLAUDE.md and each dispatch case's own
-// comments for why a given message either is or isn't implemented yet.
+// the protocol handshake (system.connect, optionally gated by package
+// auth -> system.session_state, or system.error on rejection), followed
+// by a per-connection message loop that dispatches whatever the client
+// sends next. See design doc §5 for the protocol and §11 for what's
+// still to come — governance-gate enforcement and most message
+// categories (roll, map, character, tool) don't exist yet. Implemented
+// so far: safety.flag (§9.2), broadcast to every client in the campaign
+// via package session's Hub; log.history_request (§10, §11), answered
+// from package store directly to the requester; and
+// narrative.player_input (§7's fast pass only — see renderPlayerBubble),
+// rendered via package llm and broadcast as narrative.player_bubble. See
+// CLAUDE.md and each dispatch case's own comments for why a given
+// message either is or isn't implemented yet.
 package server
 
 import (
@@ -28,6 +29,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/session"
@@ -45,6 +47,7 @@ type Server struct {
 	logger *slog.Logger
 	events store.EventStore
 	hub    *session.Hub
+	auth   auth.Provider
 
 	llm            llm.Provider
 	narrativeModel string
@@ -59,14 +62,18 @@ type Server struct {
 // narrative.player_input then gets a system.error explaining rendering
 // is unavailable, rather than Master panicking on a nil provider.
 // narrativeModel names the model llmProvider should use; it's ignored
-// when llmProvider is nil.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string) *Server {
+// when llmProvider is nil. authProvider may be nil to run with no join
+// authorization at all (every campaign open to anyone, today's default);
+// design doc §6.6 — a future Discord-OAuth-backed auth.Provider is meant
+// to plug into this same field.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
 		hub:            session.NewHub(),
 		llm:            llmProvider,
 		narrativeModel: narrativeModel,
+		auth:           authProvider,
 	}
 }
 
@@ -125,6 +132,18 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 	if connect.Type != protocol.MessageTypeSystemConnect {
 		return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
 			fmt.Errorf("first message must be %q, got %q", protocol.MessageTypeSystemConnect, connect.Type))
+	}
+
+	if s.auth != nil {
+		authorized, reason, authErr := s.auth.Authorize(ctx, campaignID, connect.Payload.AuthToken)
+		if authErr != nil {
+			return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
+				fmt.Errorf("checking authorization: %w", authErr))
+		}
+		if !authorized {
+			return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
+				fmt.Errorf("not authorized to join this campaign: %s", reason))
+		}
 	}
 
 	s.logger.Info("client connected",

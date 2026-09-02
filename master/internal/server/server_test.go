@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/server"
@@ -163,7 +164,7 @@ func TestHandleWebSocket_ValidConnect_PersistsHandshakeEvents(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = events.Close() })
 
-	srv := server.New(logger, events, nil, "")
+	srv := server.New(logger, events, nil, "", nil)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -426,7 +427,7 @@ func newTestServerWithHistory(t *testing.T) *httptest.Server {
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = events.Close() })
-	return httptest.NewServer(server.New(logger, events, nil, "").Handler())
+	return httptest.NewServer(server.New(logger, events, nil, "", nil).Handler())
 }
 
 func TestServe_LogHistoryRequest_ReturnsRecordedEventsInOrder(t *testing.T) {
@@ -659,7 +660,7 @@ func sendSafetyFlagAndAwaitBroadcast(t *testing.T, conn *websocket.Conn, campaig
 }
 
 func TestServe_LogHistoryRequest_PersistenceDisabled_RespondsWithError(t *testing.T) {
-	ts := newTestServer(t) // uses server.New(logger, nil, nil, "") — no store
+	ts := newTestServer(t) // uses server.New(logger, nil, nil, "", nil) — no store
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
@@ -748,7 +749,7 @@ func requestHistory(ctx context.Context, conn *websocket.Conn, campaignID, sende
 func TestServe_NarrativePlayerInput_RendersAndBroadcastsBubble(t *testing.T) {
 	fake := &fakeLLMProvider{response: llm.CompletionResponse{Text: "Player-A draws a sword."}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model").Handler())
+	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model", nil).Handler())
 	defer ts.Close()
 
 	a := dialAndJoin(t, ts, "campaign-narrative", "player-a")
@@ -842,7 +843,7 @@ func TestServe_NarrativePlayerInput_NoProvider_RespondsWithError(t *testing.T) {
 func TestServe_NarrativePlayerInput_ProviderError_RespondsWithErrorAndKeepsConnectionOpen(t *testing.T) {
 	fake := &fakeLLMProvider{err: errors.New("model unavailable")}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model").Handler())
+	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model", nil).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
@@ -949,10 +950,113 @@ func dialAndJoin(t *testing.T, ts *httptest.Server, campaignID, sender string) *
 	return conn
 }
 
+func TestHandleWebSocket_AuthProvider_CorrectPassword_Joins(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	authProvider := auth.NewRoomPasswordProvider(map[string]string{"protected-campaign": "hunter2"})
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider).Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL(ts.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.CloseNow()
+
+	connect := protocol.SystemConnectMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "test-msg-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "protected-campaign",
+			Type:            protocol.MessageTypeSystemConnect,
+		},
+		Payload: protocol.SystemConnectPayload{ClientKind: "test_client", AuthToken: "hunter2"},
+	}
+	if err := wsjson.Write(ctx, conn, connect); err != nil {
+		t.Fatalf("Write(connect) error = %v", err)
+	}
+
+	var got protocol.SystemSessionStateMessage
+	if err := wsjson.Read(ctx, conn, &got); err != nil {
+		t.Fatalf("Read(session_state) error = %v", err)
+	}
+	if got.Payload.State != protocol.SessionStateJoined {
+		t.Errorf("Payload.State = %q, want %q", got.Payload.State, protocol.SessionStateJoined)
+	}
+}
+
+func TestHandleWebSocket_AuthProvider_WrongPassword_RejectsHandshake(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	authProvider := auth.NewRoomPasswordProvider(map[string]string{"protected-campaign": "hunter2"})
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider).Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL(ts.URL), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer conn.CloseNow()
+
+	connect := protocol.SystemConnectMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "test-msg-2",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "protected-campaign",
+			Type:            protocol.MessageTypeSystemConnect,
+		},
+		Payload: protocol.SystemConnectPayload{ClientKind: "test_client", AuthToken: "wrong-password"},
+	}
+	if err := wsjson.Write(ctx, conn, connect); err != nil {
+		t.Fatalf("Write(connect) error = %v", err)
+	}
+
+	var got protocol.SystemErrorMessage
+	if err := wsjson.Read(ctx, conn, &got); err != nil {
+		t.Fatalf("Read(system.error) error = %v", err)
+	}
+	if got.Payload.InReplyToMessageID != connect.MessageID {
+		t.Errorf("Payload.InReplyToMessageID = %q, want %q", got.Payload.InReplyToMessageID, connect.MessageID)
+	}
+	if got.Payload.Code != "handshake_rejected" {
+		t.Errorf("Payload.Code = %q, want %q", got.Payload.Code, "handshake_rejected")
+	}
+
+	// The handshake gate is a hard reject-and-close, unlike a rejected
+	// post-handshake message — confirm the connection actually closed
+	// rather than staying open for a retry on the same connection.
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer shortCancel()
+	if _, _, err := conn.Read(shortCtx); err == nil {
+		t.Error("connection stayed open after a rejected handshake, want it closed")
+	}
+}
+
+func TestHandleWebSocket_AuthProvider_UnconfiguredCampaign_JoinsWithoutPassword(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Auth is enabled server-wide, but this specific campaign has no
+	// password configured — per-campaign opt-in, not an all-or-nothing
+	// switch.
+	authProvider := auth.NewRoomPasswordProvider(map[string]string{"protected-campaign": "hunter2"})
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider).Handler())
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "public-campaign", "player-a")
+	defer conn.CloseNow()
+}
+
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := server.New(logger, nil, nil, "")
+	srv := server.New(logger, nil, nil, "", nil)
 	return httptest.NewServer(srv.Handler())
 }
 
