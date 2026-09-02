@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Layforge</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="dice.css" />
 </head>
 <body>
   <!-- Join screen: gathers campaign_id / character_id / sender_id before
@@ -66,12 +67,45 @@
     </button>
     <div id="log" class="log"></div>
 
+    <!-- Dice tray: authoritative server roll, cosmetic client animation
+         (design doc §3.1, §4) — roll.check_request in, roll.request/
+         roll.result out. Disabled until join's stopgap character upload
+         (see app.js) resolves, since a check needs a real character_id
+         Master's store recognizes, not just the display name typed at
+         join. -->
+    <div class="dice-tray">
+      <div class="dice-tray-stage" id="dice-stage"></div>
+      <div class="dice-tray-controls">
+        <div class="dice-tray-row">
+          <select id="roll-ability">
+            <option value="Strength">Strength</option>
+            <option value="Dexterity">Dexterity</option>
+            <option value="Constitution">Constitution</option>
+            <option value="Intelligence">Intelligence</option>
+            <option value="Wisdom">Wisdom</option>
+            <option value="Charisma">Charisma</option>
+          </select>
+          <button id="roll-check-button" type="button" disabled>Roll Check</button>
+          <label class="dice-skin-picker">
+            Skin
+            <select id="dice-skin-select">
+              <option value="ivory">Ivory</option>
+              <option value="obsidian">Obsidian</option>
+              <option value="emerald">Emerald</option>
+            </select>
+          </label>
+        </div>
+        <div id="dice-tray-result" class="dice-tray-result"></div>
+      </div>
+    </div>
+
     <form id="input-form" class="input-form">
       <input id="input-text" type="text" placeholder="What do you do?" autocomplete="off" />
       <button id="input-send" type="submit">Send</button>
     </form>
   </section>
 
+  <script src="dice.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -20,14 +20,22 @@ first-class consumers, not an afterthought").
 Working: join a campaign (`system.connect` handshake), narrative
 scrollback with the fast-pass narrative-transform pipeline
 (`narrative.player_input` → `narrative.player_bubble`), the safety-flag
-control (`safety.flag` → `safety.flag_broadcast`), and history: on join,
+control (`safety.flag` → `safety.flag_broadcast`), history: on join,
 the most recent page loads automatically (design doc §10's tail default,
 not the campaign's first message), with a "Load earlier history" button
-to page further back (`log.history_request`'s `before_sequence`).
+to page further back (`log.history_request`'s `before_sequence`); and now
+a dice tray — a real CSS 3D d20 (`dice.js`/`dice.css`, actual icosahedron
+geometry, not a sprite) that rolls an ability check via
+`roll.check_request` and animates to the authoritative
+`roll.request`/`roll.result` outcome from Master. Since there's no real
+character-creation UI yet, `onJoined` silently uploads a minimal stock
+character (`character.upload`) so the roll has something to roll for —
+see the stopgap note at the top of `app.js`.
 
 Not implemented — Master doesn't have anything for these to talk to yet:
-schema-driven stat/inventory/spells/actions panel (no system engine),
-dice tray (no `roll.*`), push-to-talk voice input (no audio pipeline).
+schema-driven stat/inventory/spells/actions panel (no system engine
+schema UI), applying an effect from a check (no damage/turn order),
+push-to-talk voice input (no audio pipeline).
 
 ## Running
 
@@ -56,6 +64,20 @@ Go, a rebuild, or even a restart:
 - **Behavior** — edit `app.js`; it's plain functions and DOM calls, no
   framework or build tooling to fight.
 
+### Dice skins
+
+The dice tray takes this further: a die's *material* (face color, edge
+color, ink color, sheen) is entirely CSS custom properties scoped under
+`:root[data-dice-skin="<name>"]` in `dice.css` — `dice.js` only ever sets
+that attribute (and remembers the choice in `localStorage`), it never
+touches a color itself. Adding a community skin is one new
+`:root[data-dice-skin="mint"] { --die-face-bg: ...; --die-edge-color:
+...; --die-ink-color: ...; --die-shine-opacity: ...; }` block (see
+`dice.css`'s three built-in presets — ivory, obsidian, emerald) plus one
+`<option>` in `index.html`'s skin `<select>`. No JS, no geometry
+knowledge required — this is the same "restyle without touching code"
+contract as the rest of this directory, just scoped to one component.
+
 Master doesn't cache these files beyond what `http.FileServer` does — a
 browser reload picks up the change immediately. To run a genuinely
 different skin rather than editing in place, copy this whole directory
@@ -77,3 +99,15 @@ and point `-web-dir` at the copy instead.
   reference SDK against `protocol/asyncapi.yaml`; this predates that and
   has to be kept in sync with the protocol by hand (see
   `PROTOCOL_VERSION` in `app.js`).
+- **The stock character upload is a stopgap, not real character
+  creation.** Every join silently creates a fresh minimal character
+  (uniform 12s, 10 HP) with no way to customize ability scores, equipment,
+  or anything else — there's no schema-driven sheet UI yet (design doc
+  §9.4). It also means every rejoin makes Master store a *new* character
+  record rather than reusing one.
+- **The d20's face numbering is synthetic**, not a claim to reproduce any
+  particular physical die's layout (opposite faces on a real d20 sum to
+  21; this one doesn't) — see the comment on `buildDie` in `dice.js`.
+- **The die only shows results from checks (d20).** Nothing here rolls
+  damage dice or any non-d20 shape yet — `roll.check_request` only
+  triggers `ResolveCheck`, not `ApplyEffect`.

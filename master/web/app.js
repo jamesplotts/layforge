@@ -7,9 +7,21 @@
 // in sync with the protocol by hand in the meantime (see PROTOCOL_VERSION
 // below). Only what Master actually implements is wired up: the
 // handshake, narrative.player_input -> narrative.player_bubble,
-// safety.flag -> safety.flag_broadcast, and log.history_request paging.
-// No stat panel, dice tray, or push-to-talk — Master has no system
-// engine or audio pipeline yet for those to talk to.
+// safety.flag -> safety.flag_broadcast, log.history_request paging, and
+// now the dice tray: character.upload -> character.validation_result and
+// roll.check_request -> roll.request/roll.result (see dice.js for the
+// actual 3D die geometry/animation). Still no stat panel or push-to-talk
+// — Master has no audio pipeline yet, and no schema-driven character
+// sheet UI exists yet either.
+//
+// The dice tray needs a character Master's store actually recognizes
+// (roll.check_request is gated on store.Character.OwnerID — see package
+// server's resolveCheck), but there's no real character-creation/import
+// UI yet (design doc §9.4's schema-driven sheet is unbuilt). As a
+// stopgap, onJoined silently uploads a minimal stock character built
+// from the join screen's character name — see uploadStockCharacter. This
+// is a placeholder for real character creation, not the intended
+// long-term flow.
 
 "use strict";
 
@@ -26,6 +38,16 @@ const state = {
   // see the History paging section below.
   oldestLoadedSequence: null,
   hasMoreOlder: false,
+  // --- Dice tray ---
+  // rollCharacterId is Master's own store.Character.ID, assigned once the
+  // stopgap upload (see uploadStockCharacter) resolves — deliberately
+  // separate from characterId (the display name) above, which narrative
+  // messages still use unchanged; roll.check_request is the only thing
+  // that needs Master's real ID.
+  rollCharacterId: null,
+  pendingCharacterUploadMessageId: null,
+  pendingRollMessageId: null,
+  dieEl: null,
 };
 
 const el = {
@@ -48,6 +70,11 @@ const el = {
   inputForm: document.getElementById("input-form"),
   inputText: document.getElementById("input-text"),
   inputSend: document.getElementById("input-send"),
+  diceStage: document.getElementById("dice-stage"),
+  rollAbility: document.getElementById("roll-ability"),
+  rollCheckButton: document.getElementById("roll-check-button"),
+  diceSkinSelect: document.getElementById("dice-skin-select"),
+  diceTrayResult: document.getElementById("dice-tray-result"),
 };
 
 el.joinUrl.value = defaultWsUrl();
@@ -57,6 +84,16 @@ el.safetyFlagCancel.addEventListener("click", closeSafetyFlagPanel);
 el.safetyFlagSend.addEventListener("click", onSafetyFlagSend);
 el.inputForm.addEventListener("submit", onInputSubmit);
 el.loadEarlierButton.addEventListener("click", onLoadEarlierClick);
+el.rollCheckButton.addEventListener("click", onRollCheckClick);
+el.diceSkinSelect.addEventListener("change", () => applyDiceSkin(el.diceSkinSelect.value));
+
+// The die is built once at load — building it doesn't require the chat
+// screen to be visible, and dice.js's geometry functions are pure/cheap.
+state.dieEl = buildDie();
+el.diceStage.appendChild(state.dieEl);
+const savedSkin = loadSavedDiceSkin("ivory");
+el.diceSkinSelect.value = savedSkin;
+applyDiceSkin(savedSkin);
 
 function defaultWsUrl() {
   // location.host is empty when opened via file://, and there's no
@@ -79,6 +116,19 @@ function randomId() {
     // fall through to the low-quality fallback below
   }
   return "id-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+
+// randomUuid returns a proper UUID v4 string — unlike randomId() above,
+// this is required to actually be UUID-shaped: it becomes CreatureState's
+// Id field (see uploadStockCharacter), which the system engine
+// deserializes into a real C# Guid, not just an opaque unique string.
+function randomUuid() {
+  if (crypto && crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
 // newEnvelope builds the fields every protocol message carries
@@ -199,6 +249,15 @@ function handleMessage(msg) {
     case "log.history_response":
       onHistoryResponse(msg.payload);
       break;
+    case "character.validation_result":
+      onCharacterValidationResult(msg);
+      break;
+    case "roll.request":
+      onRollRequest();
+      break;
+    case "roll.result":
+      onRollResult(msg);
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -214,6 +273,7 @@ function onJoined() {
   // — "where things stand now," the natural first page for a chat-style
   // scrollback, not the campaign's very first message.
   requestHistory({});
+  uploadStockCharacter();
 }
 
 function onSystemError(msg) {
@@ -222,6 +282,14 @@ function onSystemError(msg) {
   const inReplyTo = msg.payload && msg.payload.in_reply_to_message_id;
   if (inReplyTo && inReplyTo === state.pendingInputMessageId) {
     clearPendingBubble();
+  }
+  if (inReplyTo && inReplyTo === state.pendingCharacterUploadMessageId) {
+    state.pendingCharacterUploadMessageId = null;
+    el.diceTrayResult.textContent = "Dice tray unavailable: character setup failed.";
+  }
+  if (inReplyTo && inReplyTo === state.pendingRollMessageId) {
+    state.pendingRollMessageId = null;
+    el.rollCheckButton.disabled = false;
   }
 }
 
@@ -341,6 +409,78 @@ function onSafetyFlagSend() {
   closeSafetyFlagPanel();
 }
 
+// --- Dice tray ---
+//
+// uploadStockCharacter (see the file-level doc comment for why this is a
+// stopgap) sends a minimal but real CreatureState JSON, shaped to
+// OpenCombatEngine's schema (design doc §6.1) — Master forwards it
+// opaquely to the system engine's FromJson without interpreting it
+// itself, so this client-side shape is the one part of the whole flow
+// that's genuinely system-engine-specific, unlike everything else here.
+function uploadStockCharacter() {
+  const characterJson = JSON.stringify({
+    id: randomUuid(),
+    name: state.characterId || "Adventurer",
+    team: "Player",
+    abilityScores: { strength: 12, dexterity: 12, constitution: 12, intelligence: 12, wisdom: 12, charisma: 12 },
+    hitPoints: { current: 10, max: 10, temporary: 0 },
+  });
+
+  const envelope = newEnvelope("character.upload");
+  state.pendingCharacterUploadMessageId = envelope.message_id;
+  send({
+    ...envelope,
+    payload: { character_json: characterJson, schema_version: "opencombatengine-v1" },
+  });
+}
+
+function onCharacterValidationResult(msg) {
+  state.pendingCharacterUploadMessageId = null;
+  const payload = msg.payload || {};
+  if (!payload.character_id) {
+    el.diceTrayResult.textContent = "Dice tray unavailable: character setup failed.";
+    return;
+  }
+  state.rollCharacterId = payload.character_id;
+  el.rollCheckButton.disabled = false;
+}
+
+function onRollCheckClick() {
+  if (!state.rollCharacterId || state.pendingRollMessageId) return;
+
+  const envelope = newEnvelope("roll.check_request");
+  state.pendingRollMessageId = envelope.message_id;
+  el.rollCheckButton.disabled = true;
+  el.diceTrayResult.textContent = "Rolling…";
+  send({
+    ...envelope,
+    payload: { character_id: state.rollCharacterId, check_type: "ability_check", ability: el.rollAbility.value },
+  });
+}
+
+function onRollRequest() {
+  startTumble(state.dieEl);
+}
+
+function onRollResult(msg) {
+  state.pendingRollMessageId = null;
+  el.rollCheckButton.disabled = false;
+
+  const payload = msg.payload || {};
+  const rolls = payload.rolls || [];
+  const firstDie = rolls[0];
+
+  settleOnResult(state.dieEl, firstDie ? firstDie.result : 1, () => {
+    const dieText = firstDie ? `d${firstDie.sides}: ${firstDie.result}` : "";
+    el.diceTrayResult.innerHTML = "";
+    const strongTotal = document.createElement("strong");
+    strongTotal.textContent = `Total: ${payload.total}`;
+    el.diceTrayResult.append(strongTotal, dieText ? ` (${dieText})` : "");
+  });
+
+  appendRollNote(el.rollAbility.value, payload);
+}
+
 // --- Rendering ---
 //
 // Each *El function builds a detached element (used directly for live
@@ -385,6 +525,16 @@ function appendErrorNote(text) {
   const note = document.createElement("div");
   note.className = "note error-note";
   note.textContent = text;
+  el.log.appendChild(note);
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+function appendRollNote(ability, payload) {
+  const note = document.createElement("div");
+  note.className = "note";
+  const die = (payload.rolls || [])[0];
+  const dieText = die ? ` (d${die.sides}: ${die.result})` : "";
+  note.textContent = `${state.characterId || "Someone"} rolled a ${ability} check: ${payload.total}${dieText}`;
   el.log.appendChild(note);
   el.log.scrollTop = el.log.scrollHeight;
 }
