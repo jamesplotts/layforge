@@ -911,6 +911,13 @@ type fakeLLMProvider struct {
 	// needs a different answer (e.g. a tool call, then final narration).
 	responses []llm.CompletionResponse
 	err       error
+	// respondFunc, when set, computes the response per call instead of
+	// responses/response above — needed by tests where a later call must
+	// react to content only known once a prior call's tool result comes
+	// back (e.g. a server-generated character_id from create_npc), which
+	// a static responses list can't express since it's built before the
+	// test runs.
+	respondFunc func(callIndex int, req llm.CompletionRequest) (llm.CompletionResponse, error)
 
 	mu    sync.Mutex
 	calls []llm.CompletionRequest
@@ -924,6 +931,9 @@ func (f *fakeLLMProvider) Complete(_ context.Context, req llm.CompletionRequest)
 
 	if f.err != nil {
 		return llm.CompletionResponse{}, f.err
+	}
+	if f.respondFunc != nil {
+		return f.respondFunc(callIndex, req)
 	}
 	if len(f.responses) == 0 {
 		return f.response, nil

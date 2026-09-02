@@ -48,10 +48,14 @@ also start real structured turn order (`start_combat`) — rolling
 initiative through the System Engine rather than trusting the model to
 order it, skipping incapacitated characters automatically as combat
 advances (`advance_turn`, design doc §9.3) — broadcast to everyone as
-`turn.state`; this only works for combatants who already have a real
-uploaded character, since there's no NPC/monster character-creation path
-yet. There's still no rules resolution *automatically* tied to a check
-outside the DM pass (a player's own roll doesn't apply its own damage),
+`turn.state`. The DM can also give a narrated monster/NPC a real
+mechanical presence on the fly — `create_npc` (after `get_character_schema`
+so the model authors a document that actually matches the campaign's
+schema, never a guessed shape) persists it the same way a player's own
+character upload does, so it can then be referenced by `resolve_check`,
+`apply_effect`, or `start_combat` like any other character. There's
+still no rules resolution *automatically* tied to a check outside the DM
+pass (a player's own roll doesn't apply its own damage),
 no PvP-policy or maturity-tier governance gate behind the DM tools yet
 (only campaign-scoping is enforced today — a documented gap, not a
 silent omission), no human review step on imported characters (that

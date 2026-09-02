@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -18,14 +19,18 @@ import (
 )
 
 // dmTools returns the llm.Tool definitions offered to the DM model
-// (design doc §8) — today, exactly the System Engine's own three RPCs
-// already wired to player-facing dispatch (resolveCheck/
-// applyCharacterEffect/sendCharacterState), reused here as tool
-// implementations rather than duplicated. Design doc §8 also names rules/
-// SRD lookup, procedural generation, and campaign-notes retrieval as
-// tool categories — none of those exist in this codebase (no RAG index,
-// no procgen tables, no SRD lookup), so they're not stubbed out
-// speculatively; only real, working tools are offered.
+// (design doc §8) — the System Engine RPCs already wired to
+// player-facing dispatch (resolveCheck/applyCharacterEffect/
+// sendCharacterState), reused here as tool implementations rather than
+// duplicated, plus get_character_schema/create_npc (dmCreateNPC) so the
+// DM can give a narrated monster/NPC a real mechanical record instead of
+// inventing a character_id no other tool can look up — found necessary
+// via live testing of start_combat before this existed (see
+// turn_order.go's doc comment history / master/README.md). Design doc §8
+// also names rules/SRD lookup, procedural generation, and campaign-notes
+// retrieval as tool categories — none of those exist in this codebase
+// (no RAG index, no procgen tables, no SRD lookup), so they're not
+// stubbed out speculatively; only real, working tools are offered.
 func dmTools() []llm.Tool {
 	return []llm.Tool{
 		{
@@ -92,6 +97,22 @@ func dmTools() []llm.Tool {
 			Description: "End structured turn order — call this once a fight is over (e.g. one side is defeated, flees, or negotiates).",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
+		{
+			Name:        "get_character_schema",
+			Description: "Get the JSON Schema this campaign's character data must conform to. Call this before create_npc if you don't already know the schema's shape — never guess field names.",
+			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
+		},
+		{
+			Name:        "create_npc",
+			Description: "Create a real character record for a monster or NPC you've narrated, from a full character JSON document matching get_character_schema's schema. Call this before referencing that monster/NPC in any other tool (resolve_check, apply_effect, start_combat, get_character_status) — those only work on characters that already exist, and inventing an ID for one that doesn't will always fail. Returns the new character's real ID; use that exact ID afterward, never the name you gave it narratively.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_json"],
+				"properties": {
+					"character_json": {"type": "string", "description": "The full character document as a JSON string, matching get_character_schema's schema exactly."}
+				}
+			}`),
+		},
 	}
 }
 
@@ -134,6 +155,10 @@ func (s *Server) callDMTool(ctx context.Context, campaignID string, call llm.Too
 		return s.dmAdvanceTurn(ctx, campaignID)
 	case "end_combat":
 		return s.dmEndCombat(ctx, campaignID)
+	case "get_character_schema":
+		return s.dmGetCharacterSchema(ctx)
+	case "create_npc":
+		return s.dmCreateNPC(ctx, campaignID, call.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool %q", call.Name), false, "unknown_tool"
 	}
@@ -386,4 +411,114 @@ func (s *Server) dmEndCombat(ctx context.Context, campaignID string) (string, bo
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
 	}
 	return string(payload), true, ""
+}
+
+// dmGetCharacterSchema mirrors sendCharacterSchema (the client-facing
+// character.schema_request handler) as a DM tool, so the model can learn
+// the shape create_npc's character_json must match instead of guessing
+// field names — CLAUDE.md's "gates over prompting" cuts both ways here:
+// Master never assumes the schema shape either (it stays engine-agnostic
+// by forwarding whatever the engine reports), so the model has to ask.
+func (s *Server) dmGetCharacterSchema(ctx context.Context) (string, bool, string) {
+	resp, err := s.systemEngine.GetCharacterSchema(ctx, &systemenginepb.GetCharacterSchemaRequest{})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"schema_version": resp.SchemaVersion,
+		"json_schema":    json.RawMessage(resp.JsonSchema),
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmCreateNPC gives a narrated monster/NPC a real store.Character record
+// — the same FromJson + persist path character.upload uses for a
+// player's own upload (see importCharacter in server.go), except OwnerID
+// is masterSenderID rather than a player's sender_id, so ownedCharacter's
+// per-player gate (roll.check_request, character.apply_effect,
+// character.get) never matches it — only campaignCharacter's
+// campaign-scoping gate does, which is exactly right: a player shouldn't
+// be able to directly control a monster's character record, but the DM
+// tools (which all go through campaignCharacter) should. Real end-to-end
+// testing found this genuinely necessary: without it, start_combat could
+// only ever include characters a player had already uploaded, since
+// Master's own code must stay engine-agnostic (CLAUDE.md) and so cannot
+// hardcode a stock NPC JSON shape the way the web client's
+// uploadStockCharacter stopgap does for players.
+func (s *Server) dmCreateNPC(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterJSON string `json:"character_json"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if args.CharacterJSON == "" {
+		return "character_json is required", false, "invalid_arguments"
+	}
+	if s.characters == nil {
+		return "character storage is disabled", false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.FromJson(ctx, &systemenginepb.FromJsonRequest{Json: args.CharacterJSON})
+	if err != nil {
+		return fmt.Sprintf("calling system engine FromJson: %v", err), false, "engine_error"
+	}
+	if resp.Actor == nil {
+		return npcCreationFailureMessage(resp.Warnings), false, "invalid_character"
+	}
+	for _, w := range resp.Warnings {
+		if w.Severity == "error" {
+			return npcCreationFailureMessage(resp.Warnings), false, "invalid_character"
+		}
+	}
+
+	characterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling parsed character data: %v", err), false, "internal_error"
+	}
+	characterID, err := newCharacterID()
+	if err != nil {
+		return fmt.Sprintf("generating character id: %v", err), false, "internal_error"
+	}
+	now := time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, store.Character{
+		ID:            characterID,
+		CampaignID:    campaignID,
+		OwnerID:       masterSenderID,
+		SchemaVersion: resp.Actor.SchemaVersion,
+		Status:        store.CharacterStatusPendingReview,
+		CharacterData: characterData,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		return fmt.Sprintf("saving character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"character_id":  characterID,
+		"warning_count": len(resp.Warnings),
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// npcCreationFailureMessage summarizes FromJson's validation warnings
+// into readable text for the model to act on (e.g. fix a field and
+// retry) — used both when FromJson couldn't parse an Actor at all and
+// when it did but flagged an "error"-severity warning (design doc §9.4:
+// "error" means the character shouldn't be importable as-is).
+func npcCreationFailureMessage(warnings []*systemenginepb.ValidationWarning) string {
+	if len(warnings) == 0 {
+		return "character_json could not be parsed by the system engine"
+	}
+	parts := make([]string, len(warnings))
+	for i, w := range warnings {
+		parts[i] = fmt.Sprintf("%s: %s (%s)", w.FieldPath, w.Message, w.Severity)
+	}
+	return "character_json has validation problems: " + strings.Join(parts, "; ")
 }

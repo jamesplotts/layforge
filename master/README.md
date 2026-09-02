@@ -103,16 +103,34 @@ automatically once nobody active is left. Every state change broadcasts
 `turn.state`. In-memory only, scoped like `session.Hub`'s connection
 registry — a Master restart mid-combat loses it. **A real limitation
 found via live testing, not a hypothetical:** every `character_id` passed
-to `start_combat` must be a real `store.Character` — there's no NPC/
-monster character-creation path yet, so a DM narrating an improvised
-monster has no real ID to give it and structured combat can't include
-that monster; the system prompt now tells the model to narrate without
-calling `start_combat` rather than invent an ID, since Master will
-(correctly) reject one either way. Also found live: an LLM occasionally
-emits a failed tool-call attempt as plain narration text instead of
-populating its structured tool-call field — `looksLikeMalformedToolCall`
-in `dm_slow_pass.go` catches the common shapes and drops that turn's
-narration rather than broadcasting the artifact to the table.
+to `start_combat` must be a real `store.Character`. That gap is now
+closed: two more DM tools, `get_character_schema` and `create_npc` (see
+`dmCreateNPC` in `dm_tools.go`), let the model give a narrated monster/
+NPC a real character record — `create_npc` runs the exact same
+`FromJson` + persist path `character.upload` uses for a player's own
+upload, except the record's `OwnerID` is `masterSenderID` rather than a
+player's `sender_id`, so `ownedCharacter`'s per-player gate never
+matches it (a player can't directly control a monster) while
+`campaignCharacter`'s campaign-scoping gate (which every DM tool goes
+through) does. Master's own code stays engine-agnostic throughout — it
+never assembles or assumes the character JSON's shape itself (CLAUDE.md:
+"don't take a shortcut that assumes... OpenCombatEngine specifically
+inside Master code that isn't the system-engine adapter"), so the model
+has to actually ask for the schema via `get_character_schema` first and
+author `character_json` to match it, the same way a human integrator
+would. **A real limitation found via live testing:** a mid-size model's
+first-attempt JSON often doesn't validate against OpenCombatEngine's
+actual schema (e.g. an `id` field that isn't a well-formed value the
+engine's deserializer accepts) — `create_npc` correctly rejects it
+rather than silently accepting something malformed, and the system
+prompt tells the model to acknowledge the failure narratively rather
+than claim a monster/turn order exists that doesn't; it doesn't
+currently retry with a corrected document within the same slow pass.
+Also found live: an LLM occasionally emits a failed tool-call attempt as
+plain narration text instead of populating its structured tool-call
+field — `looksLikeMalformedToolCall` in `dm_slow_pass.go` catches the
+common shapes and drops that turn's narration rather than broadcasting
+the artifact to the table.
 
 Every other message category (map) and governance gates beyond
 safety.flag and DM-tool campaign-scoping are still to come — see
