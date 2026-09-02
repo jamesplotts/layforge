@@ -5,6 +5,16 @@ engine, no local game logic — renders what Master sends over the
 protocol. Plain HTML/CSS/JS, no build step, matching the protocol's own
 "devtools-readable" ethos (design doc §6).
 
+Lives under `master/` and is served by Master itself by default (see
+`../README.md`'s Running section) — plain files on disk, not embedded
+into the Go binary, specifically so a table can restyle the interface
+(swap this directory's `style.css`, fork `index.html`/`app.js`) without
+touching Go or rebuilding anything. That's a packaging/distribution
+choice, not a coupling one: this stays a normal protocol client, with no
+special access to Master beyond what any other client connecting to
+`/ws` has (design doc §4 — "third-party clients are legitimate
+first-class consumers, not an afterthought").
+
 ## Status
 
 Working: join a campaign (`system.connect` handshake), narrative
@@ -21,16 +31,35 @@ dice tray (no `roll.*`), push-to-talk voice input (no audio pipeline).
 
 ## Running
 
-Needs a Master to connect to. Either:
+From `master/`:
 
 ```
-cd ../../master && go run . -web-dir=../clients/web -llm-url=http://<ollama-host>:11434
+go run . -llm-url=http://<ollama-host>:11434
 ```
 
-then open `http://localhost:8080/`, or open `index.html` directly and
-enter Master's WebSocket URL on the join screen (e.g.
-`ws://localhost:8080/ws`) if you're running Master separately without
-`-web-dir`.
+then open `http://localhost:8080/` — Master serves this directory at `/`
+by default. To point a copy of this client at a *different* Master
+instead (e.g. a remote one, or while comparing behavior across builds),
+open `index.html` directly and enter that Master's WebSocket URL on the
+join screen (e.g. `wss://some-other-host/ws`).
+
+## Skinning
+
+Because this is served straight from disk, restyling doesn't require
+Go, a rebuild, or even a restart:
+
+- **Colors/spacing/fonts** — edit `style.css`. Everything's driven off
+  the CSS custom properties at the top of the file (`--bg`, `--accent`,
+  `--bubble-bg`, etc.) — change those first before touching individual
+  rules.
+- **Layout/markup** — edit `index.html`.
+- **Behavior** — edit `app.js`; it's plain functions and DOM calls, no
+  framework or build tooling to fight.
+
+Master doesn't cache these files beyond what `http.FileServer` does — a
+browser reload picks up the change immediately. To run a genuinely
+different skin rather than editing in place, copy this whole directory
+and point `-web-dir` at the copy instead.
 
 ## Known limitations
 

@@ -14,15 +14,18 @@ interfaces, and governance model.
 
 ## Status
 
-Pre-implementation. This repo currently holds the design document and
-project skeleton; no runnable code yet.
+Master (Go) runs the WebSocket protocol, a session/broadcast layer, SQLite
+persistence, an LLM-backed narrative-transform pipeline (fast pass only),
+and serves the V1 web client by default — see [`master/README.md`](master/README.md)
+for exactly what's implemented versus still to come. No system engine
+sidecar, campaign packs, or maturity tiers are wired up yet.
 
 ## Layout
 
 ```
 master/            Master process (Go) — session orchestration, turn-order
-                    state machine, authoritative dice, tool-use dispatch
-clients/web/       V1 chat/player client
+                    state machine, authoritative dice, tool-use dispatch,
+                    and (master/web/) the V1 chat/player client it serves
 protocol/          AsyncAPI spec for the client-facing WebSocket protocol,
                     plus the System Engine gRPC/protobuf contract
 campaign-packs/    Directory-based campaign content (markdown + YAML)

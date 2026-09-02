@@ -282,7 +282,7 @@ function onHistoryResponse(payload) {
   // earlier history on top of what's already visible shouldn't yank the
   // viewport away from wherever the reader currently is. (A real
   // implementation would preserve scroll offset around the insertion
-  // point; skipped here — see clients/web/README.md.)
+  // point; skipped here — see README.md.)
   if (wasEmpty) {
     el.log.scrollTop = el.log.scrollHeight;
   }

@@ -20,9 +20,10 @@ with `log.history_request`/`log.history_response` (design doc §10,
 `before_sequence`/`after_sequence` to page older/newer from there —
 since every message exchanged is durably logged to SQLite as it happens.
 There's now a real,
-usable client to try all of this from — see `-web-dir` below and
-[`clients/web/`](../clients/web/) — verified in an actual browser, not
-just against hand-written test clients. The generated System Engine gRPC
+usable client to try all of this from, served by Master itself by
+default — see [`web/`](web/) and the Running section below — verified in
+an actual browser, not just against hand-written test clients. The
+generated System Engine gRPC
 client/server stubs build and round-trip correctly, but nothing in
 `main.go` dials a real OpenCombatEngine sidecar yet. Every other message
 category (roll, map, character, tool), the turn-order state machine,
@@ -52,18 +53,30 @@ internal/systemenginepb/      generated gRPC/protobuf stubs for
                               protocol/system_engine.proto (gitignored;
                               regenerate with protocol/generate.sh) plus a
                               hand-written round-trip test
+web/                          the V1 web client (design doc §4) — plain
+                              HTML/CSS/JS, no build step, served by Master
+                              itself from disk (not embedded — see below)
 ```
 
 ## Running
 
 ```
-go run . -addr :8080 -db layforge.db -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b -web-dir ../clients/web
+go run . -addr :8080 -db layforge.db -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
 ```
 
-then open `http://localhost:8080/` for the [V1 web client](../clients/web/)
-(`-web-dir` is a dev convenience, off by default — see that flag's help
-text and `clients/web/README.md` for why Master serving its own client is
-not the intended production deployment shape).
+then open `http://localhost:8080/` — Master serves [`web/`](web/) at `/`
+by default (`-web-dir` defaults to a `web` directory next to the running
+binary, resolved from the executable's own path so this works regardless
+of where you launch it from; pass `-web-dir=""` to disable). It's served
+from plain files on disk rather than embedded into the binary
+specifically so a table can restyle the interface — swap `web/style.css`,
+fork `web/index.html`/`app.js` — without touching Go or rebuilding
+anything; see `web/README.md`. That does mean distributing "the compiled
+binary + its `web/` folder" together, not a single file — a completely
+normal pattern for self-hosted software, and the tradeoff that buys the
+reskinning. Serving Master's own client this way doesn't compromise the
+protocol's openness (design doc §4): any other client is equally free to
+connect to `/ws` directly, whatever Master happens to serve at `/`.
 
 `-db` defaults to `layforge.db` in the working directory — SQLite,
 zero-config, created on first run. Every message the WebSocket endpoint

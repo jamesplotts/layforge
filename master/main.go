@@ -5,6 +5,17 @@
 // LLM provider credentials, and the WebSocket endpoint Slave clients
 // connect to. See docs/design.md §3.
 //
+// By default it also serves the reference V1 web client (design doc §4)
+// from a "web" directory next to this binary — see defaultWebDir. That
+// directory is plain files on disk, not embedded into the binary, so a
+// self-hoster (or a table running their own instance) can restyle the
+// interface — swap style.css, fork index.html/app.js — without touching
+// Go at all. Serving it doesn't compromise the protocol's own openness
+// (design doc §4: "third-party clients are legitimate first-class
+// consumers"): anything Master hands out at / is just a convenience
+// default, and any other client is equally free to connect to /ws
+// directly.
+//
 // The client-handshake WebSocket endpoint, safety.flag broadcast,
 // campaign history paging, and the narrative-transform pipeline's fast
 // pass (package server) are wired up so far — session orchestration
@@ -21,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -34,7 +46,7 @@ func main() {
 	dbPath := flag.String("db", "layforge.db", "path to the SQLite event-log database (design doc §10's zero-config default); use :memory: to disable persistence across restarts")
 	llmURL := flag.String("llm-url", "", "base URL of an Ollama server for the narrative-transform pipeline (design doc §7), e.g. http://192.168.1.56:11434; leave empty to disable narrative rendering")
 	llmModel := flag.String("llm-model", "qwen3.8:27b", "Ollama model tag to use for narrative rendering; ignored if -llm-url is empty")
-	webDir := flag.String("web-dir", "", "directory to serve at / (e.g. ../clients/web when run via 'go run .' from this directory) — a dev convenience for trying the V1 web client against this Master with one command; leave empty to serve nothing there. Slave clients are otherwise independent of Master (design doc §4) and don't need to be deployed together.")
+	webDir := flag.String("web-dir", defaultWebDir(), "directory to serve at / — the reference web client (design doc §4). Defaults to a \"web\" directory next to this binary, so a self-hoster can restyle it in place (see the package doc comment). Pass a different path to point at another copy (e.g. master/web itself, when iterating on the client via 'go run .' from within master/), or an empty string to disable serving it.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -42,6 +54,21 @@ func main() {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// defaultWebDir returns the path to the reference web client that ships
+// alongside this binary: a "web" directory next to the executable
+// itself, not relative to the current working directory — so `./master`
+// serves it correctly regardless of where it's launched from, as long as
+// web/ travels with the binary. Falls back to a cwd-relative "web" if the
+// executable's own path can't be determined, which should only happen in
+// unusual environments (e.g. some minimal containers).
+func defaultWebDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "web"
+	}
+	return filepath.Join(filepath.Dir(exe), "web")
 }
 
 // run opens the event store, starts the HTTP/WebSocket listener, and
@@ -78,12 +105,14 @@ func run(addr, dbPath, llmURL, llmModel, webDir string, logger *slog.Logger) err
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {
-			// Not fatal: a missing dev-convenience directory shouldn't
-			// stop Master from serving the actual protocol endpoint.
-			logger.Warn("web-dir not found, not serving static client files", "web_dir", webDir, "error", statErr)
+			// Not fatal: Master's actual job (the protocol endpoint)
+			// doesn't depend on this — a missing/moved web/ directory
+			// just means no reference client is being served, not a
+			// broken Master.
+			logger.Warn("web client directory not found, not serving it", "web_dir", webDir, "error", statErr)
 		} else {
 			mux.Handle("/", http.FileServer(http.Dir(webDir)))
-			logger.Info("serving static client files", "web_dir", webDir)
+			logger.Info("serving web client", "web_dir", webDir)
 		}
 	}
 
