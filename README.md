@@ -14,11 +14,22 @@ interfaces, and governance model.
 
 ## Status
 
-Master (Go) runs the WebSocket protocol, a session/broadcast layer, SQLite
-persistence, an LLM-backed narrative-transform pipeline (fast pass only),
-and serves the V1 web client by default — see [`master/README.md`](master/README.md)
-for exactly what's implemented versus still to come. No system engine
-sidecar, campaign packs, or maturity tiers are wired up yet.
+Multiple players can connect to the same campaign, chat, and get real
+AI-narrated responses: the `system.connect` handshake, then Master routes
+messages between everyone connected — `safety.flag` broadcasts to the
+whole table (design doc §9.2), and `narrative.player_input` renders
+through an LLM into `narrative.player_bubble` (§7's fast pass only, no
+DM/NPC reaction pass yet). Everything exchanged is durably logged to
+SQLite, with bidirectional history paging — join and see what's recent,
+page back further for scrollback. The V1 web client is served by Master
+itself by default, straight from disk so a table can restyle it without
+touching Go or rebuilding anything (see [`master/web/README.md`](master/web/README.md)).
+The System Engine gRPC contract is fully defined and its generated Go
+client/server stubs compile and round-trip correctly, but nothing dials a
+real OpenCombatEngine sidecar yet — so there's no rules engine, dice,
+character sheets, or turn order, and no campaign packs or maturity tiers
+exist yet either. See [`master/README.md`](master/README.md) for the full
+picture, including exact roadmap gaps.
 
 ## Layout
 
