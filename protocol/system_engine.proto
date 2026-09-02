@@ -180,7 +180,10 @@ enum CharacterStatus {
 }
 
 message GetCharacterStatusRequest {
-  string actor_id = 1;
+  // actor carries character_data, same reasoning as ApplyEffectRequest:
+  // the engine holds no creature state of its own between calls, so
+  // there is nothing for a bare actor_id to look up.
+  Actor actor = 1;
 }
 
 message GetCharacterStatusResponse {
@@ -207,7 +210,13 @@ message ValidateCharacterResponse {
 }
 
 message ToJsonRequest {
-  string actor_id = 1;
+  // actor carries character_data already in the engine's own wire
+  // format (e.g. as returned by a prior ResolveCheck/ApplyEffect call);
+  // ToJson converts it to the engine's canonical JSON string form —
+  // the reverse of FromJson, and symmetric with it for the same
+  // statelessness reason: nothing is held between calls to look an
+  // actor_id up against.
+  Actor actor = 1;
 }
 
 message ToJsonResponse {
