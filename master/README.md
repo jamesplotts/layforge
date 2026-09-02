@@ -58,8 +58,16 @@ forwards the system engine's `GetCharacterSchema` (design doc §4, §6.1)
 so a client can render a schema-driven sheet without any system
 hardcoded into the UI, and `character.get` answers with a sender-owned
 character's current data plus its `GetCharacterStatus` — see
-`sendCharacterSchema`/`sendCharacterState`. Both are read-only; there's
-still no way to mutate a character (no `ApplyEffect` dispatch yet).
+`sendCharacterSchema`/`sendCharacterState`. And a character can now
+actually change: `character.apply_effect` calls the system engine's
+`ApplyEffect` for a sender-owned character, persists the resulting
+`CharacterData`, and answers privately with the fresh `character.state`
+— see `applyCharacterEffect`. `effect` is forwarded to the engine
+opaquely (an engine-defined shape, same reasoning as `roll.check_request`'s
+`check_type`), and the response is deliberately *not* broadcast to the
+campaign: who else should see an effect land is design doc §9.7
+Knowledge Scoping territory, not decided yet, so this stays as private
+as `character.get` rather than guessing at a visibility policy.
 
 Every other message category (map, tool), the turn-order state machine,
 the narrative-transform pipeline's slow pass, and governance gates beyond

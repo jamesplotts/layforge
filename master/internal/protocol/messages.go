@@ -390,3 +390,20 @@ type CharacterStatePayload struct {
 
 // CharacterStateMessage is a character.state Message.
 type CharacterStateMessage = Message[CharacterStatePayload]
+
+// CharacterApplyEffectPayload is the payload of a character.apply_effect
+// message: a player applying a mechanical effect to a character they
+// own. Effect is opaque, engine-defined JSON (design doc §6.1's
+// apply_effect()) — Master forwards it to the system engine unchanged,
+// the same way RollCheckRequestPayload's CheckType/Ability/Skill are
+// engine-defined strings rather than a closed enum; the concrete effect
+// shape (e.g. "damage" with an amount) is knowledge that lives in a
+// client's own UI for the active system engine, not in Master. See
+// protocol/asyncapi.yaml components.messages.CharacterApplyEffect.
+type CharacterApplyEffectPayload struct {
+	CharacterID string          `json:"character_id"`
+	Effect      json.RawMessage `json:"effect"`
+}
+
+// CharacterApplyEffectMessage is a character.apply_effect Message.
+type CharacterApplyEffectMessage = Message[CharacterApplyEffectPayload]

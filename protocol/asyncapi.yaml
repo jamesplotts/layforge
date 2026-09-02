@@ -98,6 +98,7 @@ channels:
           - $ref: '#/components/messages/CharacterUpload'
           - $ref: '#/components/messages/CharacterSchemaRequest'
           - $ref: '#/components/messages/CharacterGet'
+          - $ref: '#/components/messages/CharacterApplyEffect'
           - $ref: '#/components/messages/SafetyFlag'
           - $ref: '#/components/messages/SystemConnect'
           - $ref: '#/components/messages/LogHistoryRequest'
@@ -601,6 +602,42 @@ components:
                   status:
                     type: string
                     enum: [active, unconscious, dying, dead]
+
+    CharacterApplyEffect:
+      name: character.apply_effect
+      messageId: character_apply_effect
+      title: Apply a mechanical effect to a character the sender owns
+      summary: >
+        Player applies an effect (damage, healing, a condition — engine-
+        defined, docs/design.md §6.1's apply_effect()) to a character
+        they own. effect is an opaque object, not a fixed shape: Master
+        forwards it to the system engine's ApplyEffect unchanged, the
+        same way roll.check_request's check_type/ability/skill are
+        engine-defined strings rather than a closed enum — the concrete
+        effect shape a client offers (e.g. "damage" with an amount) is
+        knowledge that lives in the client's own UI for the active
+        system engine, not in Master. On success, Master replies
+        privately with character.state carrying the post-effect data —
+        not broadcast to the campaign, the same visibility Master gives
+        character.get; broader table-visible effect notifications are
+        design doc §9.7 Knowledge Scoping territory, not decided yet.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.apply_effect
+              payload:
+                type: object
+                required: [character_id, effect]
+                properties:
+                  character_id:
+                    type: string
+                  effect:
+                    type: object
+                    description: Engine-defined — see OpenCombatEngine.GrpcSidecar's ApplyEffect for the reference engine's own effect_type/amount/damage_type/name/description/duration_rounds/condition_type fields.
 
     CharacterReviewStatus:
       name: character.review_status

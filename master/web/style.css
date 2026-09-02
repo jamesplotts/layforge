@@ -303,6 +303,29 @@ button.secondary {
   padding-left: 18px;
 }
 
+.character-sheet-effect-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0 10px;
+  border-top: 1px solid var(--panel-border);
+}
+
+#effect-amount {
+  width: 64px;
+  padding: 7px 8px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.character-sheet-effect-row button {
+  padding: 7px 12px;
+  font-size: 13px;
+}
+
 .input-form {
   display: flex;
   gap: 8px;

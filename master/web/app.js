@@ -87,6 +87,9 @@ const el = {
   diceSkinSelect: document.getElementById("dice-skin-select"),
   diceTrayResult: document.getElementById("dice-tray-result"),
   characterSheetBody: document.getElementById("character-sheet-body"),
+  effectAmount: document.getElementById("effect-amount"),
+  effectDamageButton: document.getElementById("effect-damage-button"),
+  effectHealButton: document.getElementById("effect-heal-button"),
 };
 
 el.joinUrl.value = defaultWsUrl();
@@ -97,6 +100,8 @@ el.safetyFlagSend.addEventListener("click", onSafetyFlagSend);
 el.inputForm.addEventListener("submit", onInputSubmit);
 el.loadEarlierButton.addEventListener("click", onLoadEarlierClick);
 el.rollCheckButton.addEventListener("click", onRollCheckClick);
+el.effectDamageButton.addEventListener("click", () => onApplyEffectClick("damage"));
+el.effectHealButton.addEventListener("click", () => onApplyEffectClick("heal"));
 el.diceSkinSelect.addEventListener("change", () => {
   Dice.applyDiceSkin(state.dieHandle, el.diceSkinSelect.value);
   Dice.saveDiceSkin(el.diceSkinSelect.value);
@@ -472,6 +477,8 @@ function onCharacterValidationResult(msg) {
   }
   state.rollCharacterId = payload.character_id;
   el.rollCheckButton.disabled = false;
+  el.effectDamageButton.disabled = false;
+  el.effectHealButton.disabled = false;
 
   // Schema is engine-wide, not per-character — fetch it once and reuse
   // it for every character.state that comes in afterward.
@@ -509,6 +516,24 @@ function onCharacterStateResponse(msg) {
 function maybeRenderCharacterSheet() {
   if (!state.characterSchema || !state.characterData) return;
   renderCharacterSheet(el.characterSheetBody, state.characterSchema, state.characterData);
+}
+
+// onApplyEffectClick sends character.apply_effect for a "damage" or
+// "heal" effect — effectType/amount here match OpenCombatEngine's own
+// GrpcSidecar ApplyEffect switch (see that repo's
+// SystemEngineGrpcService.cs); a different system engine's client UI
+// would send whatever effect shape that engine expects instead, since
+// Master forwards this object opaquely (protocol/asyncapi.yaml
+// components.messages.CharacterApplyEffect).
+function onApplyEffectClick(effectType) {
+  if (!state.rollCharacterId) return;
+  const amount = Number(el.effectAmount.value);
+  if (!Number.isFinite(amount) || amount <= 0) return;
+
+  send({
+    ...newEnvelope("character.apply_effect"),
+    payload: { character_id: state.rollCharacterId, effect: { effectType, amount } },
+  });
 }
 
 function onRollCheckClick() {

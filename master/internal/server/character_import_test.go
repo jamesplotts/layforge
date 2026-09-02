@@ -27,10 +27,11 @@ import (
 
 // fakeSystemEngineClient is a minimal systemenginepb.SystemEngineClient
 // for testing character.upload, roll.check_request, character.
-// schema_request, and character.get dispatch without a real gRPC
-// sidecar. FromJson/ResolveCheck/GetCharacterSchema/GetCharacterStatus
-// are configurable; every other method returns an error, since nothing
-// dispatched in package server calls them yet.
+// schema_request, character.get, and character.apply_effect dispatch
+// without a real gRPC sidecar. FromJson/ResolveCheck/
+// GetCharacterSchema/GetCharacterStatus/ApplyEffect are configurable;
+// every other method returns an error, since nothing dispatched in
+// package server calls them yet.
 type fakeSystemEngineClient struct {
 	fromJsonResp *systemenginepb.FromJsonResponse
 	fromJsonErr  error
@@ -54,6 +55,12 @@ type fakeSystemEngineClient struct {
 	// GetCharacterStatus() call's request, for asserting on what Server
 	// actually sent the engine.
 	lastGetCharacterStatusRequest *systemenginepb.GetCharacterStatusRequest
+
+	applyEffectResp *systemenginepb.ApplyEffectResponse
+	applyEffectErr  error
+	// lastApplyEffectRequest captures the most recent ApplyEffect() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastApplyEffectRequest *systemenginepb.ApplyEffectRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -72,8 +79,12 @@ func (f *fakeSystemEngineClient) ResolveCheck(_ context.Context, in *systemengin
 	return f.resolveCheckResp, nil
 }
 
-func (f *fakeSystemEngineClient) ApplyEffect(context.Context, *systemenginepb.ApplyEffectRequest, ...grpc.CallOption) (*systemenginepb.ApplyEffectResponse, error) {
-	return nil, errors.New("fakeSystemEngineClient: ApplyEffect not implemented in this fake")
+func (f *fakeSystemEngineClient) ApplyEffect(_ context.Context, in *systemenginepb.ApplyEffectRequest, _ ...grpc.CallOption) (*systemenginepb.ApplyEffectResponse, error) {
+	f.lastApplyEffectRequest = in
+	if f.applyEffectErr != nil {
+		return nil, f.applyEffectErr
+	}
+	return f.applyEffectResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetCharacterSchema(context.Context, *systemenginepb.GetCharacterSchemaRequest, ...grpc.CallOption) (*systemenginepb.GetCharacterSchemaResponse, error) {

@@ -70,10 +70,19 @@
     <!-- Character sheet: rendered generically from whatever json_schema
          the active system engine's character.schema_response declares
          (design doc §4) — character-sheet.js has no D&D-specific field
-         names in it. Read-only; no write-back exists. -->
+         names in it. The sheet itself is read-only (no per-field
+         editing/write-back); the effect row below it is a separate,
+         narrower path that mutates the character via
+         character.apply_effect (design doc §6.1's apply_effect()) and
+         re-renders the sheet from the result. -->
     <details class="character-sheet" open>
       <summary>Character</summary>
       <div id="character-sheet-body" class="character-sheet-body"></div>
+      <div class="character-sheet-effect-row">
+        <input id="effect-amount" type="number" min="1" value="5" />
+        <button id="effect-damage-button" type="button" class="secondary" disabled>Take Damage</button>
+        <button id="effect-heal-button" type="button" class="secondary" disabled>Heal</button>
+      </div>
     </details>
 
     <!-- Dice tray: authoritative server roll, cosmetic client animation

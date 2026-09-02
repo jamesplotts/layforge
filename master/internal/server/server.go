@@ -22,7 +22,12 @@
 // driven sheet (§4) without any system hardcoded into the UI; and
 // character.get (see sendCharacterState), answering with a
 // sender-owned character's current data plus its GetCharacterStatus
-// (§9.3). The review/veto half of §9.4 (character.review_status,
+// (§9.3); and character.apply_effect (see applyCharacterEffect), which
+// calls the system engine's ApplyEffect for a character the sender owns,
+// persists the result, and answers privately with character.state — not
+// broadcast, since who else should see an effect land is design doc
+// §9.7 Knowledge Scoping territory, not decided yet. The review/veto
+// half of §9.4 (character.review_status,
 // pending_review -> approved/rejected) is NOT implemented: it needs a
 // privileged-operator concept this codebase doesn't have yet, and neither
 // is roll.acknowledge (no narration-sequencing pipeline exists yet to
@@ -323,6 +328,13 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.get payload: %w", err))
 		}
 		return s.sendCharacterState(ctx, conn, campaignID, envelope.SenderID, req)
+	case protocol.MessageTypeCharacterApplyEffect:
+		var req protocol.CharacterApplyEffectMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.apply_effect payload: %w", err))
+		}
+		recordEvent(ctx, s, req)
+		return s.applyCharacterEffect(ctx, conn, campaignID, envelope.SenderID, req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
@@ -493,15 +505,9 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("dice resolution unavailable: character storage is disabled"))
 	}
 
-	character, err := s.characters.GetCharacter(ctx, req.Payload.CharacterID)
+	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "roll checks for")
 	if err != nil {
-		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("looking up character: %w", err))
-	}
-	if character.CampaignID != campaignID {
-		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character does not belong to this campaign"))
-	}
-	if character.OwnerID != senderID {
-		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("you can only roll checks for your own characters"))
+		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}
 
 	characterData := &structpb.Struct{}
@@ -619,15 +625,9 @@ func (s *Server) sendCharacterState(ctx context.Context, conn *websocket.Conn, c
 		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character state unavailable: character storage is disabled"))
 	}
 
-	character, err := s.characters.GetCharacter(ctx, req.Payload.CharacterID)
+	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "view")
 	if err != nil {
-		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("looking up character: %w", err))
-	}
-	if character.CampaignID != campaignID {
-		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character does not belong to this campaign"))
-	}
-	if character.OwnerID != senderID {
-		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("you can only view your own characters"))
+		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}
 
 	characterData := &structpb.Struct{}
@@ -642,6 +642,87 @@ func (s *Server) sendCharacterState(ctx context.Context, conn *websocket.Conn, c
 			SchemaVersion: character.SchemaVersion,
 		},
 	})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("calling system engine GetCharacterStatus: %w", err))
+	}
+	status, ok := characterStatusString(statusResp.Status)
+	if !ok {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("system engine returned an unrecognized character status: %v", statusResp.Status))
+	}
+
+	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterState, protocol.CharacterStatePayload{
+		CharacterID:   character.ID,
+		SchemaVersion: character.SchemaVersion,
+		CharacterData: character.CharacterData,
+		Status:        status,
+	})
+	if err != nil {
+		return err
+	}
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		return fmt.Errorf("writing character.state: %w", err)
+	}
+	return nil
+}
+
+// applyCharacterEffect handles a character.apply_effect message: applies
+// an engine-defined effect (design doc §6.1's apply_effect()) to a
+// character the sender owns, persists the resulting state, and replies
+// privately with character.state — not broadcast to the campaign. Wider
+// table-visible effect notifications are design doc §9.7 Knowledge
+// Scoping territory, not decided yet, so this stays as private as
+// character.get rather than guessing at a broadcast policy.
+func (s *Server) applyCharacterEffect(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.CharacterApplyEffectMessage) error {
+	if s.systemEngine == nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("applying effects unavailable: no system engine configured"))
+	}
+	if s.characters == nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("applying effects unavailable: character storage is disabled"))
+	}
+
+	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "apply effects to")
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
+	}
+
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("parsing stored character data: %w", err))
+	}
+
+	effect := &structpb.Struct{}
+	if err := protojson.Unmarshal(req.Payload.Effect, effect); err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("parsing effect: %w", err))
+	}
+
+	resp, err := s.systemEngine.ApplyEffect(ctx, &systemenginepb.ApplyEffectRequest{
+		RequestId:  req.MessageID,
+		CampaignId: campaignID,
+		Actor: &systemenginepb.Actor{
+			ActorId:       character.ID,
+			CharacterData: characterData,
+			SchemaVersion: character.SchemaVersion,
+		},
+		Effect: effect,
+	})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("calling system engine ApplyEffect: %w", err))
+	}
+	if !resp.Success {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("effect could not be applied: %s", resp.Error))
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("marshaling updated character data: %w", err))
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("saving updated character: %w", err))
+	}
+
+	statusResp, err := s.systemEngine.GetCharacterStatus(ctx, &systemenginepb.GetCharacterStatusRequest{Actor: resp.Actor})
 	if err != nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("calling system engine GetCharacterStatus: %w", err))
 	}
@@ -686,6 +767,29 @@ func characterStatusString(status systemenginepb.CharacterStatus) (value string,
 	default:
 		return "", false
 	}
+}
+
+// ownedCharacter looks up characterID and verifies it belongs to
+// campaignID and is owned by senderID — the ownership gate resolveCheck,
+// sendCharacterState, and applyCharacterEffect all need (design doc
+// §9.4's OwnerID is the only ownership concept this codebase has;
+// s.characters must be non-nil, checked by each caller before this).
+// verb names the action being denied in the returned error's text (e.g.
+// "roll checks for", "view", "apply effects to"), so each caller's
+// rejection reads naturally; the returned error is meant to go straight
+// into a system.error.
+func (s *Server) ownedCharacter(ctx context.Context, campaignID, senderID, characterID, verb string) (store.Character, error) {
+	character, err := s.characters.GetCharacter(ctx, characterID)
+	if err != nil {
+		return store.Character{}, fmt.Errorf("looking up character: %w", err)
+	}
+	if character.CampaignID != campaignID {
+		return store.Character{}, errors.New("character does not belong to this campaign")
+	}
+	if character.OwnerID != senderID {
+		return store.Character{}, fmt.Errorf("you can only %s your own characters", verb)
+	}
+	return character, nil
 }
 
 // sendHistory answers a log.history_request with a page of campaign's

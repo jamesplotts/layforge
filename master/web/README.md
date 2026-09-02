@@ -43,11 +43,17 @@ rendered generically from whatever `json_schema`
 `$ref` recursively, not a hardcoded D&D field list — populated with a
 `character.get` for the sheet the client already knows it owns
 (`state.rollCharacterId`, the same character the dice tray rolls for).
+Alongside it, a small Take Damage/Heal control sends
+`character.apply_effect` (`onApplyEffectClick` in `app.js`) and
+re-renders the sheet from the response — the sheet display itself stays
+read-only (no per-field editing), this is a separate, narrower mutation
+path.
 
-Not implemented: schema-driven *write-back* (the sheet is view-only, no
-form submission), applying an effect from a check (no damage/turn
-order — Master has no `ApplyEffect` dispatch yet), push-to-talk voice
-input (no audio pipeline).
+Not implemented: schema-driven sheet *editing* (still view-only, no
+per-field form submission), effects tied automatically to a check
+result (a hit doesn't apply its own damage — the tray's Roll Check and
+the sheet's Take Damage/Heal are two independent actions today), push-
+to-talk voice input (no audio pipeline).
 
 ## Running
 

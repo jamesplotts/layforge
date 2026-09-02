@@ -38,6 +38,7 @@ const (
 	MessageTypeCharacterSchemaResponse   MessageType = "character.schema_response"
 	MessageTypeCharacterGet              MessageType = "character.get"
 	MessageTypeCharacterState            MessageType = "character.state"
+	MessageTypeCharacterApplyEffect      MessageType = "character.apply_effect"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -52,7 +53,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeCharacterUpload, MessageTypeCharacterValidationResult,
 		MessageTypeRollCheckRequest, MessageTypeRollRequest, MessageTypeRollResult,
 		MessageTypeCharacterSchemaRequest, MessageTypeCharacterSchemaResponse,
-		MessageTypeCharacterGet, MessageTypeCharacterState:
+		MessageTypeCharacterGet, MessageTypeCharacterState,
+		MessageTypeCharacterApplyEffect:
 		return true
 	default:
 		return false
