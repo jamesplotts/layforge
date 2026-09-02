@@ -152,11 +152,11 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("room passwords loaded", "path", roomPasswordsPath, "campaign_count", len(passwords))
 	}
 
-	// systemEngineClient stays nil (no rules-resolution calls possible)
-	// unless -system-engine-addr is set — nothing in Server dispatches to
-	// it yet (design doc §11 future work), so this is purely optional
-	// plumbing today, same as llmProvider/authProvider before their first
-	// callers existed.
+	// systemEngineClient stays nil (no rules-resolution or character-import
+	// calls possible) unless -system-engine-addr is set. character.upload
+	// is its one caller today (design doc §9.4's mechanical half — see
+	// package server's importCharacter); dice/rules dispatch is still
+	// design doc §11 future work.
 	var systemEngineClient systemenginepb.SystemEngineClient
 	if systemEngineAddr != "" {
 		client, closeEngine, err := systemengine.Dial(systemEngineAddr)
@@ -189,7 +189,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient).Handler())
+	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events).Handler())
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {

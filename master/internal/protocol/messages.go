@@ -192,3 +192,54 @@ type NarrativePlayerBubblePayload struct {
 
 // NarrativePlayerBubbleMessage is a narrative.player_bubble Message.
 type NarrativePlayerBubbleMessage = Message[NarrativePlayerBubblePayload]
+
+// CharacterUploadPayload is the payload of a character.upload message: a
+// player uploading a character whose JSON conforms to the active system
+// engine's schema (design doc §6.1, §9.4). See protocol/asyncapi.yaml
+// components.messages.CharacterUpload.
+type CharacterUploadPayload struct {
+	// CharacterJSON is the character's serialized data, in the shape the
+	// system engine's GetCharacterSchema publishes — opaque to Master
+	// beyond forwarding it to the system engine's FromJson.
+	CharacterJSON string `json:"character_json"`
+	// SchemaVersion is the schema_version CharacterJSON was produced
+	// against (design doc §6.1).
+	SchemaVersion string `json:"schema_version"`
+}
+
+// CharacterUploadMessage is a character.upload Message.
+type CharacterUploadMessage = Message[CharacterUploadPayload]
+
+// CharacterValidationWarning mirrors the System Engine gRPC contract's
+// ValidationWarning message field-for-field (protocol/system_engine.proto)
+// — Master forwards the engine's own mechanical-validation findings to the
+// client rather than reinterpreting them.
+type CharacterValidationWarning struct {
+	FieldPath string `json:"field_path"`
+	Message   string `json:"message"`
+	// Severity is "error" or "warning" — "error" means the character
+	// should not be importable as-is (design doc §9.4).
+	Severity string `json:"severity"`
+}
+
+// CharacterValidationResultPayload is the payload of a
+// character.validation_result message: the system engine's
+// validate_character()/from_json() mechanical findings for an uploaded
+// character (design doc §9.4). See protocol/asyncapi.yaml
+// components.messages.CharacterValidationResult.
+//
+// NarrativeFlags (the DM's freeform lore-consistency pass) is always
+// omitted today — Master has no narrative-flagging pass implemented yet,
+// only the system engine's mechanical validation.
+type CharacterValidationResultPayload struct {
+	// CharacterID is Master's own identifier for the uploaded character
+	// (store.Character.ID), not anything the system engine assigns.
+	CharacterID string                       `json:"character_id"`
+	Warnings    []CharacterValidationWarning `json:"warnings"`
+	// NarrativeFlags: see the type doc comment — always omitted today.
+	NarrativeFlags []string `json:"narrative_flags,omitempty"`
+}
+
+// CharacterValidationResultMessage is a character.validation_result
+// Message.
+type CharacterValidationResultMessage = Message[CharacterValidationResultPayload]

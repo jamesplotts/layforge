@@ -21,7 +21,10 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "LogHistoryResponse_ReturnsTrue", t: MessageTypeLogHistoryResponse, want: true},
 		{name: "NarrativePlayerInput_ReturnsTrue", t: MessageTypeNarrativePlayerInput, want: true},
 		{name: "NarrativePlayerBubble_ReturnsTrue", t: MessageTypeNarrativePlayerBubble, want: true},
+		{name: "CharacterUpload_ReturnsTrue", t: MessageTypeCharacterUpload, want: true},
+		{name: "CharacterValidationResult_ReturnsTrue", t: MessageTypeCharacterValidationResult, want: true},
 		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("narrative.dm_prose"), want: false},
+		{name: "CharacterReviewStatus_ReturnsFalse_NotImplementedYet", t: MessageType("character.review_status"), want: false},
 	}
 
 	for _, tt := range tests {

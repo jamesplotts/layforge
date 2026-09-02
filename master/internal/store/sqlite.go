@@ -47,15 +47,31 @@ var initStatements = []string{
 		UNIQUE (campaign_id, message_id)
 	);`,
 	`CREATE INDEX IF NOT EXISTS idx_events_campaign_sequence ON events (campaign_id, sequence);`,
+	`CREATE TABLE IF NOT EXISTS characters (
+		character_id   TEXT PRIMARY KEY,
+		campaign_id    TEXT NOT NULL,
+		owner_id       TEXT NOT NULL,
+		schema_version TEXT NOT NULL,
+		status         TEXT NOT NULL,
+		character_data TEXT NOT NULL,
+		created_at     TEXT NOT NULL,
+		updated_at     TEXT NOT NULL
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_characters_campaign ON characters (campaign_id);`,
 }
 
 // SQLiteEventStore is the SQLite-backed EventStore — Master's
-// zero-config default persistence (design doc §10).
+// zero-config default persistence (design doc §10). It also implements
+// CharacterStore (see sqlite_character.go): both share the same
+// underlying database/connection, the same way a single "Store" backed by
+// one *sql.DB commonly satisfies several narrow repository interfaces in
+// Go, rather than each interface needing its own connection or type name.
 type SQLiteEventStore struct {
 	db *sql.DB
 }
 
 var _ EventStore = (*SQLiteEventStore)(nil)
+var _ CharacterStore = (*SQLiteEventStore)(nil)
 
 // OpenSQLiteEventStore opens (creating if necessary) a SQLite database at
 // dsn and ensures its schema exists. dsn is passed directly to the

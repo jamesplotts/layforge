@@ -26,13 +26,23 @@ an actual browser, not just against hand-written test clients. Joining a
 campaign can optionally require a password (`-room-passwords`, design doc
 §6.6's room-code auth provider) — that's also the seam a future
 Discord-OAuth-backed provider is meant to plug into, per that same
-section, without reshaping anything (see `internal/auth`). The generated
-System Engine gRPC client/server stubs build and round-trip correctly,
-but nothing in `main.go` dials a real OpenCombatEngine sidecar yet. Every
-other message category (roll, map, character, tool), the turn-order state
-machine, authoritative dice, the narrative-transform pipeline's slow
-pass, and governance gates beyond safety.flag are all still to come —
-see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+section, without reshaping anything (see `internal/auth`). Master can now
+dial a real System Engine gRPC sidecar (`-system-engine-addr`, e.g. a
+locally running OpenCombatEngine.GrpcSidecar — see `internal/systemengine`)
+and calls it for real: `character.upload` sends the uploaded JSON to the
+engine's `FromJson`, persists a successfully-parsed character (via the new
+`internal/store` `CharacterStore`), and answers with
+`character.validation_result` carrying the engine's mechanical warnings
+(design doc §9.4). That's the mechanical half of §9.4 only — the
+human-veto review panel (`pending_review` → `approved`/`rejected`) isn't
+implemented, since it needs a privileged-operator/account concept this
+codebase doesn't have yet (only room-password join auth exists); building
+it without real authorization would violate CLAUDE.md's "gates over
+prompting" rule rather than satisfy it. Every other message category
+(roll, map, tool), the turn-order state machine, authoritative dice, the
+narrative-transform pipeline's slow pass, and governance gates beyond
+safety.flag are all still to come — see
+[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 
@@ -48,13 +58,17 @@ internal/session/              connection registry (design doc §3.1's "session
                               orchestration"): which clients are connected to
                               which campaign, and broadcasting to all of them
 internal/store/                repository/DAO abstraction over storage (design
-                              doc §10): EventStore interface + SQLiteEventStore,
-                              the zero-config default (pure-Go driver, no cgo)
+                              doc §10): EventStore + CharacterStore interfaces,
+                              both implemented by SQLiteEventStore, the
+                              zero-config default (pure-Go driver, no cgo)
 internal/llm/                  LLM-provider contract (design doc §3.1) +
                               OllamaProvider, the first implementation
 internal/auth/                  join-authorization contract (design doc §6.6) +
                               RoomPasswordProvider, the first implementation —
                               the seam a future Discord OAuth provider plugs into
+internal/systemengine/        dials a System Engine gRPC sidecar (design doc
+                              §6.1) — thin wrapper around the generated client,
+                              no redundant interface on top of it
 internal/systemenginepb/      generated gRPC/protobuf stubs for
                               protocol/system_engine.proto (gitignored;
                               regenerate with protocol/generate.sh) plus a
@@ -108,6 +122,14 @@ require no password anywhere. A missing or malformed file fails Master's
 startup outright rather than silently running unprotected — a
 self-hoster who asked for this shouldn't lose it to a typo without
 noticing.
+
+`-system-engine-addr` points at a running System Engine gRPC sidecar's
+`host:port` (e.g. `localhost:5265` for OpenCombatEngine.GrpcSidecar run
+locally). Leave it unset (the default) to run without rules
+resolution/character import. grpc-go dials lazily, so Master makes one
+real `GetCharacterSchema` call at startup to actually confirm
+reachability — an unreachable or not-yet-started sidecar logs a warning
+and Master still starts normally, the same way a missing `-web-dir` does.
 
 ## Testing
 

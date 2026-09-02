@@ -22,3 +22,21 @@ func TestNewMessageID_TwoCalls_ReturnDistinctNonEmptyValues(t *testing.T) {
 		t.Errorf("newMessageID() returned the same value twice: %q", first)
 	}
 }
+
+func TestNewCharacterID_TwoCalls_ReturnDistinctNonEmptyValues(t *testing.T) {
+	first, err := newCharacterID()
+	if err != nil {
+		t.Fatalf("newCharacterID() error = %v", err)
+	}
+	if first == "" {
+		t.Fatal("newCharacterID() returned empty string")
+	}
+
+	second, err := newCharacterID()
+	if err != nil {
+		t.Fatalf("newCharacterID() error = %v", err)
+	}
+	if first == second {
+		t.Errorf("newCharacterID() returned the same value twice: %q", first)
+	}
+}

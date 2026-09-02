@@ -24,12 +24,16 @@ SQLite, with bidirectional history paging — join and see what's recent,
 page back further for scrollback. The V1 web client is served by Master
 itself by default, straight from disk so a table can restyle it without
 touching Go or rebuilding anything (see [`master/web/README.md`](master/web/README.md)).
-The System Engine gRPC contract is fully defined and its generated Go
-client/server stubs compile and round-trip correctly, but nothing dials a
-real OpenCombatEngine sidecar yet — so there's no rules engine, dice,
-character sheets, or turn order, and no campaign packs or maturity tiers
-exist yet either. See [`master/README.md`](master/README.md) for the full
-picture, including exact roadmap gaps.
+Master can now dial a real OpenCombatEngine gRPC sidecar
+(`-system-engine-addr`) and calls it for real: uploading a character
+(`character.upload`) gets mechanically parsed and validated by the engine
+and persisted, with the engine's warnings sent back
+(`character.validation_result`, design doc §9.4's mechanical half). There's
+still no dice, rules resolution mid-play, or turn order, no human review
+step on imported characters (that needs an account/operator concept that
+doesn't exist yet), and no campaign packs or maturity tiers either. See
+[`master/README.md`](master/README.md) for the full picture, including
+exact roadmap gaps.
 
 ## Layout
 

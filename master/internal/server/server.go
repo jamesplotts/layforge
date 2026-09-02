@@ -7,12 +7,17 @@
 // by a per-connection message loop that dispatches whatever the client
 // sends next. See design doc §5 for the protocol and §11 for what's
 // still to come — governance-gate enforcement and most message
-// categories (roll, map, character, tool) don't exist yet. Implemented
-// so far: safety.flag (§9.2), broadcast to every client in the campaign
-// via package session's Hub; log.history_request (§10, §11), answered
-// from package store directly to the requester; and
-// narrative.player_input (§7's fast pass only — see renderPlayerBubble),
-// rendered via package llm and broadcast as narrative.player_bubble. See
+// categories (roll, map, tool) don't exist yet. Implemented so far:
+// safety.flag (§9.2), broadcast to every client in the campaign via
+// package session's Hub; log.history_request (§10, §11), answered from
+// package store directly to the requester; narrative.player_input (§7's
+// fast pass only — see renderPlayerBubble), rendered via package llm and
+// broadcast as narrative.player_bubble; and character.upload (§9.4's
+// mechanical half only — see importCharacter), validated via package
+// systemenginepb and answered with character.validation_result. The
+// review/veto half of §9.4 (character.review_status,
+// pending_review -> approved/rejected) is NOT implemented: it needs a
+// privileged-operator concept this codebase doesn't have yet. See
 // CLAUDE.md and each dispatch case's own comments for why a given
 // message either is or isn't implemented yet.
 package server
@@ -28,6 +33,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/llm"
@@ -45,10 +51,11 @@ const masterSenderID = "master"
 
 // Server serves Master's client-facing WebSocket endpoint.
 type Server struct {
-	logger *slog.Logger
-	events store.EventStore
-	hub    *session.Hub
-	auth   auth.Provider
+	logger     *slog.Logger
+	events     store.EventStore
+	characters store.CharacterStore
+	hub        *session.Hub
+	auth       auth.Provider
 
 	llm            llm.Provider
 	narrativeModel string
@@ -69,15 +76,16 @@ type Server struct {
 // authorization at all (every campaign open to anyone, today's default);
 // design doc §6.6 — a future Discord-OAuth-backed auth.Provider is meant
 // to plug into this same field. systemEngineClient may be nil to run
-// without a System Engine sidecar configured at all (design doc §6.1) —
-// nothing in Server calls it yet (dice/rules dispatch is design doc §11
-// future work), but it is wired in now so that dispatch code has
-// somewhere real to call once it exists, rather than needing a second
-// plumbing change later.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient) *Server {
+// without a System Engine sidecar configured at all (design doc §6.1);
+// character.upload then gets a system.error explaining import is
+// unavailable, same as narrative.player_input does without an llmProvider.
+// characterStore may independently be nil to run without character
+// persistence at all, same reasoning as events being nil.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
+		characters:     characterStore,
 		hub:            session.NewHub(),
 		llm:            llmProvider,
 		narrativeModel: narrativeModel,
@@ -278,6 +286,13 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		}
 		recordEvent(ctx, s, input)
 		return s.renderPlayerBubble(ctx, conn, campaignID, input)
+	case protocol.MessageTypeCharacterUpload:
+		var upload protocol.CharacterUploadMessage
+		if err := json.Unmarshal(data, &upload); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.upload payload: %w", err))
+		}
+		recordEvent(ctx, s, upload)
+		return s.importCharacter(ctx, conn, campaignID, envelope.SenderID, upload)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
@@ -357,6 +372,84 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 		return fmt.Errorf("marshaling narrative.player_bubble: %w", err)
 	}
 	s.hub.Broadcast(campaignID, payload)
+	return nil
+}
+
+// importCharacter handles a character.upload message: it asks the System
+// Engine sidecar to parse+mechanically-validate upload's character JSON
+// (design doc §9.4), persists a successfully-parsed character as
+// store.CharacterStatusPendingReview, and replies with
+// character.validation_result carrying whatever warnings the engine
+// returned.
+//
+// It deliberately never sets a character's status to Approved — design
+// doc §9.4's veto/review panel needs a privileged-operator concept Master
+// doesn't have yet (no account/role system exists, only room-password
+// join auth), and approving on Master's own say-so instead would violate
+// CLAUDE.md's "gates over prompting" rule rather than satisfy it. A
+// character that parses successfully still lands in PendingReview, same
+// as one with mechanical warnings — this endpoint only proves the upload
+// is well-formed, not that a human has reviewed it.
+func (s *Server) importCharacter(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, upload protocol.CharacterUploadMessage) error {
+	if s.systemEngine == nil {
+		return s.sendError(ctx, conn, campaignID, upload.MessageID, errors.New("character import unavailable: no system engine configured"))
+	}
+	if s.characters == nil {
+		return s.sendError(ctx, conn, campaignID, upload.MessageID, errors.New("character import unavailable: character storage is disabled"))
+	}
+
+	resp, err := s.systemEngine.FromJson(ctx, &systemenginepb.FromJsonRequest{Json: upload.Payload.CharacterJSON})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, upload.MessageID, fmt.Errorf("calling system engine FromJson: %w", err))
+	}
+
+	warnings := make([]protocol.CharacterValidationWarning, len(resp.Warnings))
+	for i, w := range resp.Warnings {
+		warnings[i] = protocol.CharacterValidationWarning{FieldPath: w.FieldPath, Message: w.Message, Severity: w.Severity}
+	}
+
+	var characterID string
+	if resp.Actor != nil {
+		characterData, err := protojson.Marshal(resp.Actor.CharacterData)
+		if err != nil {
+			return s.sendError(ctx, conn, campaignID, upload.MessageID, fmt.Errorf("marshaling parsed character data: %w", err))
+		}
+
+		characterID, err = newCharacterID()
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		if err := s.characters.SaveCharacter(ctx, store.Character{
+			ID:            characterID,
+			CampaignID:    campaignID,
+			OwnerID:       senderID,
+			SchemaVersion: resp.Actor.SchemaVersion,
+			Status:        store.CharacterStatusPendingReview,
+			CharacterData: characterData,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}); err != nil {
+			return s.sendError(ctx, conn, campaignID, upload.MessageID, fmt.Errorf("saving character: %w", err))
+		}
+	}
+	// resp.Actor is nil when FromJson couldn't parse upload.Payload.
+	// CharacterJSON at all (see the sidecar's own FromJson: it populates
+	// only Warnings, not Actor, on a parse failure) — nothing is saved in
+	// that case, and characterID stays "" so the client can tell no
+	// character record was created.
+
+	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterValidationResult, protocol.CharacterValidationResultPayload{
+		CharacterID: characterID,
+		Warnings:    warnings,
+	})
+	if err != nil {
+		return err
+	}
+	recordEvent(ctx, s, msg)
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		return fmt.Errorf("writing character.validation_result: %w", err)
+	}
 	return nil
 }
 
