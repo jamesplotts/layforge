@@ -34,6 +34,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
+	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
 
 // masterSenderID is the sender_id Master uses on messages it originates
@@ -51,6 +52,8 @@ type Server struct {
 
 	llm            llm.Provider
 	narrativeModel string
+
+	systemEngine systemenginepb.SystemEngineClient
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -65,8 +68,13 @@ type Server struct {
 // when llmProvider is nil. authProvider may be nil to run with no join
 // authorization at all (every campaign open to anyone, today's default);
 // design doc §6.6 — a future Discord-OAuth-backed auth.Provider is meant
-// to plug into this same field.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider) *Server {
+// to plug into this same field. systemEngineClient may be nil to run
+// without a System Engine sidecar configured at all (design doc §6.1) —
+// nothing in Server calls it yet (dice/rules dispatch is design doc §11
+// future work), but it is wired in now so that dispatch code has
+// somewhere real to call once it exists, rather than needing a second
+// plumbing change later.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
@@ -74,6 +82,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		llm:            llmProvider,
 		narrativeModel: narrativeModel,
 		auth:           authProvider,
+		systemEngine:   systemEngineClient,
 	}
 }
 

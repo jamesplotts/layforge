@@ -22,6 +22,13 @@
 // plug in, per that section's reference design; nothing OAuth-specific
 // exists yet, only the interface it would satisfy.
 //
+// A System Engine gRPC sidecar (design doc §6.1, e.g. OpenCombatEngine's
+// GrpcSidecar) can optionally be configured via -system-engine-addr —
+// see package systemengine for the client and this file's connectivity
+// check at startup. Nothing in package server dispatches to it yet, since
+// dice/rules resolution is design doc §11 future work; it's wired in now
+// so that work has somewhere real to call.
+//
 // The client-handshake WebSocket endpoint, safety.flag broadcast,
 // campaign history paging, and the narrative-transform pipeline's fast
 // pass (package server) are wired up so far — session orchestration
@@ -48,6 +55,8 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/server"
 	"github.com/jamesplotts/layforge/master/internal/store"
+	"github.com/jamesplotts/layforge/master/internal/systemengine"
+	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
 
 func main() {
@@ -57,10 +66,11 @@ func main() {
 	llmModel := flag.String("llm-model", "qwen3.8:27b", "Ollama model tag to use for narrative rendering; ignored if -llm-url is empty")
 	webDir := flag.String("web-dir", defaultWebDir(), "directory to serve at / — the reference web client (design doc §4). Defaults to a \"web\" directory next to this binary, so a self-hoster can restyle it in place (see the package doc comment). Pass a different path to point at another copy (e.g. master/web itself, when iterating on the client via 'go run .' from within master/), or an empty string to disable serving it.")
 	roomPasswordsPath := flag.String("room-passwords", "", "path to a JSON file mapping campaign_id to a required join password (design doc §6.6's room-code auth provider), e.g. {\"my-campaign\": \"hunter2\"}. A campaign not listed is open to anyone. Leave empty to require no password anywhere (today's default).")
+	systemEngineAddr := flag.String("system-engine-addr", "", "host:port of a System Engine gRPC sidecar (design doc §6.1), e.g. localhost:5265 for a locally running OpenCombatEngine.GrpcSidecar. Leave empty to run without one (today's default) — nothing calls it yet, since dice/rules dispatch is still design doc §11 future work.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -103,7 +113,7 @@ func defaultWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr string, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -142,8 +152,44 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath string, logge
 		logger.Info("room passwords loaded", "path", roomPasswordsPath, "campaign_count", len(passwords))
 	}
 
+	// systemEngineClient stays nil (no rules-resolution calls possible)
+	// unless -system-engine-addr is set — nothing in Server dispatches to
+	// it yet (design doc §11 future work), so this is purely optional
+	// plumbing today, same as llmProvider/authProvider before their first
+	// callers existed.
+	var systemEngineClient systemenginepb.SystemEngineClient
+	if systemEngineAddr != "" {
+		client, closeEngine, err := systemengine.Dial(systemEngineAddr)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := closeEngine(); err != nil {
+				logger.Warn("closing system engine connection", "error", err)
+			}
+		}()
+		systemEngineClient = client
+
+		// grpc-go dials lazily (see package systemengine's Dial doc), so
+		// the Dial call above cannot by itself prove the sidecar is
+		// actually reachable — only a real RPC can. This is a genuine
+		// connectivity check, not fatal on failure: a self-hoster who
+		// configured a sidecar that isn't up yet (or is still starting)
+		// should still get a working Master, just without rules
+		// resolution, exactly like a missing -web-dir doesn't stop
+		// Master's actual job.
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		schema, err := systemEngineClient.GetCharacterSchema(checkCtx, &systemenginepb.GetCharacterSchemaRequest{})
+		cancel()
+		if err != nil {
+			logger.Warn("system engine configured but unreachable", "addr", systemEngineAddr, "error", err)
+		} else {
+			logger.Info("system engine connected", "addr", systemEngineAddr, "schema_version", schema.SchemaVersion)
+		}
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider).Handler())
+	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient).Handler())
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {
