@@ -67,6 +67,15 @@
     </button>
     <div id="log" class="log"></div>
 
+    <!-- Character sheet: rendered generically from whatever json_schema
+         the active system engine's character.schema_response declares
+         (design doc §4) — character-sheet.js has no D&D-specific field
+         names in it. Read-only; no write-back exists. -->
+    <details class="character-sheet" open>
+      <summary>Character</summary>
+      <div id="character-sheet-body" class="character-sheet-body"></div>
+    </details>
+
     <!-- Dice tray: authoritative server roll, cosmetic client animation
          (design doc §3.1, §4) — roll.check_request in, roll.request/
          roll.result out. Disabled until join's stopgap character upload

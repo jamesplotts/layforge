@@ -34,6 +34,10 @@ const (
 	MessageTypeRollCheckRequest          MessageType = "roll.check_request"
 	MessageTypeRollRequest               MessageType = "roll.request"
 	MessageTypeRollResult                MessageType = "roll.result"
+	MessageTypeCharacterSchemaRequest    MessageType = "character.schema_request"
+	MessageTypeCharacterSchemaResponse   MessageType = "character.schema_response"
+	MessageTypeCharacterGet              MessageType = "character.get"
+	MessageTypeCharacterState            MessageType = "character.state"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -46,7 +50,9 @@ func (t MessageType) IsValid() bool {
 		MessageTypeLogHistoryRequest, MessageTypeLogHistoryResponse,
 		MessageTypeNarrativePlayerInput, MessageTypeNarrativePlayerBubble,
 		MessageTypeCharacterUpload, MessageTypeCharacterValidationResult,
-		MessageTypeRollCheckRequest, MessageTypeRollRequest, MessageTypeRollResult:
+		MessageTypeRollCheckRequest, MessageTypeRollRequest, MessageTypeRollResult,
+		MessageTypeCharacterSchemaRequest, MessageTypeCharacterSchemaResponse,
+		MessageTypeCharacterGet, MessageTypeCharacterState:
 		return true
 	default:
 		return false

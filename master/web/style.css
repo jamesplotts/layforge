@@ -241,6 +241,68 @@ button.secondary {
   padding: 6px 14px;
 }
 
+/* --- Character sheet (design doc §4) --- */
+
+.character-sheet {
+  border-top: 1px solid var(--panel-border);
+  background: var(--panel);
+  padding: 4px 16px;
+}
+
+.character-sheet summary {
+  padding: 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.character-sheet-body {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-bottom: 10px;
+  font-size: 13px;
+}
+
+.sheet-object {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A nested object's own sheet-object gets an indent + left rule, so
+   structure (abilityScores containing strength/dexterity/...) is visible
+   without needing a heavier accordion/tree widget. */
+.sheet-field-value .sheet-object {
+  margin: 4px 0 4px 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--panel-border);
+}
+
+.sheet-field {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.sheet-field-label {
+  flex: 0 0 auto;
+  min-width: 120px;
+  color: var(--text-dim);
+}
+
+.sheet-field-value {
+  flex: 1 1 auto;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.sheet-array {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .input-form {
   display: flex;
   gap: 8px;

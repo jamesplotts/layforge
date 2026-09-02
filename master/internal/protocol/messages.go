@@ -329,3 +329,64 @@ type RollResultPayload struct {
 
 // RollResultMessage is a roll.result Message.
 type RollResultMessage = Message[RollResultPayload]
+
+// CharacterSchemaRequestPayload is the payload of a
+// character.schema_request message: a client asking for the active
+// system engine's character schema (design doc §4, §6.1) — schema-wide,
+// not per-character; a client typically fetches this once and reuses it
+// for every character sheet it renders. See protocol/asyncapi.yaml
+// components.messages.CharacterSchemaRequest.
+type CharacterSchemaRequestPayload struct{}
+
+// CharacterSchemaRequestMessage is a character.schema_request Message.
+type CharacterSchemaRequestMessage = Message[CharacterSchemaRequestPayload]
+
+// CharacterSchemaResponsePayload is the payload of a
+// character.schema_response message: the system engine's own
+// get_character_schema() output, forwarded unchanged. See protocol/
+// asyncapi.yaml components.messages.CharacterSchemaResponse.
+type CharacterSchemaResponsePayload struct {
+	SchemaVersion string `json:"schema_version"`
+	// JSONSchema is JSON Schema draft 2020-12, serialized as a JSON
+	// string (kept as a string, not a nested object, so the schema
+	// document's own keywords like "$ref" round-trip exactly — matches
+	// how the System Engine gRPC contract itself carries it).
+	JSONSchema string `json:"json_schema"`
+}
+
+// CharacterSchemaResponseMessage is a character.schema_response Message.
+type CharacterSchemaResponseMessage = Message[CharacterSchemaResponsePayload]
+
+// CharacterGetPayload is the payload of a character.get message: a
+// player asking for a previously-uploaded character's current state.
+// Master rejects the request (system.error) if the sender doesn't own
+// that character — store.Character.OwnerID, the same gate
+// RollCheckRequestPayload's dispatch uses. See protocol/asyncapi.yaml
+// components.messages.CharacterGet.
+type CharacterGetPayload struct {
+	CharacterID string `json:"character_id"`
+}
+
+// CharacterGetMessage is a character.get Message.
+type CharacterGetMessage = Message[CharacterGetPayload]
+
+// CharacterStatePayload is the payload of a character.state message,
+// answering character.get. CharacterData conforms to whatever schema
+// character.schema_response's JSONSchema currently describes — opaque to
+// Master beyond that, same as everywhere else character_data appears
+// (design doc §6.1). Status is the system engine's own
+// get_character_status() (design doc §9.3), not something Master infers.
+// See protocol/asyncapi.yaml components.messages.CharacterState.
+type CharacterStatePayload struct {
+	CharacterID   string          `json:"character_id"`
+	SchemaVersion string          `json:"schema_version"`
+	CharacterData json.RawMessage `json:"character_data"`
+	// Status is one of "active", "unconscious", "dying", "dead" — see
+	// protocol/system_engine.proto's CharacterStatus enum, mapped to
+	// these lowercase strings (design doc §9.3's own vocabulary) by
+	// server.characterStatusString.
+	Status string `json:"status"`
+}
+
+// CharacterStateMessage is a character.state Message.
+type CharacterStateMessage = Message[CharacterStatePayload]

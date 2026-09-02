@@ -32,10 +32,15 @@ and persisted, with the engine's warnings sent back
 player can roll an authoritative check for a character they own
 (`roll.check_request`), with the real outcome — including individual
 dice, not just a total — broadcast to the whole table as
-`roll.request`/`roll.result`. There's still no rules resolution mid-play
-beyond a bare check (no damage application, no turn order), no human
-review step on imported characters (that needs an account/operator
-concept that doesn't exist yet), and no campaign packs or maturity tiers
+`roll.request`/`roll.result`, animated on a real WebGL d20 (three.js +
+cannon-es physics) with a swappable community-skin system in the web
+client. A player can also read back their own character's current data
+and mechanical status, rendered as a read-only sheet generated directly
+from the system engine's own JSON Schema — no D&D-specific fields
+hardcoded into the UI. There's still no rules resolution mid-play beyond
+a bare check (no damage application, no turn order), no human review
+step on imported characters (that needs an account/operator concept
+that doesn't exist yet), and no campaign packs or maturity tiers
 either. See
 [`master/README.md`](master/README.md) for the full picture, including
 exact roadmap gaps.

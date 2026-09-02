@@ -37,10 +37,17 @@ character-creation UI yet, `onJoined` silently uploads a minimal stock
 character (`character.upload`) so the roll has something to roll for —
 see the stopgap note at the top of `app.js`.
 
-Not implemented — Master doesn't have anything for these to talk to yet:
-schema-driven stat/inventory/spells/actions panel (no system engine
-schema UI), applying an effect from a check (no damage/turn order),
-push-to-talk voice input (no audio pipeline).
+There's also now a read-only character sheet (`character-sheet.js`),
+rendered generically from whatever `json_schema`
+`character.schema_response` publishes — walking `properties`/`items`/
+`$ref` recursively, not a hardcoded D&D field list — populated with a
+`character.get` for the sheet the client already knows it owns
+(`state.rollCharacterId`, the same character the dice tray rolls for).
+
+Not implemented: schema-driven *write-back* (the sheet is view-only, no
+form submission), applying an effect from a check (no damage/turn
+order — Master has no `ApplyEffect` dispatch yet), push-to-talk voice
+input (no audio pipeline).
 
 ## Running
 
@@ -127,9 +134,14 @@ and point `-web-dir` at the copy instead.
 - **The stock character upload is a stopgap, not real character
   creation.** Every join silently creates a fresh minimal character
   (uniform 12s, 10 HP) with no way to customize ability scores, equipment,
-  or anything else — there's no schema-driven sheet UI yet (design doc
-  §9.4). It also means every rejoin makes Master store a *new* character
-  record rather than reusing one.
+  or anything else — there's no schema-driven character *creation* UI
+  yet (only a read-only schema-driven *viewer*, `character-sheet.js`).
+  It also means every rejoin makes Master store a *new* character record
+  rather than reusing one.
+- **The character sheet is read-only** — no write-back, no editing;
+  `character-sheet.js` only walks `properties`/`items`/`$ref`, not the
+  full JSON Schema spec (no `oneOf`/`anyOf`/`patternProperties`/etc.),
+  since nothing today's schema uses needs more than that.
 - **The d20's face numbering is synthetic**, not a claim to reproduce any
   particular physical die's layout (opposite faces on a real d20 sum to
   21; this one doesn't) — see `extractFaces`'s doc comment in `dice.js`.

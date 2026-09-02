@@ -16,8 +16,13 @@
 // only — see importCharacter), validated via package systemenginepb and
 // answered with character.validation_result; and roll.check_request (see
 // resolveCheck), which calls the system engine's ResolveCheck for a
-// character the sender owns and broadcasts roll.request/roll.result. The
-// review/veto half of §9.4 (character.review_status,
+// character the sender owns and broadcasts roll.request/roll.result;
+// character.schema_request (see sendCharacterSchema), forwarding the
+// system engine's GetCharacterSchema so a client can render a schema-
+// driven sheet (§4) without any system hardcoded into the UI; and
+// character.get (see sendCharacterState), answering with a
+// sender-owned character's current data plus its GetCharacterStatus
+// (§9.3). The review/veto half of §9.4 (character.review_status,
 // pending_review -> approved/rejected) is NOT implemented: it needs a
 // privileged-operator concept this codebase doesn't have yet, and neither
 // is roll.acknowledge (no narration-sequencing pipeline exists yet to
@@ -304,6 +309,20 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		}
 		recordEvent(ctx, s, req)
 		return s.resolveCheck(ctx, conn, campaignID, envelope.SenderID, req)
+	case protocol.MessageTypeCharacterSchemaRequest:
+		var req protocol.CharacterSchemaRequestMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.schema_request payload: %w", err))
+		}
+		// Not recorded: a schema fetch is a query, not a game event, same
+		// reasoning as log.history_request.
+		return s.sendCharacterSchema(ctx, conn, campaignID, req.MessageID)
+	case protocol.MessageTypeCharacterGet:
+		var req protocol.CharacterGetMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.get payload: %w", err))
+		}
+		return s.sendCharacterState(ctx, conn, campaignID, envelope.SenderID, req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
@@ -558,6 +577,115 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 	}
 	recordEvent(ctx, s, resultMsg)
 	return broadcastMessage(s, resultMsg)
+}
+
+// sendCharacterSchema answers a character.schema_request with the active
+// system engine's own get_character_schema() output, forwarded unchanged
+// (design doc §4, §6.1) — schema-wide, not per-character, so callers
+// fetch it once and reuse it for every character sheet they render.
+func (s *Server) sendCharacterSchema(ctx context.Context, conn *websocket.Conn, campaignID, inReplyTo string) error {
+	if s.systemEngine == nil {
+		return s.sendError(ctx, conn, campaignID, inReplyTo, errors.New("character schema unavailable: no system engine configured"))
+	}
+
+	resp, err := s.systemEngine.GetCharacterSchema(ctx, &systemenginepb.GetCharacterSchemaRequest{})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, inReplyTo, fmt.Errorf("calling system engine GetCharacterSchema: %w", err))
+	}
+
+	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterSchemaResponse, protocol.CharacterSchemaResponsePayload{
+		SchemaVersion: resp.SchemaVersion,
+		JSONSchema:    resp.JsonSchema,
+	})
+	if err != nil {
+		return err
+	}
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		return fmt.Errorf("writing character.schema_response: %w", err)
+	}
+	return nil
+}
+
+// sendCharacterState answers a character.get with a previously-uploaded
+// character's current data and mechanical status (design doc §9.3's
+// get_character_status(), not something Master infers itself). Rejects
+// the request if senderID doesn't own that character — the same
+// ownership gate resolveCheck uses, store.Character.OwnerID.
+func (s *Server) sendCharacterState(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.CharacterGetMessage) error {
+	if s.systemEngine == nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character state unavailable: no system engine configured"))
+	}
+	if s.characters == nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character state unavailable: character storage is disabled"))
+	}
+
+	character, err := s.characters.GetCharacter(ctx, req.Payload.CharacterID)
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("looking up character: %w", err))
+	}
+	if character.CampaignID != campaignID {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character does not belong to this campaign"))
+	}
+	if character.OwnerID != senderID {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("you can only view your own characters"))
+	}
+
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("parsing stored character data: %w", err))
+	}
+
+	statusResp, err := s.systemEngine.GetCharacterStatus(ctx, &systemenginepb.GetCharacterStatusRequest{
+		Actor: &systemenginepb.Actor{
+			ActorId:       character.ID,
+			CharacterData: characterData,
+			SchemaVersion: character.SchemaVersion,
+		},
+	})
+	if err != nil {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("calling system engine GetCharacterStatus: %w", err))
+	}
+	status, ok := characterStatusString(statusResp.Status)
+	if !ok {
+		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("system engine returned an unrecognized character status: %v", statusResp.Status))
+	}
+
+	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterState, protocol.CharacterStatePayload{
+		CharacterID:   character.ID,
+		SchemaVersion: character.SchemaVersion,
+		CharacterData: character.CharacterData,
+		Status:        status,
+	})
+	if err != nil {
+		return err
+	}
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		return fmt.Errorf("writing character.state: %w", err)
+	}
+	return nil
+}
+
+// characterStatusString maps the System Engine gRPC contract's
+// CharacterStatus enum to the lowercase strings protocol/asyncapi.yaml's
+// CharacterState schema declares ("active | unconscious | dying |
+// dead") — deliberately narrower than the proto enum: CHARACTER_STATUS_
+// UNSPECIFIED is the required proto3 zero value, not a real status
+// (protocol/system_engine.proto's own comment on it), so it — and any
+// future enum value this build doesn't know about — reports ok=false
+// rather than forwarding a value the wire schema doesn't declare.
+func characterStatusString(status systemenginepb.CharacterStatus) (value string, ok bool) {
+	switch status {
+	case systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE:
+		return "active", true
+	case systemenginepb.CharacterStatus_CHARACTER_STATUS_UNCONSCIOUS:
+		return "unconscious", true
+	case systemenginepb.CharacterStatus_CHARACTER_STATUS_DYING:
+		return "dying", true
+	case systemenginepb.CharacterStatus_CHARACTER_STATUS_DEAD:
+		return "dead", true
+	default:
+		return "", false
+	}
 }
 
 // sendHistory answers a log.history_request with a page of campaign's

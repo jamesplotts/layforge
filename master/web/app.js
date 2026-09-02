@@ -7,23 +7,27 @@
 // in sync with the protocol by hand in the meantime (see PROTOCOL_VERSION
 // below). Only what Master actually implements is wired up: the
 // handshake, narrative.player_input -> narrative.player_bubble,
-// safety.flag -> safety.flag_broadcast, log.history_request paging, and
-// now the dice tray: character.upload -> character.validation_result and
-// roll.check_request -> roll.request/roll.result (see dice.js for the
-// actual 3D die geometry/animation). Still no stat panel or push-to-talk
-// — Master has no audio pipeline yet, and no schema-driven character
-// sheet UI exists yet either.
+// safety.flag -> safety.flag_broadcast, log.history_request paging, the
+// dice tray (character.upload -> character.validation_result,
+// roll.check_request -> roll.request/roll.result — see dice.js for the
+// actual 3D die), and now a read-only character sheet: character.
+// schema_request/character.get, rendered generically from whatever
+// json_schema the active system engine publishes (see
+// character-sheet.js — not hardcoded to D&D's shape, design doc §4).
+// Still no push-to-talk — Master has no audio pipeline yet.
 //
-// The dice tray needs a character Master's store actually recognizes
-// (roll.check_request is gated on store.Character.OwnerID — see package
-// server's resolveCheck), but there's no real character-creation/import
-// UI yet (design doc §9.4's schema-driven sheet is unbuilt). As a
-// stopgap, onJoined silently uploads a minimal stock character built
-// from the join screen's character name — see uploadStockCharacter. This
-// is a placeholder for real character creation, not the intended
-// long-term flow.
+// The dice tray (and now the sheet) needs a character Master's store
+// actually recognizes (roll.check_request/character.get are gated on
+// store.Character.OwnerID — see package server's resolveCheck/
+// sendCharacterState), but there's no real character-creation/import UI
+// yet. As a stopgap, onJoined silently uploads a minimal stock character
+// built from the join screen's character name — see
+// uploadStockCharacter. This is a placeholder for real character
+// creation, not the intended long-term flow.
 
-"use strict";
+import { renderCharacterSheet } from "./character-sheet.js";
+
+// ES modules are always strict mode — no "use strict" directive needed.
 
 const PROTOCOL_VERSION = "0.1.0";
 
@@ -48,6 +52,13 @@ const state = {
   pendingCharacterUploadMessageId: null,
   pendingRollMessageId: null,
   dieHandle: null,
+  // --- Character sheet ---
+  // characterSchema (parsed JSON Schema) and characterData (the raw
+  // character_data object) each arrive independently (character.
+  // schema_response / character.state) — the sheet only renders once
+  // both are present, whichever order they happen to arrive in.
+  characterSchema: null,
+  characterData: null,
 };
 
 const el = {
@@ -75,6 +86,7 @@ const el = {
   rollCheckButton: document.getElementById("roll-check-button"),
   diceSkinSelect: document.getElementById("dice-skin-select"),
   diceTrayResult: document.getElementById("dice-tray-result"),
+  characterSheetBody: document.getElementById("character-sheet-body"),
 };
 
 el.joinUrl.value = defaultWsUrl();
@@ -269,6 +281,12 @@ function handleMessage(msg) {
     case "roll.result":
       onRollResult(msg);
       break;
+    case "character.schema_response":
+      onCharacterSchemaResponse(msg);
+      break;
+    case "character.state":
+      onCharacterStateResponse(msg);
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -454,6 +472,43 @@ function onCharacterValidationResult(msg) {
   }
   state.rollCharacterId = payload.character_id;
   el.rollCheckButton.disabled = false;
+
+  // Schema is engine-wide, not per-character — fetch it once and reuse
+  // it for every character.state that comes in afterward.
+  if (!state.characterSchema) {
+    send({ ...newEnvelope("character.schema_request"), payload: {} });
+  }
+  requestCharacterState();
+}
+
+function requestCharacterState() {
+  if (!state.rollCharacterId) return;
+  send({
+    ...newEnvelope("character.get"),
+    payload: { character_id: state.rollCharacterId },
+  });
+}
+
+function onCharacterSchemaResponse(msg) {
+  const payload = msg.payload || {};
+  try {
+    state.characterSchema = JSON.parse(payload.json_schema);
+  } catch (err) {
+    console.error("failed to parse character schema", err);
+    return;
+  }
+  maybeRenderCharacterSheet();
+}
+
+function onCharacterStateResponse(msg) {
+  const payload = msg.payload || {};
+  state.characterData = payload.character_data || null;
+  maybeRenderCharacterSheet();
+}
+
+function maybeRenderCharacterSheet() {
+  if (!state.characterSchema || !state.characterData) return;
+  renderCharacterSheet(el.characterSheetBody, state.characterSchema, state.characterData);
 }
 
 function onRollCheckClick() {
@@ -490,6 +545,11 @@ function onRollResult(msg) {
   });
 
   appendRollNote(el.rollAbility.value, payload);
+
+  // Nothing mutates a character from a bare ability check yet (no
+  // ApplyEffect wired to check results), but refreshing here is cheap
+  // and keeps the sheet correct once something eventually does.
+  requestCharacterState();
 }
 
 // --- Rendering ---

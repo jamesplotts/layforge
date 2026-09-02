@@ -26,10 +26,11 @@ import (
 )
 
 // fakeSystemEngineClient is a minimal systemenginepb.SystemEngineClient
-// for testing character.upload and roll.check_request dispatch without a
-// real gRPC sidecar. Only FromJson and ResolveCheck are configurable;
-// every other method returns an error, since nothing dispatched in
-// package server calls them yet.
+// for testing character.upload, roll.check_request, character.
+// schema_request, and character.get dispatch without a real gRPC
+// sidecar. FromJson/ResolveCheck/GetCharacterSchema/GetCharacterStatus
+// are configurable; every other method returns an error, since nothing
+// dispatched in package server calls them yet.
 type fakeSystemEngineClient struct {
 	fromJsonResp *systemenginepb.FromJsonResponse
 	fromJsonErr  error
@@ -43,6 +44,16 @@ type fakeSystemEngineClient struct {
 	// call's request, for asserting on what Server actually sent the
 	// engine.
 	lastResolveCheckRequest *systemenginepb.ResolveCheckRequest
+
+	getCharacterSchemaResp *systemenginepb.GetCharacterSchemaResponse
+	getCharacterSchemaErr  error
+
+	getCharacterStatusResp *systemenginepb.GetCharacterStatusResponse
+	getCharacterStatusErr  error
+	// lastGetCharacterStatusRequest captures the most recent
+	// GetCharacterStatus() call's request, for asserting on what Server
+	// actually sent the engine.
+	lastGetCharacterStatusRequest *systemenginepb.GetCharacterStatusRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -66,11 +77,18 @@ func (f *fakeSystemEngineClient) ApplyEffect(context.Context, *systemenginepb.Ap
 }
 
 func (f *fakeSystemEngineClient) GetCharacterSchema(context.Context, *systemenginepb.GetCharacterSchemaRequest, ...grpc.CallOption) (*systemenginepb.GetCharacterSchemaResponse, error) {
-	return nil, errors.New("fakeSystemEngineClient: GetCharacterSchema not implemented in this fake")
+	if f.getCharacterSchemaErr != nil {
+		return nil, f.getCharacterSchemaErr
+	}
+	return f.getCharacterSchemaResp, nil
 }
 
-func (f *fakeSystemEngineClient) GetCharacterStatus(context.Context, *systemenginepb.GetCharacterStatusRequest, ...grpc.CallOption) (*systemenginepb.GetCharacterStatusResponse, error) {
-	return nil, errors.New("fakeSystemEngineClient: GetCharacterStatus not implemented in this fake")
+func (f *fakeSystemEngineClient) GetCharacterStatus(_ context.Context, in *systemenginepb.GetCharacterStatusRequest, _ ...grpc.CallOption) (*systemenginepb.GetCharacterStatusResponse, error) {
+	f.lastGetCharacterStatusRequest = in
+	if f.getCharacterStatusErr != nil {
+		return nil, f.getCharacterStatusErr
+	}
+	return f.getCharacterStatusResp, nil
 }
 
 func (f *fakeSystemEngineClient) ValidateCharacter(context.Context, *systemenginepb.ValidateCharacterRequest, ...grpc.CallOption) (*systemenginepb.ValidateCharacterResponse, error) {

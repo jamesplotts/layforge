@@ -53,6 +53,14 @@ see `resolveCheck`. This only exists because
 actual `DiceRollResult` (individual dice, not just the total) instead of
 a bare int — see that repo's own history for why.
 
+Clients can also read a character back now: `character.schema_request`
+forwards the system engine's `GetCharacterSchema` (design doc §4, §6.1)
+so a client can render a schema-driven sheet without any system
+hardcoded into the UI, and `character.get` answers with a sender-owned
+character's current data plus its `GetCharacterStatus` — see
+`sendCharacterSchema`/`sendCharacterState`. Both are read-only; there's
+still no way to mutate a character (no `ApplyEffect` dispatch yet).
+
 Every other message category (map, tool), the turn-order state machine,
 the narrative-transform pipeline's slow pass, and governance gates beyond
 safety.flag are all still to come — see

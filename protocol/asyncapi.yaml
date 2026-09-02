@@ -77,6 +77,8 @@ channels:
           - $ref: '#/components/messages/AudioTranscription'
           - $ref: '#/components/messages/CharacterValidationResult'
           - $ref: '#/components/messages/CharacterReviewStatus'
+          - $ref: '#/components/messages/CharacterSchemaResponse'
+          - $ref: '#/components/messages/CharacterState'
           - $ref: '#/components/messages/SafetyFlagBroadcast'
           - $ref: '#/components/messages/ToolResult'
           - $ref: '#/components/messages/SystemSessionState'
@@ -94,6 +96,8 @@ channels:
           - $ref: '#/components/messages/RollCheckRequest'
           - $ref: '#/components/messages/AudioChunk'
           - $ref: '#/components/messages/CharacterUpload'
+          - $ref: '#/components/messages/CharacterSchemaRequest'
+          - $ref: '#/components/messages/CharacterGet'
           - $ref: '#/components/messages/SafetyFlag'
           - $ref: '#/components/messages/SystemConnect'
           - $ref: '#/components/messages/LogHistoryRequest'
@@ -506,6 +510,97 @@ components:
                     items:
                       type: string
                     description: Freeform notes from the DM's lore-consistency pass (e.g. lore-breaking backstory content).
+
+    CharacterSchemaRequest:
+      name: character.schema_request
+      messageId: character_schema_request
+      title: Request the active system engine's character schema
+      summary: >
+        Fetches the JSON Schema (draft 2020-12) the active system engine's
+        get_character_schema() publishes (docs/design.md §4, §6.1), so a
+        client can render a schema-driven stat/inventory/spells/actions
+        panel without any system hardcoded into the UI. Schema-wide, not
+        per-character — a client typically fetches this once and reuses
+        it for every character sheet it renders.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.schema_request
+              payload:
+                type: object
+
+    CharacterSchemaResponse:
+      name: character.schema_response
+      messageId: character_schema_response
+      title: The active system engine's character schema
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.schema_response
+              payload:
+                type: object
+                required: [schema_version, json_schema]
+                properties:
+                  schema_version:
+                    type: string
+                  json_schema:
+                    type: string
+                    description: JSON Schema draft 2020-12, serialized as a JSON string (see docs/design.md §6.1's GetCharacterSchema).
+
+    CharacterGet:
+      name: character.get
+      messageId: character_get
+      title: Request one character's current state
+      summary: Player asks for a previously-uploaded character's current data — Master rejects (system.error) if the sender doesn't own that character (design doc §9.4's OwnerID, the same gate roll.check_request uses).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.get
+              payload:
+                type: object
+                required: [character_id]
+                properties:
+                  character_id:
+                    type: string
+
+    CharacterState:
+      name: character.state
+      messageId: character_state
+      title: A character's current state
+      summary: Answers character.get — character_data conforms to whatever character.schema_response's json_schema currently describes (docs/design.md §4). status is the system engine's own get_character_status() (docs/design.md §9.3), not something Master infers.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.state
+              payload:
+                type: object
+                required: [character_id, schema_version, character_data, status]
+                properties:
+                  character_id:
+                    type: string
+                  schema_version:
+                    type: string
+                  character_data:
+                    type: object
+                  status:
+                    type: string
+                    enum: [active, unconscious, dying, dead]
 
     CharacterReviewStatus:
       name: character.review_status
