@@ -171,7 +171,7 @@ func newTestServerWithSystemEngine(t *testing.T, fakeEngine *fakeSystemEngineCli
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil, nil).Handler())
 	return ts, st
 }
 

@@ -71,6 +71,34 @@ type CampaignPolicy struct {
 	// empty string means no constraint is injected, not "family_friendly
 	// by default" — see Default.
 	MaturityTierPrompt string
+
+	// ImageMaturityTierPrompt is the equivalent constraint for
+	// generate_scene_image calls (design doc §6.3, §9.5) — passed as the
+	// maturity_tier argument to package imagegen. Design doc §6.3: an
+	// image tier "may be configured stricter than the text tier for a
+	// campaign, but never more permissive by default." Rather than
+	// building design doc §6.5's full ranked-tier comparison to enforce
+	// that (out of scope for the same reason the flat JSON policy file
+	// itself is — see JSONFileProvider's doc comment), this package
+	// enforces it by simpler default-inheritance: ImageTierPrompt (see
+	// EffectiveImageMaturityTierPrompt) falls back to MaturityTierPrompt
+	// whenever this field is left empty, so an operator gets the *same*
+	// constraint for images as for text unless they explicitly set a
+	// stricter one — never a silently more permissive one.
+	ImageMaturityTierPrompt string
+}
+
+// EffectiveImageMaturityTierPrompt returns the constraint text to pass
+// into an generate_scene_image call: p.ImageMaturityTierPrompt if the
+// operator set one, otherwise p.MaturityTierPrompt (design doc §6.3's
+// "never more permissive by default" — see ImageMaturityTierPrompt's
+// doc comment for why this default-inheritance approach, not a ranked
+// comparison, is how this package satisfies that).
+func (p CampaignPolicy) EffectiveImageMaturityTierPrompt() string {
+	if p.ImageMaturityTierPrompt != "" {
+		return p.ImageMaturityTierPrompt
+	}
+	return p.MaturityTierPrompt
 }
 
 // Default is the policy applied to a campaign a configured Provider

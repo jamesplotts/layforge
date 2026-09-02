@@ -84,6 +84,7 @@ channels:
           - $ref: '#/components/messages/SafetyFlagBroadcast'
           - $ref: '#/components/messages/ToolResult'
           - $ref: '#/components/messages/TurnState'
+          - $ref: '#/components/messages/NarrativeSceneImage'
           - $ref: '#/components/messages/SystemSessionState'
           - $ref: '#/components/messages/SystemError'
           - $ref: '#/components/messages/LogHistoryResponse'
@@ -768,10 +769,35 @@ components:
                     description: Every character_id in initiative order, fixed for the encounter once combat starts.
                   current_character_id:
                     type: string
-                    description: Whose turn it is right now — always a member of order, and always reported active by get_character_status at the time this state was computed (docs/design.md §9.3).
+                    description: Whose turn it is right now — always a member of order, and never a character get_character_status reports dead (docs/design.md §9.3). May be unconscious/dying — SRD play still gives them a turn, they roll a death saving throw instead of acting.
                   round:
                     type: integer
                     description: Full trips through order, starting at 1 once combat begins.
+
+    NarrativeSceneImage:
+      name: narrative.scene_image
+      messageId: narrative_scene_image
+      title: DM-generated scene illustration
+      summary: Broadcast when the DM generates a scene illustration (docs/design.md §6.3's generate_scene_image tool). Master neither authors nor stores the image itself — image_url points wherever the configured image-gen provider hosts it.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: narrative.scene_image
+              payload:
+                type: object
+                required: [image_url, prompt]
+                properties:
+                  image_url:
+                    type: string
+                  prompt:
+                    type: string
+                    description: The scene description actually sent to the image generator, including any maturity-tier constraint appended to it (docs/design.md §9.5) — surfaced for transparency.
+                  in_reply_to_message_id:
+                    type: string
 
     # --- system.* (docs/design.md §5) ---
 

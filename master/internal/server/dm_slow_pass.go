@@ -28,7 +28,8 @@ Rules:
 - If a resolved check, or a clearly-stated action (e.g. drinking a healing potion), should change a character's hit points, call apply_effect — never invent a hit point change.
 - Call get_character_status if you need to know a character's current condition before narrating a scene involving them.
 - Every character or creature you resolve_check, apply_effect, get_character_status, or start_combat against must already have a real character ID — never invent one for a narrated monster/NPC. If you introduce a monster/NPC that needs mechanical presence, call get_character_schema once (skip it if you already know the shape from earlier in this conversation), then create_npc with a full character JSON matching it, and use the character_id it returns from then on — never the name you gave it narratively.
-- When a fight actually breaks out (not just narratively-described danger) and every combatant has a real character ID (create one with create_npc first if needed), call start_combat — this rolls real initiative and announces turn order. Once a character's turn is narratively over, call advance_turn — never decide or narrate whose turn is next yourself, Master computes that and skips anyone unconscious, dying, or dead. If start_combat or advance_turn fails, don't narrate as if it succeeded — acknowledge the fight is happening without formal turn order instead. Call end_combat once the fight is over.
+- When a fight actually breaks out (not just narratively-described danger) and every combatant has a real character ID (create one with create_npc first if needed), call start_combat — this rolls real initiative and announces turn order. Once a character's turn is narratively over, call advance_turn — never decide or narrate whose turn is next yourself; Master computes it, skipping only the dead. An unconscious/dying character still gets a turn — Master automatically rolls their death save, you don't need to call anything for that. If start_combat or advance_turn fails, don't narrate as if it succeeded — acknowledge the fight is happening without formal turn order instead. Call end_combat once the fight is over.
+- If generate_scene_image is available and a moment is genuinely worth illustrating (a striking new location, a dramatic reveal — not every beat), call it with a complete, self-contained visual description. It's slow and costly, so use it sparingly, and never claim an image was generated if the call fails.
 - Once you have everything you need, respond with narration only — no further tool calls, no meta-commentary, no quotation marks around it.`
 
 // slowPassMaxToolIterations bounds the tool-call loop below — a
@@ -80,10 +81,14 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	// Tools require a real system engine to execute against — without
 	// one, offering them would let the model "successfully" call a tool
 	// that can only ever fail, which confuses a model more than simply
-	// not offering tools at all.
+	// not offering tools at all. generate_scene_image has no such
+	// dependency, so it's gated independently on s.imageGen.
 	var tools []llm.Tool
 	if s.systemEngine != nil && s.characters != nil {
 		tools = dmTools()
+	}
+	if s.imageGen != nil {
+		tools = append(tools, imageGenTool())
 	}
 
 	var finalText string

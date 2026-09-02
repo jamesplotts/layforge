@@ -305,6 +305,9 @@ function handleMessage(msg) {
     case "turn.state":
       appendTurnStateNote(msg.payload || {});
       break;
+    case "narrative.scene_image":
+      appendSceneImage(msg.payload || {});
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -432,6 +435,8 @@ function renderHistoryEvent(raw) {
       return toolResultNoteEl(raw.payload || {});
     case "turn.state":
       return turnStateNoteEl(raw.payload || {});
+    case "narrative.scene_image":
+      return sceneImageEl(raw.payload || {});
     case "safety.flag_broadcast":
       return safetyBannerEl(raw.payload ? raw.payload.topic : "");
     default:
@@ -708,6 +713,28 @@ function turnStateNoteEl(payload) {
 
 function appendTurnStateNote(payload) {
   el.log.appendChild(turnStateNoteEl(payload));
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+// sceneImageEl renders a narrative.scene_image broadcast (design doc
+// §6.3) as an inline image with its prompt as a caption — Master
+// neither authors nor hosts the image itself, this just displays
+// whatever URL the configured imagegen.Provider returned.
+function sceneImageEl(payload) {
+  const figure = document.createElement("figure");
+  figure.className = "scene-image";
+  const img = document.createElement("img");
+  img.src = payload.image_url || "";
+  img.alt = payload.prompt || "DM-generated scene illustration";
+  img.loading = "lazy";
+  const caption = document.createElement("figcaption");
+  caption.textContent = payload.prompt || "";
+  figure.append(img, caption);
+  return figure;
+}
+
+function appendSceneImage(payload) {
+  el.log.appendChild(sceneImageEl(payload));
   el.log.scrollTop = el.log.scrollHeight;
 }
 

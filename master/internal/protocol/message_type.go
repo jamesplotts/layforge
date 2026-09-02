@@ -42,6 +42,7 @@ const (
 	MessageTypeNarrativeDmProse          MessageType = "narrative.dm_prose"
 	MessageTypeToolResult                MessageType = "tool.result"
 	MessageTypeTurnState                 MessageType = "turn.state"
+	MessageTypeNarrativeSceneImage       MessageType = "narrative.scene_image"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -58,7 +59,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeCharacterSchemaRequest, MessageTypeCharacterSchemaResponse,
 		MessageTypeCharacterGet, MessageTypeCharacterState,
 		MessageTypeCharacterApplyEffect,
-		MessageTypeNarrativeDmProse, MessageTypeToolResult, MessageTypeTurnState:
+		MessageTypeNarrativeDmProse, MessageTypeToolResult, MessageTypeTurnState,
+		MessageTypeNarrativeSceneImage:
 		return true
 	default:
 		return false

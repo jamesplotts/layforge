@@ -82,6 +82,15 @@ rejection reason (e.g. not owning the character); there's no dedicated
 buttons aren't disabled out of turn — a player can still click them,
 they just get told no.
 
+There's also now `narrative.scene_image` rendering — a DM-generated
+illustration (design doc §6.3) appears inline in the log as a bordered
+`<figure>` with the image and its prompt as a caption. Verified live
+that the DOM/CSS render correctly (a placeholder image, since no real
+image-gen backend was available to test against — see
+`master/README.md`'s image-gen section for the "not yet verified live"
+caveat); an actually-reachable image URL (a self-hosted ComfyUI's own
+`/view` endpoint) should just load like any other `<img src>`.
+
 Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's
 own* check result (a hit doesn't apply its own damage outside the DM

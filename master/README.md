@@ -201,6 +201,28 @@ unaffected (a solo `roll.check_request` still succeeds normally when no
 integration tests exercising the real `enforceTurnOrder` code path
 end-to-end (rejection and success, for both gated message types).
 
+Image generation (design doc §6.3) is now a real pluggable provider
+too: a new `generate_scene_image` DM tool calls `imagegen.Provider`
+(`internal/imagegen`) — a self-hosted ComfyUI instance is the reference
+implementation — and broadcasts the result as `narrative.scene_image`.
+Master never constructs the ComfyUI workflow graph itself: since a
+checkpoint/sampler/node graph is entirely operator-specific, the
+operator exports their own working workflow from ComfyUI's UI ("Save
+(API Format)") with the literal token `%%LAYFORGE_PROMPT%%` in place of
+the positive-prompt node's text value, and `ComfyUIProvider` just
+substitutes the real prompt into it before submitting — the same
+"Master stays engine-agnostic" principle as the System Engine boundary,
+applied to image generation. Deliberately doesn't implement x402 payment
+negotiation — design doc §6.3 describes "existing x402/ComfyUI setup" as
+the operator's own deployment shape; a self-hoster whose endpoint sits
+behind an x402 paywall needs a transparent proxy handling payment in
+front of it, since Master performing real financial transactions
+autonomously is out of scope. **Not yet verified against a live ComfyUI
+instance** — built and tested against ComfyUI's documented REST API
+shape (`/prompt`, `/history/{id}`, `/view`) using a fake HTTP server, not
+a real one, so treat the wire-format assumptions as unconfirmed until
+someone runs it against a real install.
+
 Every other message category (map) and the rest of §9 (§9.4's review
 panel, §9.6 spotlight balance, §9.7 knowledge scoping) are still to come
 — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.

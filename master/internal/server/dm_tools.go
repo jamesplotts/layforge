@@ -16,6 +16,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/policy"
+	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
@@ -118,6 +119,25 @@ func dmTools() []llm.Tool {
 	}
 }
 
+// imageGenTool is the generate_scene_image DM tool (design doc §6.3) —
+// kept separate from dmTools() since it's offered whenever an
+// imagegen.Provider is configured (s.imageGen != nil), independent of
+// whether a System Engine is configured at all, unlike every tool
+// dmTools() returns.
+func imageGenTool() llm.Tool {
+	return llm.Tool{
+		Name:        "generate_scene_image",
+		Description: "Generate an illustration of the current scene from a text description. Call this sparingly — for a genuinely new or visually striking location/moment, not every narration beat — since each call is slow and costly. Write a complete, self-contained visual description; you won't get a second chance to add context.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"required": ["prompt"],
+			"properties": {
+				"prompt": {"type": "string", "description": "A complete, self-contained visual description of the scene to illustrate."}
+			}
+		}`),
+	}
+}
+
 // campaignCharacter looks up characterID and verifies it belongs to
 // campaignID — the only gate a DM tool call gets today. Deliberately
 // different from ownedCharacter: the DM legitimately acts on any
@@ -167,6 +187,8 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmGetCharacterSchema(ctx)
 	case "create_npc":
 		return s.dmCreateNPC(ctx, campaignID, call.Arguments)
+	case "generate_scene_image":
+		return s.dmGenerateSceneImage(ctx, campaignID, call.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool %q", call.Name), false, "unknown_tool"
 	}
@@ -550,4 +572,54 @@ func npcCreationFailureMessage(warnings []*systemenginepb.ValidationWarning) str
 		parts[i] = fmt.Sprintf("%s: %s (%s)", w.FieldPath, w.Message, w.Severity)
 	}
 	return "character_json has validation problems: " + strings.Join(parts, "; ")
+}
+
+// dmGenerateSceneImage handles the generate_scene_image DM tool (design
+// doc §6.3): calls the configured imagegen.Provider with the campaign's
+// effective image maturity-tier constraint (policy.CampaignPolicy.
+// EffectiveImageMaturityTierPrompt — never more permissive than the
+// campaign's text tier by default, see that method's doc comment), then
+// broadcasts the result as narrative.scene_image so the whole table sees
+// it, the same transparency principle as tool.result logging every DM
+// tool call.
+func (s *Server) dmGenerateSceneImage(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if strings.TrimSpace(args.Prompt) == "" {
+		return "prompt is required", false, "invalid_arguments"
+	}
+
+	pol := s.campaignPolicy(ctx, campaignID)
+	fullPrompt := args.Prompt
+	tierPrompt := pol.EffectiveImageMaturityTierPrompt()
+
+	imageURL, err := s.imageGen.GenerateSceneImage(ctx, args.Prompt, tierPrompt)
+	if err != nil {
+		return fmt.Sprintf("generating scene image: %v", err), false, "image_gen_failed"
+	}
+	if tierPrompt != "" {
+		fullPrompt = args.Prompt + "\n\nContent guidance: " + tierPrompt
+	}
+
+	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeSceneImage, protocol.NarrativeSceneImagePayload{
+		ImageURL: imageURL,
+		Prompt:   fullPrompt,
+	})
+	if err != nil {
+		return fmt.Sprintf("building narrative.scene_image message: %v", err), false, "internal_error"
+	}
+	recordEvent(ctx, s, msg)
+	if err := broadcastMessage(s, msg); err != nil {
+		return fmt.Sprintf("broadcasting narrative.scene_image: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"image_url": imageURL})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
 }

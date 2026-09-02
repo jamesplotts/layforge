@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/jamesplotts/layforge/master/internal/imagegen"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
@@ -49,7 +50,48 @@ func newTestServerWithLLMAndSystemEngine(t *testing.T, llmProvider llm.Provider,
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP, nil).Handler())
+	return ts, st
+}
+
+// newTestServerWithLLMSystemEngineAndImageGen is like
+// newTestServerWithLLMAndSystemEngine but also wires an
+// imagegen.Provider — a separate helper rather than a second variadic
+// parameter, since Go allows only one variadic parameter per function.
+func newTestServerWithLLMSystemEngineAndImageGen(t *testing.T, llmProvider llm.Provider, fakeEngine *fakeSystemEngineClient, imageGenProvider imagegen.Provider) (*httptest.Server, *store.SQLiteEventStore) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st, err := store.OpenSQLiteEventStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var systemEngineClient systemenginepb.SystemEngineClient
+	if fakeEngine != nil {
+		systemEngineClient = fakeEngine
+	}
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, nil, imageGenProvider).Handler())
+	return ts, st
+}
+
+// newTestServerWithLLMSystemEngineImageGenAndPolicy wires all four —
+// used by the one test that needs both a policy.Provider and an
+// imagegen.Provider together.
+func newTestServerWithLLMSystemEngineImageGenAndPolicy(t *testing.T, llmProvider llm.Provider, fakeEngine *fakeSystemEngineClient, imageGenProvider imagegen.Provider, policyProvider policy.Provider) (*httptest.Server, *store.SQLiteEventStore) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st, err := store.OpenSQLiteEventStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var systemEngineClient systemenginepb.SystemEngineClient
+	if fakeEngine != nil {
+		systemEngineClient = fakeEngine
+	}
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyProvider, imageGenProvider).Handler())
 	return ts, st
 }
 

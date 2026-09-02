@@ -464,10 +464,11 @@ type TurnStatePayload struct {
 	// and isn't implemented.
 	Order []string `json:"order,omitempty"`
 	// CurrentCharacterID is whose turn it is right now — always a member
-	// of Order, and always a character GetCharacterStatus reported
-	// active at the time this state was computed (design doc §9.3's
-	// skip-unconscious/dying/dead requirement enforced here, not left to
-	// the DM to remember).
+	// of Order, and never a character GetCharacterStatus reported dead
+	// (design doc §9.3's requirement enforced here, not left to the DM
+	// to remember). May be an unconscious/dying character — SRD play
+	// still gives them a turn, they roll a death saving throw instead of
+	// acting (see internal/server/turn_order.go's startTurnFor).
 	CurrentCharacterID string `json:"current_character_id,omitempty"`
 	// Round counts full trips through Order, starting at 1 once combat
 	// begins.
@@ -476,3 +477,25 @@ type TurnStatePayload struct {
 
 // TurnStateMessage is a turn.state Message.
 type TurnStateMessage = Message[TurnStatePayload]
+
+// NarrativeSceneImagePayload is the payload of a narrative.scene_image
+// message: broadcast to the whole campaign when the DM generates a
+// scene illustration (design doc §6.3's generate_scene_image tool, see
+// internal/server/dm_tools.go). Master neither authors nor stores the
+// image itself — ImageURL points at wherever the configured
+// imagegen.Provider actually hosts it (e.g. a self-hosted ComfyUI
+// instance's own /view endpoint).
+type NarrativeSceneImagePayload struct {
+	ImageURL string `json:"image_url"`
+	// Prompt is the scene description actually sent to the image
+	// generator (including any maturity-tier constraint appended to it,
+	// design doc §9.5) — surfaced for transparency, the same reasoning
+	// as tool.result logging every DM tool call regardless of outcome.
+	Prompt string `json:"prompt"`
+	// InReplyToMessageID, when set, is the narrative.player_input or
+	// narrative.dm_prose message_id that prompted this image.
+	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
+}
+
+// NarrativeSceneImageMessage is a narrative.scene_image Message.
+type NarrativeSceneImageMessage = Message[NarrativeSceneImagePayload]

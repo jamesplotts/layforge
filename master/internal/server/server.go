@@ -69,6 +69,13 @@
 //     comment. §9.2 (safety.flag) predates this and lives separately;
 //     the rest of §9 (death/turn handling is §9.3, already covered
 //     above; §9.4/§9.6/§9.7/§9.8) is still to come.
+//   - Image generation (§6.3, see package imagegen and
+//     dmGenerateSceneImage in dm_tools.go): the generate_scene_image DM
+//     tool calls a pluggable imagegen.Provider (a self-hosted ComfyUI
+//     instance is the reference implementation) and broadcasts the
+//     result as narrative.scene_image. Not offered as a DM tool at all
+//     when no provider is configured (s.imageGen == nil), same pattern
+//     as tools requiring a system engine.
 //
 // See CLAUDE.md and each dispatch case's own comments for why a given
 // message either is or isn't implemented yet.
@@ -90,6 +97,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/jamesplotts/layforge/master/internal/auth"
+	"github.com/jamesplotts/layforge/master/internal/imagegen"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
@@ -123,6 +131,13 @@ type Server struct {
 	// same nil-means-disabled pattern as auth/systemEngine above.
 	policy policy.Provider
 
+	// imageGen generates scene illustrations (design doc §6.3, see
+	// dmGenerateSceneImage in dm_tools.go). May be nil to run without
+	// image generation at all — the generate_scene_image DM tool is then
+	// simply not offered, same "nil means the feature doesn't exist for
+	// this deployment" pattern as llm/systemEngine.
+	imageGen imagegen.Provider
+
 	// turnOrders holds each campaign's live turn-order state (turn_order.go,
 	// design doc §3.1, §9.3), guarded by turnOrdersMu since it's mutated
 	// from whichever goroutine is running a DM tool call at the time —
@@ -151,8 +166,10 @@ type Server struct {
 // characterStore may independently be nil to run without character
 // persistence at all, same reasoning as events being nil. policyProvider
 // may be nil to apply policy.Default() to every campaign (design doc §9
-// — see package policy and campaignPolicy).
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider) *Server {
+// — see package policy and campaignPolicy). imageGenProvider may be nil
+// to run without image generation at all (design doc §6.3) — the
+// generate_scene_image DM tool is then simply not offered.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
@@ -163,6 +180,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		auth:           authProvider,
 		systemEngine:   systemEngineClient,
 		policy:         policyProvider,
+		imageGen:       imageGenProvider,
 		turnOrders:     make(map[string]*turnOrder),
 	}
 }

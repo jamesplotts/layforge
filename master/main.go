@@ -35,6 +35,13 @@
 // policy.Default's doc comment for why that differs from
 // -room-passwords' own unconfigured-is-open default just above.
 //
+// Image generation (design doc §6.3) can optionally be configured via
+// -comfyui-url and -comfyui-workflow, pointing at a self-hosted ComfyUI
+// instance and an API-format workflow the operator exported from it —
+// see package imagegen for why Master never constructs a workflow
+// itself. Leave both unset (today's default) to run without the
+// generate_scene_image DM tool at all.
+//
 // See package server's own doc comment for what's implemented so far by
 // protocol area, and docs/design.md §11 for the overall roadmap.
 package main
@@ -54,6 +61,7 @@ import (
 	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/auth"
+	"github.com/jamesplotts/layforge/master/internal/imagegen"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/server"
@@ -71,10 +79,12 @@ func main() {
 	roomPasswordsPath := flag.String("room-passwords", "", "path to a JSON file mapping campaign_id to a required join password (design doc §6.6's room-code auth provider), e.g. {\"my-campaign\": \"hunter2\"}. A campaign not listed is open to anyone. Leave empty to require no password anywhere (today's default).")
 	systemEngineAddr := flag.String("system-engine-addr", "", "host:port of a System Engine gRPC sidecar (design doc §6.1), e.g. localhost:5265 for a locally running OpenCombatEngine.GrpcSidecar. Leave empty to run without one (today's default) — nothing calls it yet, since dice/rules dispatch is still design doc §11 future work.")
 	campaignPoliciesPath := flag.String("campaign-policies", "", "path to a JSON file mapping campaign_id to governance settings (design doc §9.1's PvP policy, §9.5's maturity-tier prompt constraint), e.g. {\"my-campaign\": {\"pvp_policy\": \"pvp_with_consent\", \"pvp_consent\": [\"player-a\"], \"maturity_tier_prompt\": \"Keep content suitable for all ages.\"}}. pvp_policy is one of pve_only, pvp_allowed, pvp_with_consent. A campaign not listed (or this flag left empty, today's default) gets pve_only with no maturity constraint — the strictest safe default.")
+	comfyUIURL := flag.String("comfyui-url", "", "base URL of a self-hosted ComfyUI instance (design doc §6.3), e.g. http://localhost:8188. Leave empty to run without image generation (today's default) — the generate_scene_image DM tool is then simply not offered. Requires -comfyui-workflow.")
+	comfyUIWorkflowPath := flag.String("comfyui-workflow", "", "path to an API-format ComfyUI workflow JSON file (exported from ComfyUI's own UI via \"Save (API Format)\"), containing the literal token %%LAYFORGE_PROMPT%% in place of the positive-prompt node's text value. Master has no way to know your checkpoint/sampler/node graph, so it never constructs a workflow itself — see package imagegen. Required if -comfyui-url is set.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -161,7 +171,7 @@ func defaultWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath string, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -216,6 +226,29 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("campaign policies loaded", "path", campaignPoliciesPath, "campaign_count", len(policies))
 	}
 
+	// imageGenProvider stays nil (no image generation, the
+	// generate_scene_image DM tool simply isn't offered) unless
+	// -comfyui-url is set — same opt-in reasoning as every other
+	// optional dependency above. Not verified against a live ComfyUI
+	// instance as of this writing (design doc §6.3) — see package
+	// imagegen's doc comment.
+	var imageGenProvider imagegen.Provider
+	if comfyUIURL != "" {
+		if comfyUIWorkflowPath == "" {
+			return errors.New("-comfyui-url requires -comfyui-workflow (an API-format ComfyUI workflow JSON file)")
+		}
+		workflowTemplate, err := os.ReadFile(comfyUIWorkflowPath)
+		if err != nil {
+			return fmt.Errorf("reading -comfyui-workflow file: %w", err)
+		}
+		provider, err := imagegen.NewComfyUIProvider(comfyUIURL, string(workflowTemplate))
+		if err != nil {
+			return fmt.Errorf("configuring ComfyUI image generation: %w", err)
+		}
+		imageGenProvider = provider
+		logger.Info("image generation enabled", "comfyui_url", comfyUIURL, "workflow", comfyUIWorkflowPath)
+	}
+
 	// systemEngineClient stays nil (no rules-resolution or character-import
 	// calls possible) unless -system-engine-addr is set. character.upload
 	// is its one caller today (design doc §9.4's mechanical half — see
@@ -253,7 +286,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider).Handler())
+	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider).Handler())
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {

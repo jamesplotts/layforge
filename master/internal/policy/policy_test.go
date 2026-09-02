@@ -38,3 +38,34 @@ func TestDefault_IsPveOnlyWithNoMaturityConstraint(t *testing.T) {
 		t.Errorf("Default().PvPConsent = %v, want empty", got.PvPConsent)
 	}
 }
+
+func TestCampaignPolicy_EffectiveImageMaturityTierPrompt(t *testing.T) {
+	tests := []struct {
+		name string
+		p    CampaignPolicy
+		want string
+	}{
+		{
+			name: "ImageTierSet_ReturnsImageTier",
+			p:    CampaignPolicy{MaturityTierPrompt: "text tier", ImageMaturityTierPrompt: "stricter image tier"},
+			want: "stricter image tier",
+		},
+		{
+			name: "ImageTierUnset_FallsBackToTextTier",
+			p:    CampaignPolicy{MaturityTierPrompt: "text tier"},
+			want: "text tier",
+		},
+		{
+			name: "NeitherSet_ReturnsEmpty",
+			p:    CampaignPolicy{},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.EffectiveImageMaturityTierPrompt(); got != tt.want {
+				t.Errorf("EffectiveImageMaturityTierPrompt() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

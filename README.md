@@ -66,14 +66,23 @@ can now also configure a real PvP policy — `pve_only`/`pvp_allowed`/
 one player's character on another's behalf, and a maturity-tier text
 constraint injected into DM narration, both via a per-campaign JSON
 config file (`-campaign-policies`); an unconfigured campaign gets the
-strictest PvP setting by default, not an open one. There's still no
-rules resolution *automatically* tied to a check outside the DM pass (a
-player's own roll doesn't apply its own damage), no human review step on
-imported characters (that needs an account/operator concept that doesn't
-exist yet), and no full markdown campaign-pack directory tree (§6.4) —
-policy configuration today is a flat JSON file, not `campaign.md` front
-matter. See [`master/README.md`](master/README.md) for the full picture,
-including exact roadmap gaps.
+strictest PvP setting by default, not an open one. Turns are now
+mechanically tied to real rules too: landing a turn on any non-dead
+character automatically rolls a death saving throw for one that's
+unconscious/dying (a real System Engine RPC, `StartTurn`) — SRD's own
+"deterministic bookkeeping, not something the DM has to remember," now
+actually wired up rather than sitting unreachable in the engine. The DM
+can also illustrate a scene — `generate_scene_image` calls a pluggable
+image-gen provider (a self-hosted ComfyUI instance is the reference
+implementation) and broadcasts the result to the table, though this
+hasn't been verified against a real running ComfyUI instance yet. A
+player's own roll still doesn't apply its own damage outside the DM
+pass, there's no human review step on imported characters (that needs an
+account/operator concept that doesn't exist yet), and no full markdown
+campaign-pack directory tree (§6.4) — policy configuration today is a
+flat JSON file, not `campaign.md` front matter. See
+[`master/README.md`](master/README.md) for the full picture, including
+exact roadmap gaps.
 
 ## Layout
 
