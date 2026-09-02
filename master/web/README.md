@@ -43,11 +43,27 @@ rendered generically from whatever `json_schema`
 `$ref` recursively, not a hardcoded D&D field list — populated with a
 `character.get` for the sheet the client already knows it owns
 (`state.rollCharacterId`, the same character the dice tray rolls for).
-Alongside it, a small Take Damage/Heal control sends
-`character.apply_effect` (`onApplyEffectClick` in `app.js`) and
-re-renders the sheet from the response — the sheet display itself stays
-read-only (no per-field editing), this is a separate, narrower mutation
-path.
+It lives in a fixed-width sidebar alongside the chat log (`.chat-body`'s
+two-column layout in `style.css`; flip `.character-sidebar`'s side with
+one CSS edit, no markup or `app.js` change needed) rather than an
+in-flow collapsible panel, and its contents are tabbed
+(`renderCharacterSheetTabs`): every top-level schema property with real
+object/array structure of its own (ability scores, hit points, combat
+stats, inventory, ...) gets its own tab, everything else (id, name,
+team, a scalar resistances list) lands on an always-present Overview
+tab — a structural test on each property's own shape
+(`isGroupableProperty`), not a hardcoded "Stats/Abilities/Spells/
+Inventory" tab list, so a schema this has never seen (OpenCombatEngine's
+current one already includes a `spellcasting` block, which just becomes
+a "Spellcasting" tab with no code change) still tabs sensibly. Switching
+tabs is local UI state, not a re-fetch; the currently-selected tab
+survives a re-render (e.g. after Take Damage/Heal) via
+`panelsEl.dataset.activeTab`, so acting on a character doesn't bounce
+the sidebar back to Overview. Alongside it, a small Take Damage/Heal
+control sends `character.apply_effect` (`onApplyEffectClick` in
+`app.js`) and re-renders the sheet from the response — the sheet display
+itself stays read-only (no per-field editing), this is a separate,
+narrower mutation path.
 
 There's also now the DM's side of the conversation (design doc §7's
 slow pass, §8's tool-use): after a `narrative.player_bubble` renders,

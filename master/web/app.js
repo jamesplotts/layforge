@@ -25,7 +25,7 @@
 // uploadStockCharacter. This is a placeholder for real character
 // creation, not the intended long-term flow.
 
-import { renderCharacterSheet } from "./character-sheet.js";
+import { renderCharacterSheetTabs } from "./character-sheet.js";
 
 // ES modules are always strict mode — no "use strict" directive needed.
 
@@ -90,7 +90,8 @@ const el = {
   rollCheckButton: document.getElementById("roll-check-button"),
   diceSkinSelect: document.getElementById("dice-skin-select"),
   diceTrayResult: document.getElementById("dice-tray-result"),
-  characterSheetBody: document.getElementById("character-sheet-body"),
+  characterTabs: document.getElementById("character-tabs"),
+  characterTabPanels: document.getElementById("character-tab-panels"),
   effectAmount: document.getElementById("effect-amount"),
   effectDamageButton: document.getElementById("effect-damage-button"),
   effectHealButton: document.getElementById("effect-heal-button"),
@@ -566,7 +567,7 @@ function onCharacterStateResponse(msg) {
 
 function maybeRenderCharacterSheet() {
   if (!state.characterSchema || !state.characterData) return;
-  renderCharacterSheet(el.characterSheetBody, state.characterSchema, state.characterData);
+  renderCharacterSheetTabs(el.characterTabs, el.characterTabPanels, state.characterSchema, state.characterData);
 }
 
 // onApplyEffectClick sends character.apply_effect for a "damage" or

@@ -62,64 +62,79 @@
       </div>
     </div>
 
-    <button id="load-earlier-button" type="button" class="load-earlier" hidden>
-      Load earlier history
-    </button>
-    <div id="log" class="log"></div>
+    <!-- Two-column body: chat-main (scrollback, dice tray, input) on the
+         left, the character sidebar on the right. Sidebar placement is a
+         pure CSS choice (see the .chat-body/.character-sidebar rules in
+         style.css) — flip it to the other side by editing that one rule,
+         nothing in this markup or app.js assumes a side. -->
+    <div class="chat-body">
+      <div class="chat-main">
+        <button id="load-earlier-button" type="button" class="load-earlier" hidden>
+          Load earlier history
+        </button>
+        <div id="log" class="log"></div>
 
-    <!-- Character sheet: rendered generically from whatever json_schema
-         the active system engine's character.schema_response declares
-         (design doc §4) — character-sheet.js has no D&D-specific field
-         names in it. The sheet itself is read-only (no per-field
-         editing/write-back); the effect row below it is a separate,
-         narrower path that mutates the character via
-         character.apply_effect (design doc §6.1's apply_effect()) and
-         re-renders the sheet from the result. -->
-    <details class="character-sheet" open>
-      <summary>Character</summary>
-      <div id="character-sheet-body" class="character-sheet-body"></div>
-      <div class="character-sheet-effect-row">
-        <input id="effect-amount" type="number" min="1" value="5" />
-        <button id="effect-damage-button" type="button" class="secondary" disabled>Take Damage</button>
-        <button id="effect-heal-button" type="button" class="secondary" disabled>Heal</button>
-      </div>
-    </details>
-
-    <!-- Dice tray: authoritative server roll, cosmetic client animation
-         (design doc §3.1, §4) — roll.check_request in, roll.request/
-         roll.result out. Disabled until join's stopgap character upload
-         (see app.js) resolves, since a check needs a real character_id
-         Master's store recognizes, not just the display name typed at
-         join. -->
-    <div class="dice-tray">
-      <div class="dice-tray-stage" id="dice-stage"></div>
-      <div class="dice-tray-controls">
-        <div class="dice-tray-row">
-          <select id="roll-ability">
-            <option value="Strength">Strength</option>
-            <option value="Dexterity">Dexterity</option>
-            <option value="Constitution">Constitution</option>
-            <option value="Intelligence">Intelligence</option>
-            <option value="Wisdom">Wisdom</option>
-            <option value="Charisma">Charisma</option>
-          </select>
-          <button id="roll-check-button" type="button" disabled>Roll Check</button>
-          <label class="dice-skin-picker">
-            Skin
-            <!-- Options populated at load from Dice.listSkins() (see
-                 dice-skins.js) rather than hardcoded here, so adding a
-                 community skin never requires touching this file. -->
-            <select id="dice-skin-select"></select>
-          </label>
+        <!-- Dice tray: authoritative server roll, cosmetic client
+             animation (design doc §3.1, §4) — roll.check_request in,
+             roll.request/roll.result out. Disabled until join's stopgap
+             character upload (see app.js) resolves, since a check needs
+             a real character_id Master's store recognizes, not just the
+             display name typed at join. -->
+        <div class="dice-tray">
+          <div class="dice-tray-stage" id="dice-stage"></div>
+          <div class="dice-tray-controls">
+            <div class="dice-tray-row">
+              <select id="roll-ability">
+                <option value="Strength">Strength</option>
+                <option value="Dexterity">Dexterity</option>
+                <option value="Constitution">Constitution</option>
+                <option value="Intelligence">Intelligence</option>
+                <option value="Wisdom">Wisdom</option>
+                <option value="Charisma">Charisma</option>
+              </select>
+              <button id="roll-check-button" type="button" disabled>Roll Check</button>
+              <label class="dice-skin-picker">
+                Skin
+                <!-- Options populated at load from Dice.listSkins() (see
+                     dice-skins.js) rather than hardcoded here, so adding
+                     a community skin never requires touching this
+                     file. -->
+                <select id="dice-skin-select"></select>
+              </label>
+            </div>
+            <div id="dice-tray-result" class="dice-tray-result"></div>
+          </div>
         </div>
-        <div id="dice-tray-result" class="dice-tray-result"></div>
-      </div>
-    </div>
 
-    <form id="input-form" class="input-form">
-      <input id="input-text" type="text" placeholder="What do you do?" autocomplete="off" />
-      <button id="input-send" type="submit">Send</button>
-    </form>
+        <form id="input-form" class="input-form">
+          <input id="input-text" type="text" placeholder="What do you do?" autocomplete="off" />
+          <button id="input-send" type="submit">Send</button>
+        </form>
+      </div>
+
+      <!-- Character sidebar: rendered generically from whatever
+           json_schema the active system engine's character.schema_
+           response declares (design doc §4) — character-sheet.js has no
+           D&D-specific field names in it, including the tabs
+           themselves, which are derived from the schema's own top-level
+           property shapes rather than a hardcoded "Stats/Abilities/
+           Spells/Inventory" list (see renderCharacterSheetTabs's doc
+           comment). The sheet itself is read-only (no per-field
+           editing/write-back); the effect row below the tabs is a
+           separate, narrower path that mutates the character via
+           character.apply_effect (design doc §6.1's apply_effect()) and
+           re-renders the sheet from the result. -->
+      <aside class="character-sidebar">
+        <div class="character-sidebar-header">Character</div>
+        <div id="character-tabs" class="character-tabs" role="tablist"></div>
+        <div id="character-tab-panels" class="character-tab-panels"></div>
+        <div class="character-sheet-effect-row">
+          <input id="effect-amount" type="number" min="1" value="5" />
+          <button id="effect-damage-button" type="button" class="secondary" disabled>Take Damage</button>
+          <button id="effect-heal-button" type="button" class="secondary" disabled>Heal</button>
+        </div>
+      </aside>
+    </div>
   </section>
 
   <!-- Both modules: dice.js imports three.js/cannon-es as ES modules

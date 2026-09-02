@@ -95,16 +95,114 @@ function renderArray(schema, data, rootSchema) {
   return list;
 }
 
-// renderCharacterSheet replaces containerEl's contents with a read-only
-// rendering of characterData, per rootSchema's top-level "properties".
-// rootSchema is the full parsed JSON Schema document (character.schema_
-// response's json_schema, JSON.parse'd); characterData is character.
-// state's character_data.
-export function renderCharacterSheet(containerEl, rootSchema, characterData) {
-  containerEl.innerHTML = "";
+// isGroupableProperty reports whether a top-level schema property has
+// enough structure of its own to deserve its own sidebar tab — an object
+// with properties (abilityScores, hitPoints, inventory's item shape,
+// ...) or an array whose items are such an object. A property that's
+// just a scalar or an array of scalars (e.g. a string-enum resistances
+// list) stays on the Overview tab instead — pulling it out into its own
+// single-row tab would just be a worse version of Overview, not a real
+// grouping. This is a structural test only, driven entirely by shape —
+// nothing here matches on a property *name* like "spells" or
+// "inventory", so a schema this has never seen still tabs sensibly (see
+// this file's top-of-file doc comment on why that matters).
+function isGroupableProperty(schema, rootSchema) {
+  const resolved = resolveSchema(schema, rootSchema);
+  const types = schemaTypes(resolved);
+  if (types.includes("object") && resolved.properties && Object.keys(resolved.properties).length) return true;
+  if (types.includes("array") && resolved.items) {
+    const itemSchema = resolveSchema(resolved.items, rootSchema);
+    const itemTypes = schemaTypes(itemSchema);
+    if (itemTypes.includes("object") && itemSchema.properties && Object.keys(itemSchema.properties).length) return true;
+  }
+  return false;
+}
+
+// renderPropsSubset renders just propNames out of schema.properties, in
+// the same field-row style renderObject uses for the whole schema.
+// singleUnlabeled collapses the common one-property-tab case (e.g. the
+// "Ability Scores" tab showing only the abilityScores property) down to
+// the property's own value with no redundant repeated label — the tab
+// button already names it.
+function renderPropsSubset(schema, data, propNames, rootSchema, singleUnlabeled) {
+  if (singleUnlabeled && propNames.length === 1) {
+    const propName = propNames[0];
+    const value = data ? data[propName] : undefined;
+    if (value === null || value === undefined) return textNode("—");
+    return renderValue(schema.properties[propName], value, rootSchema);
+  }
+  const container = document.createElement("div");
+  container.className = "sheet-object";
+  for (const propName of propNames) {
+    const value = data ? data[propName] : undefined;
+    if (value === null || value === undefined) continue; // omit absent optional fields rather than showing a wall of "—"
+    container.appendChild(fieldRow(humanizeFieldName(propName), renderValue(schema.properties[propName], value, rootSchema)));
+  }
+  if (!container.children.length) return textNode("—");
+  return container;
+}
+
+// renderCharacterSheetTabs replaces tabsEl/panelsEl's contents with a
+// tabbed rendering of characterData, per rootSchema's top-level
+// "properties" (character.schema_response's json_schema, JSON.parse'd;
+// characterData is character.state's character_data). Every top-level
+// scalar property (id, name, team, a resistances list, ...) lands on a
+// always-present "Overview" tab; every top-level property with its own
+// object/array-of-object shape gets its own tab, labeled from the
+// property name alone — see isGroupableProperty's doc comment for why
+// that's schema-driven rather than a hardcoded "Stats/Abilities/Spells/
+// Inventory" tab list. Safe to call repeatedly (e.g. after every
+// character.state) — it re-derives the same tab set from the same
+// schema each time and keeps whichever tab was already selected,
+// tracked via panelsEl.dataset.activeTab, rather than always resetting
+// to Overview.
+export function renderCharacterSheetTabs(tabsEl, panelsEl, rootSchema, characterData) {
+  const previousActive = panelsEl.dataset.activeTab || "overview";
+  tabsEl.innerHTML = "";
+  panelsEl.innerHTML = "";
   if (!rootSchema || !rootSchema.properties) {
-    containerEl.appendChild(textNode("No character schema available."));
+    panelsEl.appendChild(textNode("No character schema available."));
     return;
   }
-  containerEl.appendChild(renderObject(rootSchema, characterData, rootSchema));
+
+  const overviewProps = [];
+  const groupedPropNames = [];
+  for (const propName of Object.keys(rootSchema.properties)) {
+    if (isGroupableProperty(rootSchema.properties[propName], rootSchema)) {
+      groupedPropNames.push(propName);
+    } else {
+      overviewProps.push(propName);
+    }
+  }
+
+  const tabs = [{ id: "overview", label: "Overview", propNames: overviewProps }];
+  for (const propName of groupedPropNames) {
+    tabs.push({ id: propName, label: humanizeFieldName(propName), propNames: [propName] });
+  }
+
+  const activeId = tabs.some((tab) => tab.id === previousActive) ? previousActive : "overview";
+  panelsEl.dataset.activeTab = activeId;
+
+  function selectTab(tabId) {
+    panelsEl.dataset.activeTab = tabId;
+    for (const button of tabsEl.children) button.classList.toggle("active", button.dataset.tabId === tabId);
+    for (const panel of panelsEl.children) panel.hidden = panel.dataset.tabId !== tabId;
+  }
+
+  for (const tab of tabs) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tab-button" + (tab.id === activeId ? " active" : "");
+    button.dataset.tabId = tab.id;
+    button.textContent = tab.label;
+    button.addEventListener("click", () => selectTab(tab.id));
+    tabsEl.appendChild(button);
+
+    const panel = document.createElement("div");
+    panel.className = "tab-panel";
+    panel.dataset.tabId = tab.id;
+    panel.hidden = tab.id !== activeId;
+    panel.appendChild(renderPropsSubset(rootSchema, characterData, tab.propNames, rootSchema, tab.id !== "overview"));
+    panelsEl.appendChild(panel);
+  }
 }

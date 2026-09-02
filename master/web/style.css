@@ -178,6 +178,27 @@ button.secondary {
   color: var(--text-dim);
 }
 
+/* .chat-body is the two-column row below the header: .chat-main (log +
+   dice tray + input) on the left, .character-sidebar on the right.
+   min-height: 0 on both the row and .chat-main is required for the
+   nested .log to actually scroll instead of growing the whole page —
+   a flex child's default min-height is auto (its content size), which
+   without this override would push .chat-body taller than the viewport
+   instead of letting .log's own overflow-y: auto kick in. */
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.chat-main {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .log {
   flex: 1;
   overflow-y: auto;
@@ -282,27 +303,62 @@ button.secondary {
   padding: 6px 14px;
 }
 
-/* --- Character sheet (design doc §4) --- */
+/* --- Character sidebar (design doc §4) ---
+   To move the sidebar to the left instead, swap the order here: put
+   .character-sidebar before .chat-main in index.html, or (without
+   touching markup) add "order: -1" to .character-sidebar below — either
+   works since .chat-body is a flex row. */
 
-.character-sheet {
-  border-top: 1px solid var(--panel-border);
+.character-sidebar {
+  flex: 0 0 300px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--panel-border);
   background: var(--panel);
-  padding: 4px 16px;
 }
 
-.character-sheet summary {
-  padding: 8px 0;
+.character-sidebar-header {
+  padding: 12px 16px 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-dim);
-  cursor: pointer;
-  user-select: none;
 }
 
-.character-sheet-body {
-  max-height: 220px;
+.character-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.tab-button {
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.tab-button:hover {
+  filter: none;
+  background: var(--bg);
+}
+
+.tab-button.active {
+  background: var(--bg);
+  border-color: var(--panel-border);
+  color: var(--accent);
+}
+
+.character-tab-panels {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding-bottom: 10px;
+  padding: 12px 16px;
   font-size: 13px;
 }
 
@@ -329,7 +385,7 @@ button.secondary {
 
 .sheet-field-label {
   flex: 0 0 auto;
-  min-width: 120px;
+  min-width: 100px;
   color: var(--text-dim);
 }
 
@@ -346,14 +402,16 @@ button.secondary {
 
 .character-sheet-effect-row {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 6px;
   align-items: center;
-  padding: 8px 0 10px;
+  padding: 10px 16px;
   border-top: 1px solid var(--panel-border);
 }
 
 #effect-amount {
-  width: 64px;
+  width: 56px;
   padding: 7px 8px;
   background: var(--bg);
   border: 1px solid var(--panel-border);
@@ -363,8 +421,9 @@ button.secondary {
 }
 
 .character-sheet-effect-row button {
-  padding: 7px 12px;
-  font-size: 13px;
+  flex: 1 1 auto;
+  padding: 7px 10px;
+  font-size: 12px;
 }
 
 .input-form {
@@ -414,4 +473,32 @@ button:disabled {
 #safety-flag-button {
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+/* Below this width there isn't room for a fixed 300px sidebar alongside
+   the log — stack the sidebar under the chat instead of squeezing it. */
+@media (max-width: 720px) {
+  .chat-body {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .chat-main {
+    flex: none;
+  }
+
+  .log {
+    flex: none;
+    max-height: 50vh;
+  }
+
+  .character-sidebar {
+    flex: none;
+    border-left: none;
+    border-top: 1px solid var(--panel-border);
+  }
+
+  .character-tab-panels {
+    max-height: 240px;
+  }
 }
