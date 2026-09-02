@@ -1,0 +1,17 @@
+{
+  "campaign_pack_id": "sable-ravine",
+  "note": "Template mutable session state, kept separate from the static content above (design doc §6.4) — a fresh copy for a new table to start from. Master does not read or write this file yet (no campaign-pack loader exists); it documents the shape a future one would maintain.",
+  "discovered_locations": [],
+  "npc_status": {
+    "captain-orlen-vashti": "alive",
+    "goblin-chief-skreel": "alive",
+    "first-digger-nix": "alive",
+    "the-hollow-flame": "active"
+  },
+  "flags": {
+    "scouts_freed": false,
+    "goblin_camp_alerted": false,
+    "kobolds_informed_party_talked": false,
+    "hollow_flame_influence_broken": false
+  }
+}
