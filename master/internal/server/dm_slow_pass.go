@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
@@ -26,6 +27,7 @@ Rules:
 - If the action's outcome is uncertain or risky, call resolve_check before narrating the outcome — never invent a success or failure result.
 - If a resolved check, or a clearly-stated action (e.g. drinking a healing potion), should change a character's hit points, call apply_effect — never invent a hit point change.
 - Call get_character_status if you need to know a character's current condition before narrating a scene involving them.
+- When a fight actually breaks out (not just narratively-described danger) AND you have a real character ID for every combatant, call start_combat — this rolls real initiative and announces turn order. Never invent a character ID for a narrated monster/NPC with no real record; if you don't have real IDs for everyone involved, just narrate the fight without calling start_combat rather than guessing an ID. Once a character's turn is narratively over, call advance_turn — never decide or narrate whose turn is next yourself, Master computes that and skips anyone unconscious, dying, or dead. If start_combat or advance_turn fails, don't narrate as if it succeeded — acknowledge the fight is happening without formal turn order instead. Call end_combat once the fight is over.
 - Once you have everything you need, respond with narration only — no further tool calls, no meta-commentary, no quotation marks around it.`
 
 // slowPassMaxToolIterations bounds the tool-call loop below — a
@@ -111,6 +113,20 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		s.logger.Warn("DM slow pass ended without final narration", "campaign_id", campaignID, "max_iterations", slowPassMaxToolIterations)
 		return
 	}
+	if looksLikeMalformedToolCall(finalText) {
+		// Observed live against a real Ollama server (qwen2.5:32b): the
+		// model occasionally emits a failed tool-call attempt as plain
+		// text — "<tool_call>\n{\"name\": ...}\n</tool_call>", sometimes
+		// with the opening tag itself garbled — instead of populating the
+		// structured ToolCalls field llm.OllamaProvider parses out of the
+		// response. Broadcasting that verbatim to the whole table would
+		// be exactly the kind of
+		// ungated model output CLAUDE.md's "gates over prompting" rule
+		// exists to prevent, so this counts as no usable narration this
+		// turn, not a best-effort display of whatever the model produced.
+		s.logger.Warn("DM slow pass produced a malformed tool-call artifact instead of narration; not broadcasting", "campaign_id", campaignID)
+		return
+	}
 
 	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeDmProse, protocol.NarrativeDmProsePayload{
 		Text:               finalText,
@@ -144,4 +160,19 @@ func (s *Server) broadcastToolResult(ctx context.Context, campaignID, toolName s
 	if err := broadcastMessage(s, msg); err != nil {
 		s.logger.Warn("failed to broadcast tool.result", "error", err, "campaign_id", campaignID)
 	}
+}
+
+// looksLikeMalformedToolCall reports whether text is a failed tool-call
+// attempt that leaked into plain narration instead of the model's
+// structured tool-call field — see runSlowPass's call site for the real
+// example this was written against. Deliberately loose (a false positive
+// just means one DM turn goes silent instead of broadcasting garbage; a
+// false negative means real narration slips through unfiltered) — there
+// is no reliable way to parse an inconsistently-malformed tag, so this
+// only needs to catch the common shapes, not every possible corruption.
+func looksLikeMalformedToolCall(text string) bool {
+	if strings.Contains(strings.ToLower(text), "tool_call") {
+		return true
+	}
+	return strings.Contains(text, `"arguments"`) && strings.Contains(text, `"name"`)
 }

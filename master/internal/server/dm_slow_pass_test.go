@@ -112,6 +112,47 @@ func TestServe_NarrativePlayerInput_SlowPass_NoSystemEngine_OmitsToolsAndBroadca
 	}
 }
 
+// TestServe_NarrativePlayerInput_SlowPass_MalformedToolCallText_DoesNotBroadcast
+// is grounded in a real failure observed against the actual LAN Ollama
+// server (qwen2.5:32b): the model sometimes emits a failed tool-call
+// attempt as plain narration text — a JSON blob wrapped in a (sometimes
+// garbled) <tool_call> tag — instead of populating the structured
+// tool-call field. Broadcasting that verbatim to the whole table would
+// violate CLAUDE.md's "gates over prompting" rule, so runSlowPass must
+// recognize it (looksLikeMalformedToolCall) and broadcast nothing rather
+// than the raw artifact.
+func TestServe_NarrativePlayerInput_SlowPass_MalformedToolCallText_DoesNotBroadcast(t *testing.T) {
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Kestrel begins a training drill."}, // fast pass
+			{Text: "rPid\n{\n\"name\": \"resolve_check\",\n\"arguments\": {\n\"character_id\": \"char-a\"\n}\n}\n</tool_call>"},
+		},
+	}
+	ts, _ := newTestServerWithLLMAndSystemEngine(t, fakeLLM, nil)
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-slow-malformed", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-slow-malformed", "player-a", "char-a", "I train."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer shortCancel()
+	if _, _, err := readEnvelopeType(shortCtx, conn); err == nil {
+		t.Fatal("expected no further message after the malformed slow-pass response, but one arrived")
+	}
+}
+
 func TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAndDmProse(t *testing.T) {
 	fakeEngine := &fakeSystemEngineClient{
 		resolveCheckResp: &systemenginepb.ResolveCheckResponse{

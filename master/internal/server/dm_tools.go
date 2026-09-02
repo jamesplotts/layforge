@@ -67,6 +67,31 @@ func dmTools() []llm.Tool {
 				}
 			}`),
 		},
+		{
+			Name:        "start_combat",
+			Description: "Start structured turn order for a fight. Rolls real initiative for each listed character (highest goes first) and announces whose turn it is. Call this once, when a fight actually begins — not for narratively-described danger with no mechanical turn order yet. Every character_id must be a real character already known to this campaign (e.g. from a player's own uploaded character) — never invent an ID for a narrated monster/NPC that has no real character record. If you don't have a real ID for every combatant, don't call this yet; just narrate the fight without structured turn order.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_ids"],
+				"properties": {
+					"character_ids": {
+						"type": "array",
+						"items": {"type": "string"},
+						"description": "Every character/creature ID taking part, in any order — initiative order is computed for you, never invent or assume it."
+					}
+				}
+			}`),
+		},
+		{
+			Name:        "advance_turn",
+			Description: "End the current character's turn and move to the next one in initiative order, automatically skipping anyone unconscious, dying, or dead. Call this once a character's turn is narratively over — never decide or narrate whose turn is next yourself.",
+			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
+		},
+		{
+			Name:        "end_combat",
+			Description: "End structured turn order — call this once a fight is over (e.g. one side is defeated, flees, or negotiates).",
+			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
+		},
 	}
 }
 
@@ -103,6 +128,12 @@ func (s *Server) callDMTool(ctx context.Context, campaignID string, call llm.Too
 		return s.dmApplyEffect(ctx, campaignID, call.Arguments)
 	case "get_character_status":
 		return s.dmGetCharacterStatus(ctx, campaignID, call.Arguments)
+	case "start_combat":
+		return s.dmStartCombat(ctx, campaignID, call.Arguments)
+	case "advance_turn":
+		return s.dmAdvanceTurn(ctx, campaignID)
+	case "end_combat":
+		return s.dmEndCombat(ctx, campaignID)
 	default:
 		return fmt.Sprintf("unknown tool %q", call.Name), false, "unknown_tool"
 	}
@@ -302,4 +333,57 @@ func (s *Server) characterStatusAfter(ctx context.Context, actor *systemenginepb
 		return "unknown", fmt.Errorf("system engine returned an unrecognized character status: %v", statusResp.Status)
 	}
 	return status, nil
+}
+
+// dmStartCombat, dmAdvanceTurn, and dmEndCombat are thin argument-
+// unmarshaling wrappers around turn_order.go's startCombat/advanceTurn/
+// endCombat — the actual turn-order bookkeeping lives there, not here,
+// same split as dmResolveCheck delegating the roll itself to the system
+// engine. A single reason code per tool ("start_combat_failed", etc.) is
+// coarser than resolve_check's ("character_not_found" vs "engine_error"
+// vs ...) — the underlying error's text still reaches the model as the
+// tool result content either way, so nothing informative is lost, just
+// the machine-readable code's granularity.
+
+func (s *Server) dmStartCombat(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterIDs []string `json:"character_ids"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	state, err := s.startCombat(ctx, campaignID, args.CharacterIDs)
+	if err != nil {
+		return err.Error(), false, "start_combat_failed"
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+func (s *Server) dmAdvanceTurn(ctx context.Context, campaignID string) (string, bool, string) {
+	state, err := s.advanceTurn(ctx, campaignID)
+	if err != nil {
+		return err.Error(), false, "advance_turn_failed"
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+func (s *Server) dmEndCombat(ctx context.Context, campaignID string) (string, bool, string) {
+	state, err := s.endCombat(ctx, campaignID)
+	if err != nil {
+		return err.Error(), false, "end_combat_failed"
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
 }

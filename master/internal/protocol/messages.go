@@ -446,3 +446,33 @@ type ToolResultPayload struct {
 
 // ToolResultMessage is a tool.result Message.
 type ToolResultMessage = Message[ToolResultPayload]
+
+// TurnStatePayload is the payload of a turn.state message: broadcast to
+// the whole campaign whenever Master's turn-order state machine changes
+// (design doc §3.1, §9.3) — combat starting, advancing to the next
+// character's turn, or ending. Master owns this bookkeeping itself,
+// independent of the DM model's own judgment about when a turn "feels"
+// over; see internal/server/turn_order.go.
+type TurnStatePayload struct {
+	// Active is false once combat has ended (or before it's ever
+	// started) — the rest of the fields are meaningless when false and
+	// should be ignored by a client, not treated as "nobody's turn."
+	Active bool `json:"active"`
+	// Order lists every character_id in initiative order, established
+	// once at combat start (highest Dexterity check first) and fixed for
+	// the rest of the encounter — reordering mid-combat isn't SRD-typical
+	// and isn't implemented.
+	Order []string `json:"order,omitempty"`
+	// CurrentCharacterID is whose turn it is right now — always a member
+	// of Order, and always a character GetCharacterStatus reported
+	// active at the time this state was computed (design doc §9.3's
+	// skip-unconscious/dying/dead requirement enforced here, not left to
+	// the DM to remember).
+	CurrentCharacterID string `json:"current_character_id,omitempty"`
+	// Round counts full trips through Order, starting at 1 once combat
+	// begins.
+	Round int `json:"round,omitempty"`
+}
+
+// TurnStateMessage is a turn.state Message.
+type TurnStateMessage = Message[TurnStatePayload]

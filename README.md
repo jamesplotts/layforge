@@ -43,13 +43,19 @@ pass (§7's slow pass) now runs after the fast pass: an LLM narrates what
 happens next and can call real tools — `resolve_check`, `apply_effect`,
 `get_character_status` (design doc §8) — against the same System Engine
 RPCs already wired for players, with every call broadcast to the table as
-`tool.result` and the final reaction as `narrative.dm_prose`. There's
-still no rules resolution *automatically* tied to a check outside that
-DM pass (a player's own roll doesn't apply its own damage, no turn
-order), no PvP-policy or maturity-tier governance gate behind the DM
-tools yet (only campaign-scoping is enforced today — a documented gap,
-not a silent omission), no human review step on imported characters
-(that needs an account/operator concept that doesn't exist yet), and no
+`tool.result` and the final reaction as `narrative.dm_prose`. The DM can
+also start real structured turn order (`start_combat`) — rolling
+initiative through the System Engine rather than trusting the model to
+order it, skipping incapacitated characters automatically as combat
+advances (`advance_turn`, design doc §9.3) — broadcast to everyone as
+`turn.state`; this only works for combatants who already have a real
+uploaded character, since there's no NPC/monster character-creation path
+yet. There's still no rules resolution *automatically* tied to a check
+outside the DM pass (a player's own roll doesn't apply its own damage),
+no PvP-policy or maturity-tier governance gate behind the DM tools yet
+(only campaign-scoping is enforced today — a documented gap, not a
+silent omission), no human review step on imported characters (that
+needs an account/operator concept that doesn't exist yet), and no
 campaign packs or maturity tiers either. See
 [`master/README.md`](master/README.md) for the full picture, including
 exact roadmap gaps.

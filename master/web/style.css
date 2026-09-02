@@ -222,6 +222,12 @@ button.secondary {
   font-style: normal;
 }
 
+.turn-state-note {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--accent);
+}
+
 .note {
   align-self: center;
   color: var(--text-dim);

@@ -302,6 +302,9 @@ function handleMessage(msg) {
     case "tool.result":
       appendToolResultNote(msg.payload || {});
       break;
+    case "turn.state":
+      appendTurnStateNote(msg.payload || {});
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -427,6 +430,8 @@ function renderHistoryEvent(raw) {
       return dmBubbleEl(raw.payload ? raw.payload.text : "");
     case "tool.result":
       return toolResultNoteEl(raw.payload || {});
+    case "turn.state":
+      return turnStateNoteEl(raw.payload || {});
     case "safety.flag_broadcast":
       return safetyBannerEl(raw.payload ? raw.payload.topic : "");
     default:
@@ -610,7 +615,7 @@ function onRollResult(msg) {
     el.diceTrayResult.append(strongTotal, dieText ? ` (${dieText})` : "");
   });
 
-  appendRollNote(el.rollAbility.value, payload);
+  appendRollNote(payload);
 
   // Nothing mutates a character from a bare ability check yet (no
   // ApplyEffect wired to check results), but refreshing here is cheap
@@ -685,6 +690,27 @@ function appendToolResultNote(payload) {
   el.log.scrollTop = el.log.scrollHeight;
 }
 
+// turnStateNoteEl renders a turn.state broadcast (design doc §3.1, §9.3)
+// — Master's own turn-order bookkeeping, not something the DM narrates
+// itself. bubbleDisplayName resolves current_character_id to this
+// client's own typed name when it's this player's turn, else falls back
+// to the raw ID (see bubbleDisplayName's own doc comment on why).
+function turnStateNoteEl(payload) {
+  const note = document.createElement("div");
+  note.className = "note turn-state-note";
+  if (!payload.active) {
+    note.textContent = "⚔ Combat ends";
+    return note;
+  }
+  note.textContent = `⚔ Round ${payload.round} — ${bubbleDisplayName(payload.current_character_id)}'s turn`;
+  return note;
+}
+
+function appendTurnStateNote(payload) {
+  el.log.appendChild(turnStateNoteEl(payload));
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
 function appendSafetyBanner(topic) {
   el.log.appendChild(safetyBannerEl(topic));
   el.log.scrollTop = el.log.scrollHeight;
@@ -698,12 +724,23 @@ function appendErrorNote(text) {
   el.log.scrollTop = el.log.scrollHeight;
 }
 
-function appendRollNote(ability, payload) {
+// appendRollNote renders a roll.result broadcast — every roll in the
+// campaign, not just this client's own, per the shared-dice-tray design
+// (design doc §3.1, §4: every client animates every roll). Deliberately
+// doesn't claim a specific ability (e.g. "Strength check") the way an
+// earlier version did: that text used to come from this client's own
+// roll-ability dropdown, which is simply wrong for anyone else's roll or
+// a DM-triggered one (initiative, resolve_check) — RollResultPayload
+// carries no ability field to report correctly instead (see
+// protocol.RollResultPayload), so result_summary (if the engine set one)
+// is the only characterization used, rather than guessing.
+function appendRollNote(payload) {
   const note = document.createElement("div");
   note.className = "note";
   const die = (payload.rolls || [])[0];
   const dieText = die ? ` (d${die.sides}: ${die.result})` : "";
-  note.textContent = `${state.characterId || "Someone"} rolled a ${ability} check: ${payload.total}${dieText}`;
+  const summary = payload.result_summary ? ` (${payload.result_summary})` : "";
+  note.textContent = `🎲 ${bubbleDisplayName(payload.character_id)} rolled: ${payload.total}${dieText}${summary}`;
   el.log.appendChild(note);
   el.log.scrollTop = el.log.scrollHeight;
 }

@@ -40,6 +40,12 @@
 //     answers privately with character.state — not broadcast, since
 //     effect visibility is design doc §9.7 Knowledge Scoping territory,
 //     not decided yet.
+//   - The turn-order state machine (§3.1, §9.3, see turn_order.go):
+//     start_combat/advance_turn/end_combat DM tools (dm_tools.go) drive
+//     it, but the mechanical bookkeeping — initiative order from real
+//     Dexterity checks, skipping unconscious/dying/dead characters — is
+//     Master's own, independent of the DM model's judgment. Broadcasts
+//     turn.state. In-memory only; doesn't survive a Master restart.
 //
 // See CLAUDE.md and each dispatch case's own comments for why a given
 // message either is or isn't implemented yet.
@@ -52,6 +58,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -85,6 +92,14 @@ type Server struct {
 	narrativeModel string
 
 	systemEngine systemenginepb.SystemEngineClient
+
+	// turnOrders holds each campaign's live turn-order state (turn_order.go,
+	// design doc §3.1, §9.3), guarded by turnOrdersMu since it's mutated
+	// from whichever goroutine is running a DM tool call at the time —
+	// the same concurrency shape session.Hub's own connection registry
+	// has, kept local here since nothing outside this package touches it.
+	turnOrders   map[string]*turnOrder
+	turnOrdersMu sync.Mutex
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -115,6 +130,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		narrativeModel: narrativeModel,
 		auth:           authProvider,
 		systemEngine:   systemEngineClient,
+		turnOrders:     make(map[string]*turnOrder),
 	}
 }
 

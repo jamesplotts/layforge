@@ -35,6 +35,8 @@ tags:
     description: X-card/veil flags (docs/design.md §9.2).
   - name: tool
     description: DM tool-use call results (docs/design.md §8).
+  - name: turn
+    description: Turn-order state machine — whose turn it is, skipping incapacitated characters (docs/design.md §3.1, §9.3).
   - name: system
     description: Connection/session lifecycle.
   - name: log
@@ -81,6 +83,7 @@ channels:
           - $ref: '#/components/messages/CharacterState'
           - $ref: '#/components/messages/SafetyFlagBroadcast'
           - $ref: '#/components/messages/ToolResult'
+          - $ref: '#/components/messages/TurnState'
           - $ref: '#/components/messages/SystemSessionState'
           - $ref: '#/components/messages/SystemError'
           - $ref: '#/components/messages/LogHistoryResponse'
@@ -735,6 +738,40 @@ components:
                   reason_code:
                     type: string
                     description: Set on failure, e.g. a governance-gate rejection reason (docs/design.md §9).
+
+    # --- turn.* (docs/design.md §3.1, §9.3) ---
+
+    TurnState:
+      name: turn.state
+      messageId: turn_state
+      title: Turn-order state
+      summary: Broadcast whenever Master's turn-order state machine changes — combat starting, advancing to the next character's turn, or ending. Master computes and enforces this itself (docs/design.md §3.1), independent of the DM model's own judgment.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: turn.state
+              payload:
+                type: object
+                required: [active]
+                properties:
+                  active:
+                    type: boolean
+                    description: False once combat has ended (or before it's ever started) — the other fields are meaningless when false.
+                  order:
+                    type: array
+                    items:
+                      type: string
+                    description: Every character_id in initiative order, fixed for the encounter once combat starts.
+                  current_character_id:
+                    type: string
+                    description: Whose turn it is right now — always a member of order, and always reported active by get_character_status at the time this state was computed (docs/design.md §9.3).
+                  round:
+                    type: integer
+                    description: Full trips through order, starting at 1 once combat begins.
 
     # --- system.* (docs/design.md §5) ---
 

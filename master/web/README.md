@@ -60,6 +60,20 @@ plus a reason code on failure) regardless of outcome, so a table can see
 what the DM actually did, not just read the prose that followed. A
 DM-triggered `resolve_check` reuses the same `roll.request`/`roll.result`
 broadcast a player's own roll uses, so it animates on the same dice tray.
+`roll.result`'s note no longer names a specific ability check (e.g. "a
+Strength check") — that used to be pulled from this client's own
+roll-ability dropdown, which is simply wrong for anyone else's roll or a
+DM-triggered one (initiative, resolve_check); the wire payload has no
+ability field to report correctly instead, so the note now just states
+who rolled (via `bubbleDisplayName`) and the result, not a guessed
+ability name — a bug caught by watching a real DM-triggered initiative
+roll render with the local player's own last-picked dropdown value
+attached to it.
+
+There's also now a `turn.state` note (design doc §3.1, §9.3) — whenever
+the DM starts, advances, or ends structured combat, a "⚔ Round N —
+{name}'s turn" (or "⚔ Combat ends") line appears in the log, resolving
+the current character's name the same way narrative bubbles do.
 
 Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's

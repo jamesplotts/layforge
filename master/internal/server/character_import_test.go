@@ -41,16 +41,30 @@ type fakeSystemEngineClient struct {
 
 	resolveCheckResp *systemenginepb.ResolveCheckResponse
 	resolveCheckErr  error
+	// resolveCheckFunc, when set, computes the response per call instead
+	// of the fixed resolveCheckResp/resolveCheckErr above — needed by
+	// turn-order tests, where different characters must roll different
+	// initiative totals in the same test.
+	resolveCheckFunc func(*systemenginepb.ResolveCheckRequest) (*systemenginepb.ResolveCheckResponse, error)
 	// lastResolveCheckRequest captures the most recent ResolveCheck()
 	// call's request, for asserting on what Server actually sent the
 	// engine.
 	lastResolveCheckRequest *systemenginepb.ResolveCheckRequest
+	// resolveCheckRequests captures every ResolveCheck() call's request,
+	// in order — for tests that need to assert on more than just the
+	// last one (e.g. initiative rolled for several characters).
+	resolveCheckRequests []*systemenginepb.ResolveCheckRequest
 
 	getCharacterSchemaResp *systemenginepb.GetCharacterSchemaResponse
 	getCharacterSchemaErr  error
 
 	getCharacterStatusResp *systemenginepb.GetCharacterStatusResponse
 	getCharacterStatusErr  error
+	// getCharacterStatusFunc, when set, computes the response per call
+	// instead of the fixed getCharacterStatusResp/getCharacterStatusErr
+	// above — needed by turn-order tests, where different characters must
+	// report different statuses in the same test.
+	getCharacterStatusFunc func(*systemenginepb.GetCharacterStatusRequest) (*systemenginepb.GetCharacterStatusResponse, error)
 	// lastGetCharacterStatusRequest captures the most recent
 	// GetCharacterStatus() call's request, for asserting on what Server
 	// actually sent the engine.
@@ -73,6 +87,10 @@ func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.
 
 func (f *fakeSystemEngineClient) ResolveCheck(_ context.Context, in *systemenginepb.ResolveCheckRequest, _ ...grpc.CallOption) (*systemenginepb.ResolveCheckResponse, error) {
 	f.lastResolveCheckRequest = in
+	f.resolveCheckRequests = append(f.resolveCheckRequests, in)
+	if f.resolveCheckFunc != nil {
+		return f.resolveCheckFunc(in)
+	}
 	if f.resolveCheckErr != nil {
 		return nil, f.resolveCheckErr
 	}
@@ -96,6 +114,9 @@ func (f *fakeSystemEngineClient) GetCharacterSchema(context.Context, *systemengi
 
 func (f *fakeSystemEngineClient) GetCharacterStatus(_ context.Context, in *systemenginepb.GetCharacterStatusRequest, _ ...grpc.CallOption) (*systemenginepb.GetCharacterStatusResponse, error) {
 	f.lastGetCharacterStatusRequest = in
+	if f.getCharacterStatusFunc != nil {
+		return f.getCharacterStatusFunc(in)
+	}
 	if f.getCharacterStatusErr != nil {
 		return nil, f.getCharacterStatusErr
 	}

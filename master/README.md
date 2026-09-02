@@ -89,10 +89,34 @@ gap, not a silent omission. Rules/SRD lookup, procedural generation, and
 campaign-notes retrieval are §8's other named tool categories — none of
 those exist in this codebase, so they aren't stubbed out speculatively.
 
-Every other message category (map), the turn-order state machine, and
-governance gates beyond safety.flag and DM-tool campaign-scoping are all
-still to come — see [`docs/design.md`](../docs/design.md) §3, §5, and
-§7–§10.
+The turn-order state machine (design doc §3.1, §9.3) now exists too:
+three more DM tools — `start_combat`, `advance_turn`, `end_combat` (see
+`turn_order.go`) — give the model a way to trigger it, but the mechanical
+bookkeeping is Master's own, independent of the model's judgment.
+`start_combat` rolls a real Dexterity check per character through the
+System Engine and sorts descending — never trusts the model to invent or
+eyeball an order — and silently excludes anyone `get_character_status`
+already reports incapacitated rather than failing the whole call.
+`advance_turn` walks to the next character, skipping unconscious/dying/
+dead the same way (§9.3's actual requirement), and ends combat
+automatically once nobody active is left. Every state change broadcasts
+`turn.state`. In-memory only, scoped like `session.Hub`'s connection
+registry — a Master restart mid-combat loses it. **A real limitation
+found via live testing, not a hypothetical:** every `character_id` passed
+to `start_combat` must be a real `store.Character` — there's no NPC/
+monster character-creation path yet, so a DM narrating an improvised
+monster has no real ID to give it and structured combat can't include
+that monster; the system prompt now tells the model to narrate without
+calling `start_combat` rather than invent an ID, since Master will
+(correctly) reject one either way. Also found live: an LLM occasionally
+emits a failed tool-call attempt as plain narration text instead of
+populating its structured tool-call field — `looksLikeMalformedToolCall`
+in `dm_slow_pass.go` catches the common shapes and drops that turn's
+narration rather than broadcasting the artifact to the table.
+
+Every other message category (map) and governance gates beyond
+safety.flag and DM-tool campaign-scoping are still to come — see
+[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 
