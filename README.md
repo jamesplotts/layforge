@@ -74,8 +74,8 @@ unconscious/dying (a real System Engine RPC, `StartTurn`) — SRD's own
 actually wired up rather than sitting unreachable in the engine. The DM
 can also illustrate a scene — `generate_scene_image` calls a pluggable
 image-gen provider (a self-hosted ComfyUI instance is the reference
-implementation) and broadcasts the result to the table, though this
-hasn't been verified against a real running ComfyUI instance yet. A
+implementation) and broadcasts the result to the table, now verified
+live against a real running ComfyUI instance. A
 player's own roll still doesn't apply its own damage outside the DM
 pass, there's no human review step on imported characters (that needs an
 account/operator concept that doesn't exist yet), and no full markdown

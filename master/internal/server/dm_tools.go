@@ -617,9 +617,12 @@ func (s *Server) dmGenerateSceneImage(ctx context.Context, campaignID string, ar
 		return fmt.Sprintf("broadcasting narrative.scene_image: %v", err), false, "internal_error"
 	}
 
-	payload, err := json.Marshal(map[string]any{"image_url": imageURL})
-	if err != nil {
-		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
-	}
-	return string(payload), true, ""
+	// Deliberately doesn't include imageURL in the tool result content:
+	// the model has no use for the raw URL (Master already broadcasts
+	// narrative.scene_image separately), and including it invited the
+	// model to echo a markdown image link into its own narration text —
+	// a real artifact observed live. A bare confirmation removes the
+	// temptation at the source rather than only asking the system prompt
+	// not to do it.
+	return `{"generated": true}`, true, ""
 }

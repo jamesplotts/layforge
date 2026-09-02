@@ -85,11 +85,9 @@ they just get told no.
 There's also now `narrative.scene_image` rendering — a DM-generated
 illustration (design doc §6.3) appears inline in the log as a bordered
 `<figure>` with the image and its prompt as a caption. Verified live
-that the DOM/CSS render correctly (a placeholder image, since no real
-image-gen backend was available to test against — see
-`master/README.md`'s image-gen section for the "not yet verified live"
-caveat); an actually-reachable image URL (a self-hosted ComfyUI's own
-`/view` endpoint) should just load like any other `<img src>`.
+against a real, running self-hosted ComfyUI instance: a real generated
+image loads correctly via its `/view` endpoint like any other `<img
+src>`, with no code changes needed after the fact.
 
 Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's

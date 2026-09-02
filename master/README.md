@@ -217,11 +217,20 @@ negotiation — design doc §6.3 describes "existing x402/ComfyUI setup" as
 the operator's own deployment shape; a self-hoster whose endpoint sits
 behind an x402 paywall needs a transparent proxy handling payment in
 front of it, since Master performing real financial transactions
-autonomously is out of scope. **Not yet verified against a live ComfyUI
-instance** — built and tested against ComfyUI's documented REST API
-shape (`/prompt`, `/history/{id}`, `/view`) using a fake HTTP server, not
-a real one, so treat the wire-format assumptions as unconfirmed until
-someone runs it against a real install.
+autonomously is out of scope. **Verified live** against a real, running
+self-hosted ComfyUI instance — the wire-format assumptions
+(`/prompt`, `/history/{id}`, `/view`) built and unit-tested against a
+fake HTTP server turned out correct on the first real attempt, no code
+changes needed. Live testing also caught one real narration-quality bug:
+the model, having seen the raw generated `image_url` in the tool-result
+content, echoed it back as a markdown image link in its own DM prose.
+Fixed with defense in depth (CLAUDE.md's "gates over prompting," applied
+to a formatting concern rather than a mechanical one): the system prompt
+now explicitly tells the model never to reference the image in narration
+text, and the tool result no longer exposes the raw URL to the model's
+context at all — it gets a bare success confirmation, since it has no
+actual use for the URL (Master already broadcasts `narrative.scene_image`
+to the table separately).
 
 Every other message category (map) and the rest of §9 (§9.4's review
 panel, §9.6 spotlight balance, §9.7 knowledge scoping) are still to come
