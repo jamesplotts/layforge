@@ -172,6 +172,29 @@ accepting one, and (see below) the DM's narration correctly stops
 claiming a monster/turn order exists when it doesn't, rather than just
 being told not to and sometimes doing it anyway.
 
+**"Stronger model" isn't hypothetical — directly confirmed live:**
+re-running the identical 4-goblin-ambush scenario against `qwen3.8:27b`
+(this project's actual default `-llm-model`, a newer/larger Qwen
+generation than the qwen2.5:32b used for every finding above) instead
+produced a completely correct result on the first real attempt: all
+four goblins authored and validated on the first try, real initiative
+rolled for all five combatants, `start_combat` succeeded, and a full
+multi-round exchange — `resolve_check`/`apply_effect` correctly
+dropping the player to 0 HP and into a dying state — resolved with
+accurate, well-formatted closing narration. This did surface one more
+real bug, also now fixed: a fully successful, mechanically-correct
+sequence that length (schema fetch, several `create_npc` calls,
+`start_combat`, `resolve_check`, `advance_turn`, ...) can exceed
+`slowPassMaxToolIterations`, which was tuned against the weaker model's
+typically-abbreviated behavior — the *entire* turn then silently
+dropped with no narration at all, despite every mechanical step having
+already succeeded and already being visible via `tool.result`/
+`turn.state`. Raised from 5 to 10 (see that constant's doc comment) to
+give a genuinely thorough model room to finish. Practical upshot: which
+model is configured meaningfully changes how much of this hardening
+actually matters day to day — a self-hoster running a stronger model may
+rarely hit the failure paths above at all.
+
 Also found live and now fixed: a chain reaction where `create_npc`
 failing meant `start_combat` had no real NPC ID to use, `start_combat`
 then failed too (it validates every `character_id` is a real,
@@ -397,7 +420,11 @@ point it at a reachable Ollama server. `-llm-model` defaults to
 testing, a 7B "instruct" model produced reliably garbled output on
 RPG-narrative-style prompts while a 27B model handled the same prompts
 correctly; if narrative bubbles come back corrupted, try a different/
-larger model before assuming the pipeline itself is broken.
+larger model before assuming the pipeline itself is broken. Model choice
+matters even more for the DM tool-use loop (design doc §8) specifically
+than for plain narration — see the DM tool-use section above for a
+direct, live A/B comparison between `qwen2.5:32b` and this flag's actual
+default, `qwen3.8:27b`, on the identical scenario.
 
 `-room-passwords` points at a JSON file mapping `campaign_id` to a
 required join password, e.g. `{"my-campaign": "hunter2"}` — a campaign

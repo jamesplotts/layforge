@@ -35,8 +35,16 @@ Rules:
 // slowPassMaxToolIterations bounds the tool-call loop below — a
 // misbehaving model that keeps calling tools instead of ever settling on
 // narration must not hang this goroutine (or the campaign's dice
-// tray/tool.result feed) forever.
-const slowPassMaxToolIterations = 5
+// tray/tool.result feed) forever. Was 5 until live testing against a
+// stronger model (qwen3.8:27b, vs. the qwen2.5:32b this was originally
+// tuned against) showed that cap bites a well-behaved model too: a
+// single legitimate combat-start turn — get_character_schema,
+// create_npc, start_combat, resolve_check, advance_turn — is exactly 5
+// tool calls with zero iterations left to actually produce narration,
+// so the whole turn silently dropped despite every mechanical step
+// succeeding. Raised to give real multi-step sequences headroom while
+// still bounding a genuinely runaway model.
+const slowPassMaxToolIterations = 10
 
 // slowPassTimeout bounds the whole slow pass, tool calls included — a
 // context independent of the triggering connection's own ctx (see
