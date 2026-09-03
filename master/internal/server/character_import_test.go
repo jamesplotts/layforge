@@ -121,6 +121,18 @@ type fakeSystemEngineClient struct {
 	// GetAvailableActions() call's request, for asserting on what Server
 	// actually sent the engine.
 	lastGetAvailableActionsRequest *systemenginepb.GetAvailableActionsRequest
+
+	grappleResp *systemenginepb.GrappleResponse
+	grappleErr  error
+	// lastGrappleRequest captures the most recent Grapple() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastGrappleRequest *systemenginepb.GrappleRequest
+
+	shoveResp *systemenginepb.ShoveResponse
+	shoveErr  error
+	// lastShoveRequest captures the most recent Shove() call's request,
+	// for asserting on what Server actually sent the engine.
+	lastShoveRequest *systemenginepb.ShoveRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -171,6 +183,22 @@ func (f *fakeSystemEngineClient) Attack(_ context.Context, in *systemenginepb.At
 		return nil, f.attackErr
 	}
 	return f.attackResp, nil
+}
+
+func (f *fakeSystemEngineClient) Grapple(_ context.Context, in *systemenginepb.GrappleRequest, _ ...grpc.CallOption) (*systemenginepb.GrappleResponse, error) {
+	f.lastGrappleRequest = in
+	if f.grappleErr != nil {
+		return nil, f.grappleErr
+	}
+	return f.grappleResp, nil
+}
+
+func (f *fakeSystemEngineClient) Shove(_ context.Context, in *systemenginepb.ShoveRequest, _ ...grpc.CallOption) (*systemenginepb.ShoveResponse, error) {
+	f.lastShoveRequest = in
+	if f.shoveErr != nil {
+		return nil, f.shoveErr
+	}
+	return f.shoveResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetAvailableActions(_ context.Context, in *systemenginepb.GetAvailableActionsRequest, _ ...grpc.CallOption) (*systemenginepb.GetAvailableActionsResponse, error) {

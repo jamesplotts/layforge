@@ -149,6 +149,43 @@ func dmTools() []llm.Tool {
 			}`),
 		},
 		{
+			Name:        "offhand_attack",
+			Description: "Make a bonus-action attack with a character's equipped off-hand weapon (SRD Two-Weapon Fighting) — the real mechanical gate: the engine rejects this if either the main-hand or off-hand weapon lacks the Light property, or if no weapon is equipped in the off hand at all. Never adds the ability modifier to damage, per the core SRD rule. Call get_available_actions first if you're not sure whether this character has a legal off-hand attack available.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "target_character_id"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The attacking character's ID."},
+					"target_character_id": {"type": "string", "description": "The target's ID — required; there is no self-attack."}
+				}
+			}`),
+		},
+		{
+			Name:        "grapple",
+			Description: "Attempt to grab and restrain a character within reach — a real opposed check (Strength (Athletics) against the target's better of Athletics/Acrobatics), not something you decide narratively. The engine rejects the attempt outright (never rolled) if the grappler has no hand free (both hands already hold weapons, or a two-handed weapon is equipped) — call get_available_actions first if you're unsure. A rejection is not a failed grapple; a real roll that simply loses the contest still succeeds=true, grappled=false.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "target_character_id"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The grappling character's ID."},
+					"target_character_id": {"type": "string", "description": "The target's ID — required."}
+				}
+			}`),
+		},
+		{
+			Name:        "shove",
+			Description: "Attempt to knock a character prone or push it 5 feet away — the same real opposed check as grapple, no free hand required. Specify which effect you want; a rejection means the attempt was never rolled (out of reach, incapacitated), not a failed shove.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "target_character_id", "effect"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The shoving character's ID."},
+					"target_character_id": {"type": "string", "description": "The target's ID — required."},
+					"effect": {"type": "string", "enum": ["prone", "push"], "description": "\"prone\" knocks the target prone; \"push\" moves it 5 feet directly away."}
+				}
+			}`),
+		},
+		{
 			Name:        "get_available_actions",
 			Description: "Get the real, engine-computed list of everything a character can legally do right now — every equipped-weapon attack option (melee, ranged, and an off-hand/secondary weapon), Grapple and Shove options, and every currently-castable prepared/known spell, each against every other character currently in this campaign's active combat. Call this before improvising what a character can do in combat, or before choosing melee_attack/ranged_attack/cast_spell when you're not certain what's actually legal — it tells you exactly which option is real, so you never have to guess or narrate around a mechanical limitation (a melee-only weapon fired at range, a spell with no slots left, no free hand to grapple). If the character cannot act at all this turn (e.g. Paralyzed), can_act will be false with a real reason — narrate that, don't invent an action for them.",
 			Parameters: json.RawMessage(`{
@@ -235,6 +272,12 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmAttack(ctx, campaignID, actingSenderID, call.Arguments, systemenginepb.AttackKind_ATTACK_KIND_MELEE)
 	case "ranged_attack":
 		return s.dmAttack(ctx, campaignID, actingSenderID, call.Arguments, systemenginepb.AttackKind_ATTACK_KIND_RANGED)
+	case "offhand_attack":
+		return s.dmAttack(ctx, campaignID, actingSenderID, call.Arguments, systemenginepb.AttackKind_ATTACK_KIND_OFFHAND)
+	case "grapple":
+		return s.dmGrapple(ctx, campaignID, actingSenderID, call.Arguments)
+	case "shove":
+		return s.dmShove(ctx, campaignID, actingSenderID, call.Arguments)
 	case "get_available_actions":
 		return s.dmGetAvailableActions(ctx, campaignID, call.Arguments)
 	case "get_character_status":
@@ -678,6 +721,236 @@ func (s *Server) dmAttack(ctx context.Context, campaignID, actingSenderID string
 		"attacked": true,
 		"hit":      resp.Hit,
 		"message":  resp.ResultMessage,
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmGrapple is the real mechanical gate against a grapple attempt —
+// modeled line-for-line on dmAttack, but gates on resp.Grappled instead
+// of resp.TargetDamaged (Grapple never deals damage; it applies the
+// Grappled condition, which is the PvP-relevant mutation here). The
+// actor's own mutation (action economy spent) always persists — the
+// attempt genuinely happened, the resource genuinely spent — while the
+// target's mutation is discarded, not saved, when the campaign's PvP
+// policy would have blocked it.
+func (s *Server) dmGrapple(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID       string `json:"character_id"`
+		TargetCharacterID string `json:"target_character_id"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if args.TargetCharacterID == "" {
+		return "target_character_id is required", false, "invalid_arguments"
+	}
+
+	actor, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	actorData := &structpb.Struct{}
+	if err := protojson.Unmarshal(actor.CharacterData, actorData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	target, err := s.campaignCharacter(ctx, campaignID, args.TargetCharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	targetData := &structpb.Struct{}
+	if err := protojson.Unmarshal(target.CharacterData, targetData); err != nil {
+		return fmt.Sprintf("parsing stored target data: %v", err), false, "internal_error"
+	}
+
+	req := &systemenginepb.GrappleRequest{
+		RequestId:   "dm-tool-" + actor.ID,
+		CampaignId:  campaignID,
+		Actor:       &systemenginepb.Actor{ActorId: actor.ID, CharacterData: actorData, SchemaVersion: actor.SchemaVersion},
+		Target:      &systemenginepb.Actor{ActorId: target.ID, CharacterData: targetData, SchemaVersion: target.SchemaVersion},
+		GridContext: s.buildGridContext(campaignID, actor.ID, target.ID),
+	}
+
+	resp, err := s.systemEngine.Grapple(ctx, req)
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return fmt.Sprintf("grapple FAILED: %s. Do not narrate this as a successful or failed grapple — the attempt was never rolled.", resp.Error), false, "grapple_failed"
+	}
+
+	pvpBlocked := false
+	pvpReason := ""
+	pvpReasonCode := ""
+	if resp.Grappled && target.OwnerID != "" && target.OwnerID != masterSenderID && target.OwnerID != actingSenderID {
+		pol := s.campaignPolicy(ctx, campaignID)
+		switch pol.PvPPolicy {
+		case policy.PvPPolicyAllowed:
+			// proceed
+		case policy.PvPPolicyWithConsent:
+			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
+				pvpBlocked = true
+				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", target.OwnerID)
+				pvpReasonCode = "pvp_no_consent"
+			}
+		default:
+			pvpBlocked = true
+			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to affect another player's character (%s)", target.OwnerID)
+			pvpReasonCode = "pvp_blocked"
+		}
+	}
+
+	newActorData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	actor.CharacterData = newActorData
+	actor.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, actor); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	if pvpBlocked {
+		return pvpReason, false, pvpReasonCode
+	}
+
+	if resp.Target != nil {
+		newTargetData, err := protojson.Marshal(resp.Target.CharacterData)
+		if err != nil {
+			return fmt.Sprintf("marshaling updated target data: %v", err), false, "internal_error"
+		}
+		target.CharacterData = newTargetData
+		target.UpdatedAt = time.Now().UTC()
+		if err := s.characters.SaveCharacter(ctx, target); err != nil {
+			return fmt.Sprintf("saving updated target: %v", err), false, "internal_error"
+		}
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"attempted": true,
+		"grappled":  resp.Grappled,
+		"message":   resp.ResultMessage,
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmShove mirrors dmGrapple exactly, for a shove attempt — effect must
+// be "prone" or "push" (dmShoveEffect maps it to the real proto enum;
+// an unrecognized value is a real rejection, never guessed).
+func (s *Server) dmShove(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID       string `json:"character_id"`
+		TargetCharacterID string `json:"target_character_id"`
+		Effect            string `json:"effect"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if args.TargetCharacterID == "" {
+		return "target_character_id is required", false, "invalid_arguments"
+	}
+	var effect systemenginepb.ShoveEffect
+	switch args.Effect {
+	case "prone":
+		effect = systemenginepb.ShoveEffect_SHOVE_EFFECT_PRONE
+	case "push":
+		effect = systemenginepb.ShoveEffect_SHOVE_EFFECT_PUSH
+	default:
+		return fmt.Sprintf("invalid effect %q — must be \"prone\" or \"push\"", args.Effect), false, "invalid_arguments"
+	}
+
+	actor, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	actorData := &structpb.Struct{}
+	if err := protojson.Unmarshal(actor.CharacterData, actorData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	target, err := s.campaignCharacter(ctx, campaignID, args.TargetCharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	targetData := &structpb.Struct{}
+	if err := protojson.Unmarshal(target.CharacterData, targetData); err != nil {
+		return fmt.Sprintf("parsing stored target data: %v", err), false, "internal_error"
+	}
+
+	req := &systemenginepb.ShoveRequest{
+		RequestId:   "dm-tool-" + actor.ID,
+		CampaignId:  campaignID,
+		Actor:       &systemenginepb.Actor{ActorId: actor.ID, CharacterData: actorData, SchemaVersion: actor.SchemaVersion},
+		Target:      &systemenginepb.Actor{ActorId: target.ID, CharacterData: targetData, SchemaVersion: target.SchemaVersion},
+		Effect:      effect,
+		GridContext: s.buildGridContext(campaignID, actor.ID, target.ID),
+	}
+
+	resp, err := s.systemEngine.Shove(ctx, req)
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return fmt.Sprintf("shove FAILED: %s. Do not narrate this as a successful or failed shove — the attempt was never rolled.", resp.Error), false, "shove_failed"
+	}
+
+	pvpBlocked := false
+	pvpReason := ""
+	pvpReasonCode := ""
+	if resp.Shoved && target.OwnerID != "" && target.OwnerID != masterSenderID && target.OwnerID != actingSenderID {
+		pol := s.campaignPolicy(ctx, campaignID)
+		switch pol.PvPPolicy {
+		case policy.PvPPolicyAllowed:
+			// proceed
+		case policy.PvPPolicyWithConsent:
+			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
+				pvpBlocked = true
+				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", target.OwnerID)
+				pvpReasonCode = "pvp_no_consent"
+			}
+		default:
+			pvpBlocked = true
+			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to affect another player's character (%s)", target.OwnerID)
+			pvpReasonCode = "pvp_blocked"
+		}
+	}
+
+	newActorData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	actor.CharacterData = newActorData
+	actor.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, actor); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	if pvpBlocked {
+		return pvpReason, false, pvpReasonCode
+	}
+
+	if resp.Target != nil {
+		newTargetData, err := protojson.Marshal(resp.Target.CharacterData)
+		if err != nil {
+			return fmt.Sprintf("marshaling updated target data: %v", err), false, "internal_error"
+		}
+		target.CharacterData = newTargetData
+		target.UpdatedAt = time.Now().UTC()
+		if err := s.characters.SaveCharacter(ctx, target); err != nil {
+			return fmt.Sprintf("saving updated target: %v", err), false, "internal_error"
+		}
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"attempted": true,
+		"shoved":    resp.Shoved,
+		"message":   resp.ResultMessage,
 	})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"

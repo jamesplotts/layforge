@@ -607,19 +607,34 @@ exact deterministic skip narration ("Kestrel is Paralyzed and cannot
 act this turn.") when `start_combat` searched for the first actionable
 character.
 
-**A real, honestly-flagged gap, not silently shipped as complete**:
-`GetAvailableActions` can tell the DM that Grapple, Shove, and an
-off-hand attack are legal right now — but this pass does not add a way
-to actually *execute* one. `melee_attack`/`ranged_attack`/`cast_spell`
-remain the only DM tools that resolve a real mechanical effect;
-Grapple/Shove/off-hand-attack exist as real, tested engine mechanics
-(`GrappleAction`/`ShoveAction`/off-hand `AttackAction` construction)
-that nothing in Master can call yet. Advertising an option with no way
-to take it is a real usability gap worth closing, likely as new
-`grapple`/`shove` RPCs and DM tools mirroring `Attack`'s own shape (and
-an off-hand-attack mode on `Attack` itself) — deliberately not done in
-this same pass without checking scope first, given how much this pass
-already grew from its original "enumerate what's legal" framing.
+**Since closed**: `get_available_actions` used to only advertise that
+Grapple, Shove, and an off-hand attack were legal, with no way to
+actually take one — flagged honestly at the time rather than shipped
+silently. Three new DM tools close that: `grapple` and `shove` call new
+`Grapple`/`Shove` RPCs exposing `GrappleAction`/`ShoveAction` over gRPC
+for the first time, and `offhand_attack` reuses the existing
+`melee_attack`/`ranged_attack` machinery (`dmAttack`) with a third
+`AttackKind` — `ATTACK_KIND_OFFHAND`, which resolves against
+`Equipment.OffHand` instead of `MainHand`, always as a bonus action,
+never adding the ability modifier to damage (SRD Two-Weapon Fighting's
+core rule). `grapple`/`shove` apply the identical post-hoc PvP gate
+`melee_attack`/`cast_spell` already established, keyed on whether the
+attempt's real mechanical effect (`Grappled`/a shove landing) — not
+damage — actually applied to a different player's character.
+
+**Verified live**, same real sidecar/Master/`qwen3.8:27b` stack:
+Grapple and Shove need no equipped weapon at all, so a later pass
+verified both live even with Open5e still down — a real `grapple` call
+succeeded with the DM narrating actual opposed-check numbers straight
+from the tool result ("its Athletics roll of 4 against Kestrel's 16"),
+and a real `shove` call knocked the target prone with an equally
+grounded narration. The DM model called `get_available_actions`
+unprompted before attempting the shove — the "check what's legal
+before acting" workflow this session's own tool descriptions were
+written to encourage, actually observed happening on its own.
+`offhand_attack` remains live-unverified (needs real equipped-weapon
+data, blocked by the same Open5e outage) — covered by
+`Attack_OffhandKind_*` in OpenCombatEngine's own test suite instead.
 
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
 knowledge scoping) is still to come — see
