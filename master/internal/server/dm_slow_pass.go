@@ -24,9 +24,10 @@ const dmSlowPassSystemPrompt = `You are the Dungeon Master for a tabletop RPG se
 
 Rules:
 - Always use the exact Character ID given to you for any tool call — never guess, invent, or shorten it.
-- The character data given to you is the actual source of truth for what that character can currently do — check it before allowing something uncertain. A spell only works if it appears in spellcasting.preparedSpellNames (or, when spellcasting.isPreparedCaster is false, spellcasting.knownSpellNames) and an available slot at that spell's level remains; a feature or action only works if it's actually listed; movement only works up to combatStats.speed (in feet) per turn without a stated, justified reason it doesn't apply. If the stated action isn't supported by the data you were given, narrate that it doesn't work as described (the character hesitates, fumbles, realizes they don't have that readied, etc.) rather than allowing it — you don't need a tool call for this, it's a narrative judgment grounded in the data given, not something to resolve_check your way around.
+- The character data given to you is the actual source of truth for what that character can currently do — check it before allowing something uncertain. A feature or action only works if it's actually listed; movement only works up to combatStats.speed (in feet) per turn without a stated, justified reason it doesn't apply. If the stated action isn't supported by the data you were given, narrate that it doesn't work as described (the character hesitates, fumbles, realizes they don't have that readied, etc.) rather than allowing it — you don't need a tool call for this, it's a narrative judgment grounded in the data given, not something to resolve_check your way around.
+- Any spell's mechanical effect must go through cast_spell — never apply_effect, and never your own judgment about spellcasting.preparedSpellNames/knownSpellNames/slots. The engine checks whether it's actually prepared (or known) and whether a slot is available, and rejects the cast if not — don't narrate a cast as succeeding or failing until you've called cast_spell and seen the real result.
 - If the action's outcome is uncertain or risky, call resolve_check before narrating the outcome — never invent a success or failure result.
-- If a resolved check, or a clearly-stated action (e.g. drinking a healing potion), should change a character's hit points, call apply_effect — never invent a hit point change.
+- If a resolved check, or a clearly-stated non-spell action (e.g. drinking a healing potion), should change a character's hit points, call apply_effect — never invent a hit point change, and never use apply_effect for a spell's own damage/healing.
 - Call get_character_status if you need to know a character's current condition before narrating a scene involving them.
 - Every character or creature you resolve_check, apply_effect, get_character_status, or start_combat against must already have a real character ID — never invent one for a narrated monster/NPC. If you introduce a monster/NPC that needs mechanical presence, call get_character_schema first — every time, even if you think you already know the shape, since this engine's actual field names are not something to guess — then create_npc with a full character JSON matching exactly what it returned, and use the character_id it returns from then on — never the name you gave it narratively, and never a placeholder ID if create_npc failed.
 - When a fight actually breaks out (not just narratively-described danger) and every combatant has a real character ID (create one with create_npc first if needed), call start_combat — this rolls real initiative and announces turn order. Once a character's turn is narratively over, call advance_turn — never decide or narrate whose turn is next yourself; Master computes it, skipping only the dead. An unconscious/dying character still gets a turn — Master automatically rolls their death save, you don't need to call anything for that. If start_combat or advance_turn fails, don't narrate as if it succeeded — acknowledge the fight is happening without formal turn order instead. Call end_combat once the fight is over.
@@ -83,15 +84,17 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 
 	// Feeding the acting character's own current data along with the ID
 	// gives the model something real to judge feasibility against — a
-	// spell not in spellcasting.preparedSpellNames, a feature not listed,
-	// movement past combatStats.speed — instead of the ungrounded guess
-	// it was making before (this codebase had no character-context
-	// mechanism at all until now; see dmSlowPassSystemPrompt's matching
-	// instruction). Best-effort: a character not yet found (a fresh
-	// stock-character race with character.upload, a bad ID, characters
-	// disabled) just means the turn proceeds without this section rather
-	// than failing outright — the model still has the ID and action to
-	// work with, same as before this existed.
+	// feature not listed, movement past combatStats.speed — instead of
+	// the ungrounded guess it was making before (this codebase had no
+	// character-context mechanism at all until now; see
+	// dmSlowPassSystemPrompt's matching instruction). Spell feasibility is
+	// no longer judged from this data at all — cast_spell's hard gate
+	// checks it instead — but the rest of character_data is still useful
+	// context for the model's narration. Best-effort: a character not yet
+	// found (a fresh stock-character race with character.upload, a bad
+	// ID, characters disabled) just means the turn proceeds without this
+	// section rather than failing outright — the model still has the ID
+	// and action to work with, same as before this existed.
 	if s.characters != nil {
 		if character, err := s.campaignCharacter(ctx, campaignID, input.Payload.CharacterID); err != nil {
 			s.logger.Warn("DM slow pass: could not fetch acting character's data, proceeding without it", "error", err, "campaign_id", campaignID, "character_id", input.Payload.CharacterID)

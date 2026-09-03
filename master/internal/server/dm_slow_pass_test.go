@@ -165,10 +165,11 @@ func TestServe_NarrativePlayerInput_SlowPass_NoSystemEngine_OmitsToolsAndBroadca
 
 // TestServe_NarrativePlayerInput_SlowPass_CharacterFound_IncludesCharacterDataInContext
 // exercises the character-context feature added so the DM has something
-// real to judge action feasibility against (a spell not in
-// spellcasting.preparedSpellNames, movement past combatStats.speed, ...
-// — see dmSlowPassSystemPrompt) instead of the ungrounded guess it made
-// before this existed.
+// real to judge action feasibility against (a feature not listed,
+// movement past combatStats.speed, ... — see dmSlowPassSystemPrompt)
+// instead of the ungrounded guess it made before this existed. Spell
+// feasibility specifically is now enforced by cast_spell's hard gate
+// rather than judged from this context (see cast_spell_test.go).
 func TestServe_NarrativePlayerInput_SlowPass_CharacterFound_IncludesCharacterDataInContext(t *testing.T) {
 	fakeLLM := &fakeLLMProvider{
 		responses: []llm.CompletionResponse{

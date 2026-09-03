@@ -52,7 +52,7 @@ func dmTools() []llm.Tool {
 		},
 		{
 			Name:        "apply_effect",
-			Description: "Apply damage or healing to a character. Only call this after a resolve_check result justifies it (e.g. a failed save takes damage), or for a narratively-clear effect (e.g. drinking a healing potion) — never invent hit point changes without calling this. Damaging a different player's own character (as opposed to a monster/NPC) is subject to this campaign's PvP policy and may be rejected.",
+			Description: "Apply damage or healing to a character. Only call this after a resolve_check result justifies it (e.g. a failed save takes damage), or for a narratively-clear effect (e.g. drinking a healing potion) — never invent hit point changes without calling this. Never use this for a spell's own damage/healing — call cast_spell for that instead, which checks whether the spell is actually prepared/known and has an available slot before anything happens. Damaging a different player's own character (as opposed to a monster/NPC) is subject to this campaign's PvP policy and may be rejected.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"required": ["character_id", "effect_type", "amount"],
@@ -104,6 +104,20 @@ func dmTools() []llm.Tool {
 			Name:        "get_character_schema",
 			Description: "Get the JSON Schema this campaign's character data must conform to. Call this before create_npc if you don't already know the schema's shape — never guess field names.",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
+		},
+		{
+			Name:        "cast_spell",
+			Description: "Cast a character's spell — the only correct way to resolve a spell's mechanical effect. The engine checks whether the spell is actually prepared (or known, for a caster who doesn't prepare spells) and whether a slot is available, and rejects the cast if not — never call apply_effect for a spell instead, and never narrate a cast as succeeding or failing until you've called this and seen the real result. Omit target_character_id for a self-only spell (e.g. a buff on the caster); every other spell needs one. Only handles a single target — for a spell that narratively hits several creatures, call this once per target.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "spell_name"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The casting character's ID."},
+					"spell_name": {"type": "string", "description": "The spell's exact name, e.g. \"Fireball\" — never guessed or abbreviated."},
+					"target_character_id": {"type": "string", "description": "Optional — omit for a self-only spell."},
+					"slot_level": {"type": "integer", "description": "Optional — cast using a higher-level slot than the spell's own minimum (upcasting). Omit to use the spell's own base level."}
+				}
+			}`),
 		},
 		{
 			Name:        "create_npc",
@@ -175,6 +189,8 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmResolveCheck(ctx, campaignID, call.Arguments)
 	case "apply_effect":
 		return s.dmApplyEffect(ctx, campaignID, actingSenderID, call.Arguments)
+	case "cast_spell":
+		return s.dmCastSpell(ctx, campaignID, actingSenderID, call.Arguments)
 	case "get_character_status":
 		return s.dmGetCharacterStatus(ctx, campaignID, call.Arguments)
 	case "start_combat":
@@ -348,6 +364,151 @@ func (s *Server) dmApplyEffect(ctx context.Context, campaignID, actingSenderID s
 	}
 	if statusErr != nil {
 		s.logger.Warn("failed to fetch post-effect character status for DM tool result", "error", statusErr, "character_id", character.ID)
+	}
+	return string(payload), true, ""
+}
+
+// dmCastSpell is the real mechanical gate against casting a spell that
+// isn't prepared/known or that has no available slot (design doc §8,
+// §9: "gates over prompting") — a thin wrapper around the System
+// Engine's CastSpell RPC, which is itself a thin wrapper around
+// OpenCombatEngine's own CastSpellAction. Before this existed, nothing
+// stood between a player and an unprepared cast except the DM model's
+// own narrative judgment (grounded in real character_data fed into
+// every turn — see dm_slow_pass.go — but still just prompting).
+//
+// The PvP gate here is applied differently from dmApplyEffect's: Master
+// cannot know in advance whether a *named spell* deals damage (unlike
+// apply_effect, whose caller states effect_type=damage explicitly), so
+// there is nothing to check before calling the engine. Instead, the
+// engine reports whether the target actually took damage
+// (CastSpellResponse.TargetDamaged — see that field's doc comment in
+// protocol/system_engine.proto), and this function decides whether to
+// persist that outcome: the caster's own mutation (slot consumed,
+// concentration set) is always persisted — the spell was genuinely
+// cast, the resource genuinely spent — but the target's mutation is
+// discarded, not saved, when the campaign's PvP policy would have
+// blocked it. Net effect: no disallowed damage ever reaches persisted
+// game state, the same guarantee dmApplyEffect's up-front check gives,
+// just enforced at the commit point instead of the call point since
+// that's the earliest point Master actually has the information.
+func (s *Server) dmCastSpell(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID       string `json:"character_id"`
+		SpellName         string `json:"spell_name"`
+		TargetCharacterID string `json:"target_character_id"`
+		SlotLevel         int32  `json:"slot_level"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if args.SpellName == "" {
+		return "spell_name is required", false, "invalid_arguments"
+	}
+
+	caster, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	casterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(caster.CharacterData, casterData); err != nil {
+		return fmt.Sprintf("parsing stored caster data: %v", err), false, "internal_error"
+	}
+
+	req := &systemenginepb.CastSpellRequest{
+		RequestId:  "dm-tool-" + caster.ID,
+		CampaignId: campaignID,
+		Caster:     &systemenginepb.Actor{ActorId: caster.ID, CharacterData: casterData, SchemaVersion: caster.SchemaVersion},
+		SpellName:  args.SpellName,
+		SlotLevel:  args.SlotLevel,
+	}
+
+	var target store.Character
+	hasTarget := args.TargetCharacterID != ""
+	if hasTarget {
+		target, err = s.campaignCharacter(ctx, campaignID, args.TargetCharacterID)
+		if err != nil {
+			return err.Error(), false, "character_not_found"
+		}
+		targetData := &structpb.Struct{}
+		if err := protojson.Unmarshal(target.CharacterData, targetData); err != nil {
+			return fmt.Sprintf("parsing stored target data: %v", err), false, "internal_error"
+		}
+		req.Target = &systemenginepb.Actor{ActorId: target.ID, CharacterData: targetData, SchemaVersion: target.SchemaVersion}
+	}
+
+	resp, err := s.systemEngine.CastSpell(ctx, req)
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		// This is the hard gate itself — resp.Error is a real mechanical
+		// rejection (not prepared, no slot, unknown spell name), computed
+		// by the engine, not the model's own judgment. Same "repeat the
+		// corrective instruction at the point of failure" reasoning as
+		// dmStartCombat/dmAdvanceTurn — a general system-prompt rule alone
+		// wasn't reliable enough for turn-order claims, so it isn't
+		// trusted alone here either.
+		return fmt.Sprintf("cast_spell FAILED: %s. Do not narrate this cast as if it succeeded — the spell was not cast.", resp.Error), false, "cast_spell_failed"
+	}
+
+	pvpBlocked := false
+	pvpReason := ""
+	pvpReasonCode := ""
+	if hasTarget && resp.TargetDamaged && target.OwnerID != "" && target.OwnerID != masterSenderID && target.OwnerID != actingSenderID {
+		pol := s.campaignPolicy(ctx, campaignID)
+		switch pol.PvPPolicy {
+		case policy.PvPPolicyAllowed:
+			// proceed
+		case policy.PvPPolicyWithConsent:
+			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
+				pvpBlocked = true
+				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP damage", target.OwnerID)
+				pvpReasonCode = "pvp_no_consent"
+			}
+		default: // PvPPolicyPveOnly, or an unrecognized/unspecified value — fail closed
+			pvpBlocked = true
+			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to damage another player's character (%s)", target.OwnerID)
+			pvpReasonCode = "pvp_blocked"
+		}
+	}
+
+	// The caster's own mutation (slot consumed, concentration set) is
+	// real regardless of the PvP gate above — the spell was genuinely
+	// cast, the resource genuinely spent, even if it then fizzles
+	// against a forbidden target.
+	newCasterData, err := protojson.Marshal(resp.Caster.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated caster data: %v", err), false, "internal_error"
+	}
+	caster.CharacterData = newCasterData
+	caster.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, caster); err != nil {
+		return fmt.Sprintf("saving updated caster: %v", err), false, "internal_error"
+	}
+
+	if pvpBlocked {
+		return pvpReason, false, pvpReasonCode
+	}
+
+	if hasTarget && resp.Target != nil {
+		newTargetData, err := protojson.Marshal(resp.Target.CharacterData)
+		if err != nil {
+			return fmt.Sprintf("marshaling updated target data: %v", err), false, "internal_error"
+		}
+		target.CharacterData = newTargetData
+		target.UpdatedAt = time.Now().UTC()
+		if err := s.characters.SaveCharacter(ctx, target); err != nil {
+			return fmt.Sprintf("saving updated target: %v", err), false, "internal_error"
+		}
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"cast":    true,
+		"message": resp.ResultMessage,
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
 	}
 	return string(payload), true, ""
 }

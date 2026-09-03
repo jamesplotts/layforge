@@ -76,6 +76,17 @@ type fakeSystemEngineClient struct {
 	// request, for asserting on what Server actually sent the engine.
 	lastApplyEffectRequest *systemenginepb.ApplyEffectRequest
 
+	castSpellResp *systemenginepb.CastSpellResponse
+	castSpellErr  error
+	// castSpellFunc, when set, computes the response per call instead of
+	// the fixed castSpellResp/castSpellErr above — needed by tests where
+	// different spell names/targets in the same test must get different
+	// results.
+	castSpellFunc func(*systemenginepb.CastSpellRequest) (*systemenginepb.CastSpellResponse, error)
+	// lastCastSpellRequest captures the most recent CastSpell() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastCastSpellRequest *systemenginepb.CastSpellRequest
+
 	startTurnResp *systemenginepb.StartTurnResponse
 	startTurnErr  error
 	// startTurnFunc, when set, computes the response per call instead of
@@ -115,6 +126,17 @@ func (f *fakeSystemEngineClient) ApplyEffect(_ context.Context, in *systemengine
 		return nil, f.applyEffectErr
 	}
 	return f.applyEffectResp, nil
+}
+
+func (f *fakeSystemEngineClient) CastSpell(_ context.Context, in *systemenginepb.CastSpellRequest, _ ...grpc.CallOption) (*systemenginepb.CastSpellResponse, error) {
+	f.lastCastSpellRequest = in
+	if f.castSpellFunc != nil {
+		return f.castSpellFunc(in)
+	}
+	if f.castSpellErr != nil {
+		return nil, f.castSpellErr
+	}
+	return f.castSpellResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetCharacterSchema(context.Context, *systemenginepb.GetCharacterSchemaRequest, ...grpc.CallOption) (*systemenginepb.GetCharacterSchemaResponse, error) {

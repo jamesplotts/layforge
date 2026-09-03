@@ -238,13 +238,52 @@ trip regardless — a repository-wiring bug in OpenCombatEngine itself
 supplied one), now fixed there by populating one from the live [Open5e
 API](https://open5e.com) at sidecar startup — see that repo's own
 `Program.cs`/`ActorMapping.cs`/`SystemEngineGrpcService.cs` and its
-README. Live-verified end-to-end against a real model (`qwen3.8:27b`):
-a wizard character with Fireball known-but-not-prepared and Magic
-Missile prepared got a narrated refusal (correctly citing both "not
-prepared" and "wrong slot level") for the former and a fully-resolved,
-mechanically-real cast (`resolve_check`/`apply_effect`, real damage) for
-the latter — the model reasoned correctly about the data without any
-additional prompting beyond what's described above.
+README. That first pass was narrative-only, though: nothing stopped the
+DM model from calling `apply_effect` directly for a spell's damage
+regardless of what `spellcasting` actually said — the model's own
+(well-grounded) judgment was the only thing standing between a player
+and an unprepared cast, exactly the shape CLAUDE.md's "gates over
+prompting" rule exists to close.
+
+A real code-level gate now exists instead: a new `cast_spell` DM tool
+and matching System Engine `CastSpell` RPC (`protocol/system_engine.proto`)
+are a thin wrapper around OpenCombatEngine's own `CastSpellAction` —
+already-tested Core/Implementation logic that checks `PreparedSpells`
+(falling back to `KnownSpells` for a non-prepared caster like a
+Sorcerer — verified directly against `StandardSpellCaster`'s getter, not
+assumed) and slot availability *before* anything happens, and was simply
+never reachable over gRPC until now (the third time this exact
+"real mechanic, no gRPC exposure" pattern turned up in OpenCombatEngine
+this session). `apply_effect`'s own description now steers the model
+away from using it for a spell's effect. Live-verified end-to-end
+against a real model (`qwen3.8:27b`) and a real sidecar: a wizard
+character with Fireball known-but-not-prepared and Magic Missile
+prepared got a **rejected `cast_spell` tool result** (`reason_code:
+cast_spell_failed`) for the former — the engine's own mechanical
+rejection, not the model's narrative judgment — and a **successful
+`cast_spell` tool result** for the latter, with the model correctly
+narrating the failure/success from the tool result rather than guessing.
+
+**A real, separate bug found during this live verification, not fixed
+here:** every Open5e-sourced spell's `CastSpellResponse.TargetDamaged`
+came back `false` regardless of the spell (checked directly via a
+debug log added and removed for this verification, across repeated
+live casts) — `CastSpellAction`'s own result message was a bare "Cast
+successfully." with no damage applied. Root cause, confirmed by reading
+the code: `OpenCombatEngine.Implementation/Open5e/Open5eAdapter.cs`'s
+`ToStandard(Open5eSpell)` never populates `SpellDto.Damage`/
+`DamageInflict`/`SpellAttack` — and Open5e's own REST API doesn't expose
+those as separate structured fields for spells at all, only as prose
+inside `desc` (e.g. "3d4 + your spellcasting ability modifier force
+damage"), so a real fix needs either prose-parsing or a different data
+source, not a small mapping tweak. Net effect: `cast_spell`'s own
+prepared/slot gate (this task's actual scope) is real and works
+correctly, live-verified above; but no Open5e-sourced spell can
+currently deal real damage through this engine, and `cast_spell`'s own
+post-hoc PvP gate (below) — while real and covered by an 8-case
+table-driven test — isn't currently exercisable end-to-end against a
+live spell for the same reason. Filed as a known gap, not silently
+worked around.
 
 Two more governance gates now exist too (design doc §9.1, §9.5 — see
 package `policy` and `campaignPolicy`/`withMaturityConstraint` in
@@ -254,7 +293,20 @@ own character outright unless the campaign's configured policy permits
 it (`pve_only`/`pvp_allowed`/`pvp_with_consent`, checked against a
 pre-declared consent list for the consent case), never left to the DM
 model to self-police; healing another player, or any effect against an
-NPC/monster or the acting player's own character, is unaffected. The
+NPC/monster or the acting player's own character, is unaffected.
+`dmCastSpell` applies the same policy, but at a different point: Master
+can't know in advance whether a *named spell* deals damage (unlike
+`apply_effect`'s explicit `effect_type` argument), so there's nothing to
+check before calling the engine. Instead the engine reports whether the
+target actually took damage (`CastSpellResponse.target_damaged`, a
+before/after HP comparison in the sidecar, not text-parsing), and
+Master decides post hoc whether to persist that outcome — the caster's
+own mutation (slot consumed, concentration set) always persists, since
+the cast genuinely happened, but the target's mutation is discarded when
+policy would have blocked it. Same net guarantee as `apply_effect`'s
+up-front check, just enforced at the commit point instead of the call
+point, since that's the earliest point Master actually has the
+information. The
 maturity tier is (by design doc's own description) prompting-only, not a
 hard filter — an operator-authored constraint string appended to both
 narrative passes' system prompts when configured, verified live to
