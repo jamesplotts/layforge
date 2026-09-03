@@ -16,6 +16,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/combatmap"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
+	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
 
 // Generation parameters for generate_combat_map — fixed for this version
@@ -374,4 +375,49 @@ func (s *Server) handleMapTokenMoveRequest(ctx context.Context, conn *websocket.
 	meta.state.MoveToken(tok.TokenID, req.Payload.To.X, req.Payload.To.Y)
 	s.broadcastCombatMapToEveryOwner(campaignID, meta)
 	return nil
+}
+
+// buildGridContext returns real position/blocking-cell data for
+// dmCastSpell's CastSpellRequest (protocol/system_engine.proto's
+// grid_context, see its own doc comment) — set only when campaignID has
+// an active combat map and both casterCharacterID and targetCharacterID
+// have a token on it, so OpenCombatEngine's already-tested range/line-
+// of-sight logic (CastSpellAction.Execute) actually receives real data
+// to check for the first time; returns nil otherwise (no combat map
+// generated, or either character has no token on it), which leaves
+// CastSpell's own context.Grid null and every existing no-grid cast
+// behaving exactly as it always has.
+func (s *Server) buildGridContext(campaignID, casterCharacterID, targetCharacterID string) *systemenginepb.GridContext {
+	s.combatMapsMu.Lock()
+	meta, ok := s.combatMaps[campaignID]
+	s.combatMapsMu.Unlock()
+	if !ok {
+		return nil
+	}
+
+	casterToken, ok := meta.state.TokenByCharacterID(casterCharacterID)
+	if !ok {
+		return nil
+	}
+	targetToken, ok := meta.state.TokenByCharacterID(targetCharacterID)
+	if !ok {
+		return nil
+	}
+
+	grid := meta.state.Grid
+	var obstacles []*systemenginepb.GridPosition
+	for y := 0; y < grid.Height; y++ {
+		for x := 0; x < grid.Width; x++ {
+			cell, _ := grid.At(x, y)
+			if cell.BlocksLOS {
+				obstacles = append(obstacles, &systemenginepb.GridPosition{X: int32(x), Y: int32(y)})
+			}
+		}
+	}
+
+	return &systemenginepb.GridContext{
+		CasterPosition: &systemenginepb.GridPosition{X: int32(casterToken.X), Y: int32(casterToken.Y)},
+		TargetPosition: &systemenginepb.GridPosition{X: int32(targetToken.X), Y: int32(targetToken.Y)},
+		Obstacles:      obstacles,
+	}
 }

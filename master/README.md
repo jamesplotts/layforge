@@ -442,25 +442,39 @@ correct (fog of war is doing exactly what it's supposed to with the
 positions it was given), just a rough narrative/placement mismatch worth
 a better placement heuristic later, not silently glossed over here.
 
-Deliberately out of scope for this pass, flagged rather than silently
-built around: grid/position data does not reach the System Engine at
-all — `internal/combatmap` is entirely Master-side, and OpenCombatEngine's
-own `IGridManager`/`StandardGridManager` (a full, tested spatial engine —
-distance, LOS, obstacles, pathfinding, `GetCreaturesInShape` for AOE)
-still never receives real position data from any gRPC call, so it
-mechanically gates nothing yet; `CoverType` is real in
-`StandardCreature.ResolveAttack` but no action ever passes a real cover
-value into it either. Wiring position data across the gRPC boundary so
-that engine-side logic actually activates for real range/LOS/cover
-gating is separate, real, cross-repo follow-up work — this pass makes
-combat position tracking/fog-of-war genuinely correct and useful
-*informationally*, the same "narrative-grounded now, hard-gated later"
-staging this session already used once before for spellcasting itself.
-No token art (plain colored circles), no cave-style generation (one
-room/corridor generator only), no interactive drag-and-drop placement
-(auto-placed at generation, moved only by declaring a destination cell),
-and combat-map state is in-memory only — lost on a Master restart, same
-documented limitation `turnOrder` already has.
+**Since closed**: grid/position data now does reach the System Engine for
+`cast_spell` specifically — `dmCastSpell` (`dm_tools.go`) calls a new
+`buildGridContext` (`combat_map.go`) that, whenever a combat map exists
+for the campaign and both the caster and target have tokens on it,
+populates `CastSpellRequest.grid_context` with real positions and the
+generated map's own line-of-sight-blocking cells. OpenCombatEngine's own
+`CastSpellAction` already had a complete, tested range/line-of-sight
+check (`ParseRangeInFeet` vs. `IGridManager.GetDistance`,
+`HasLineOfSight`) sitting dormant since it never received a populated
+grid to check against — this makes that check receive real data for the
+first time, so a spell cast at a target genuinely out of range, or
+behind a real generated wall, is now hard-rejected by the engine rather
+than resolving regardless of distance. Casting with no combat map
+generated (still the common case) is completely unaffected — no
+`grid_context` is sent, `context.Grid` stays `null`, and `CastSpellAction`
+skips the check exactly as it always has.
+
+Still deliberately out of scope, flagged rather than silently built
+around: **cover** remains genuinely unbuilt in OpenCombatEngine, not just
+unwired — `IGridManager` has no cover-computation method at all
+(`CoverType` is mechanically real only where `StandardCreature.
+ResolveAttack` already used it directly, e.g. a manually-supplied
+`AttackResult`), so there was no capability to wire even if this pass
+wanted to. `apply_effect` still has no range/LOS concept at all (it's
+for narratively-clear non-spell effects, with no `Range` field to check
+against), and no RPC exposes `AttackAction` yet, so weapon
+attacks aren't gated this way either — `cast_spell` is the only tool
+this applies to today. No token art (plain colored circles), no
+cave-style generation (one room/corridor generator only), no interactive
+drag-and-drop placement (auto-placed at generation, moved only by
+declaring a destination cell), and combat-map state is in-memory only —
+lost on a Master restart, same documented limitation `turnOrder` already
+has.
 
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
 knowledge scoping) is still to come — see

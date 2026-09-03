@@ -50,6 +50,27 @@ func TestState_TokenByID_NotFound(t *testing.T) {
 	}
 }
 
+func TestState_TokenByCharacterID_Found(t *testing.T) {
+	s := NewState(NewGrid(5, 5))
+	s.PlaceToken(Token{TokenID: "tok-1", CharacterID: "char-1", X: 2, Y: 3})
+
+	got, ok := s.TokenByCharacterID("char-1")
+	if !ok {
+		t.Fatal("TokenByCharacterID() ok = false, want true")
+	}
+	if got.X != 2 || got.Y != 3 {
+		t.Errorf("got = %+v, want X=2 Y=3", got)
+	}
+}
+
+func TestState_TokenByCharacterID_NotFound(t *testing.T) {
+	s := NewState(NewGrid(5, 5))
+
+	if _, ok := s.TokenByCharacterID("nope"); ok {
+		t.Error("TokenByCharacterID() ok = true, want false")
+	}
+}
+
 func TestState_MoveToken_ExistingToken_UpdatesPosition(t *testing.T) {
 	s := NewState(NewGrid(5, 5))
 	s.PlaceToken(Token{TokenID: "tok-1", CharacterID: "char-1", X: 0, Y: 0})

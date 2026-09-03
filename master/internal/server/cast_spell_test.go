@@ -97,6 +97,9 @@ func TestServe_NarrativePlayerInput_SlowPass_CastSpell_Success_PersistsCasterAnd
 	if fakeEngine.lastCastSpellRequest.SpellName != "Magic Missile" {
 		t.Errorf("CastSpell called with SpellName = %q, want %q", fakeEngine.lastCastSpellRequest.SpellName, "Magic Missile")
 	}
+	if fakeEngine.lastCastSpellRequest.GridContext != nil {
+		t.Errorf("CastSpell called with GridContext = %+v, want nil (no combat map exists for this campaign)", fakeEngine.lastCastSpellRequest.GridContext)
+	}
 
 	savedCaster, err := st.GetCharacter(ctx, "caster-char")
 	if err != nil {
@@ -332,5 +335,97 @@ func TestServe_NarrativePlayerInput_SlowPass_CastSpell_PvPGate(t *testing.T) {
 				t.Errorf("persisted caster spellcasting.slotsRemaining = %v, want 1 (caster mutation must persist even when the PvP gate blocks the target)", spellcasting["slotsRemaining"])
 			}
 		})
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_CastSpell_WithCombatMap_PopulatesGridContext
+// covers wiring internal/combatmap's real positions/blocking cells into
+// CastSpellRequest.grid_context (protocol/system_engine.proto) — the
+// hard gate against range/line-of-sight this session's plan added on
+// top of OpenCombatEngine's own already-tested CastSpellAction range/LOS
+// check. Drives a full start_combat -> generate_combat_map -> cast_spell
+// tool-call chain (mirroring combat_map_test.go's own
+// startCombatAndGenerateMap, but self-contained here since this test
+// also needs a canned CastSpell response the shared helper doesn't set
+// up) and asserts the engine actually received real caster/target
+// positions and the generated grid's own blocking cells, not an omitted
+// grid_context.
+func TestServe_NarrativePlayerInput_SlowPass_CastSpell_WithCombatMap_PopulatesGridContext(t *testing.T) {
+	casterData, err := structpb.NewStruct(map[string]any{"name": "Kestrel"})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct() error = %v", err)
+	}
+	fakeEngine := &fakeSystemEngineClient{
+		resolveCheckFunc: func(req *systemenginepb.ResolveCheckRequest) (*systemenginepb.ResolveCheckResponse, error) {
+			return &systemenginepb.ResolveCheckResponse{
+				Success: true,
+				Outcome: &systemenginepb.Outcome{Total: 10, ResultSummary: "resolved", Rolls: []*systemenginepb.DieRoll{{Sides: 20, Result: 10, Label: "d20"}}},
+			}, nil
+		},
+		getCharacterStatusResp: &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE},
+		startTurnResp:          noOpStartTurnResp,
+		castSpellResp: &systemenginepb.CastSpellResponse{
+			Success:       true,
+			ResultMessage: "Magic Missile strikes true.",
+			Caster:        &systemenginepb.Actor{ActorId: "char-a", CharacterData: casterData, SchemaVersion: "opencombatengine-v1"},
+			TargetDamaged: true,
+		},
+	}
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Kestrel squares off against the goblin."},
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b"]}`)}}},
+			{ToolCalls: []llm.ToolCall{{ID: "call_2", Name: "generate_combat_map", Arguments: json.RawMessage(`{}`)}}},
+			{ToolCalls: []llm.ToolCall{{ID: "call_3", Name: "cast_spell", Arguments: json.RawMessage(`{"character_id":"char-a","spell_name":"Magic Missile","target_character_id":"char-b"}`)}}},
+			{Text: "Three darts of force streak across the room."},
+		},
+	}
+	campaignID := "campaign-cast-with-map"
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacterWithData(t, st, "char-a", campaignID, "player-a", `{"name":"Kestrel","team":"party","combatStats":{"speed":30}}`)
+	seedCharacterWithData(t, st, "char-b", campaignID, "player-b", `{"name":"Grum","team":"monsters","combatStats":{"speed":30}}`)
+
+	conn := dialAndJoin(t, ts, campaignID, "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, campaignID, "player-a", "char-a", "I fight the goblin, then cast Magic Missile at it!"); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	// Drain until narrative.dm_prose, the same full-turn-drain discipline
+	// combat_map_test.go's own helpers use — this test only cares about
+	// the CastSpell request the fake engine captured, not the specific
+	// message sequence.
+	for i := 0; i < 20; i++ {
+		typ, _, err := readEnvelopeType(ctx, conn)
+		if err != nil {
+			t.Fatalf("reading message %d: %v", i, err)
+		}
+		if typ == protocol.MessageTypeNarrativeDmProse {
+			break
+		}
+	}
+
+	if fakeEngine.lastCastSpellRequest == nil {
+		t.Fatal("CastSpell was never called")
+	}
+	gc := fakeEngine.lastCastSpellRequest.GridContext
+	if gc == nil {
+		t.Fatal("CastSpell called with GridContext = nil, want it populated (a combat map with both char-a and char-b placed exists)")
+	}
+	if gc.CasterPosition == nil || gc.TargetPosition == nil {
+		t.Fatalf("GridContext = %+v, want non-nil CasterPosition and TargetPosition", gc)
+	}
+	if gc.CasterPosition.X == gc.TargetPosition.X && gc.CasterPosition.Y == gc.TargetPosition.Y {
+		t.Errorf("CasterPosition and TargetPosition are identical (%+v) — party/monster clustering should place them apart", gc.CasterPosition)
+	}
+	// The generated map has walls (everything not carved as a room or
+	// corridor) — Obstacles should reflect real generated blocking
+	// cells, not an empty list.
+	if len(gc.Obstacles) == 0 {
+		t.Error("GridContext.Obstacles is empty, want the generated map's real wall cells")
 	}
 }

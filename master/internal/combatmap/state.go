@@ -51,6 +51,18 @@ func (s *State) TokenByID(tokenID string) (Token, bool) {
 	return Token{}, false
 }
 
+// TokenByCharacterID returns the token belonging to characterID, and
+// whether one was found — a character can only have one token on the map
+// at a time (PlaceToken's own invariant), so this is unambiguous.
+func (s *State) TokenByCharacterID(characterID string) (Token, bool) {
+	for _, tok := range s.Tokens {
+		if tok.CharacterID == characterID {
+			return tok, true
+		}
+	}
+	return Token{}, false
+}
+
 // MoveToken updates the position of the token identified by tokenID.
 // Returns false if no such token exists — the caller is expected to have
 // already validated the move (ValidateMove) before calling this, so a

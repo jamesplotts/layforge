@@ -442,6 +442,7 @@ func (s *Server) dmCastSpell(ctx context.Context, campaignID, actingSenderID str
 			return fmt.Sprintf("parsing stored target data: %v", err), false, "internal_error"
 		}
 		req.Target = &systemenginepb.Actor{ActorId: target.ID, CharacterData: targetData, SchemaVersion: target.SchemaVersion}
+		req.GridContext = s.buildGridContext(campaignID, caster.ID, target.ID)
 	}
 
 	resp, err := s.systemEngine.CastSpell(ctx, req)
