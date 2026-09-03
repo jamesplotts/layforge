@@ -125,6 +125,23 @@
            character.apply_effect (design doc §6.1's apply_effect()) and
            re-renders the sheet from the result. -->
       <aside class="character-sidebar">
+        <!-- Combat map: a current-state widget (map.token_state,
+             design doc §6.2), not part of the scrolling narrative log —
+             deliberately separate from narrative.scene_image's
+             append-to-history figures below, since this represents "the
+             map right now," not a one-off illustration tied to a moment
+             in the log. Hidden until the first map.token_state arrives
+             (no combat map has necessarily ever been generated for this
+             campaign). Each recipient's own image_url already has their
+             character's fog of war applied server-side — this widget
+             just displays whatever Master sent, it does no filtering of
+             its own. -->
+        <div id="combat-map-widget" class="combat-map-widget" hidden>
+          <div class="character-sidebar-header">Combat Map</div>
+          <button id="combat-map-thumb-button" type="button" class="combat-map-thumb-button">
+            <img id="combat-map-thumb" class="combat-map-thumb" alt="Combat map — click to enlarge" />
+          </button>
+        </div>
         <div class="character-sidebar-header">Character</div>
         <div id="character-tabs" class="character-tabs" role="tablist"></div>
         <div id="character-tab-panels" class="character-tab-panels"></div>
@@ -136,6 +153,21 @@
       </aside>
     </div>
   </section>
+
+  <!-- Combat map lightbox: click-to-enlarge for the sidebar thumbnail
+       above, not a native <dialog> — same reasoning the safety-flag
+       panel above already documents for avoiding one (blocks the JS
+       thread) — just a position:fixed overlay toggled via [hidden],
+       this codebase's one existing show/hide convention. Lives outside
+       #chat-screen so its full-viewport overlay isn't constrained by
+       any ancestor's layout. -->
+  <div id="combat-map-lightbox" class="lightbox" hidden>
+    <button id="combat-map-lightbox-backdrop" type="button" class="lightbox-backdrop" aria-label="Close"></button>
+    <div class="lightbox-content">
+      <img id="combat-map-lightbox-img" alt="Combat map, full size" />
+      <button id="combat-map-lightbox-close" type="button" class="lightbox-close" aria-label="Close">&times;</button>
+    </div>
+  </div>
 
   <!-- Both modules: dice.js imports three.js/cannon-es as ES modules
        (vendor/, see vendor/README.md) and must be one itself; app.js is

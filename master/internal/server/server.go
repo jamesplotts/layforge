@@ -6,8 +6,7 @@
 // auth -> system.session_state, or system.error on rejection), followed
 // by a per-connection message loop that dispatches whatever the client
 // sends next. See design doc §5 for the protocol and §11 for what's
-// still to come — the map message category still doesn't exist.
-// Implemented so far, by area:
+// still to come. Implemented so far, by area:
 //
 //   - safety.flag (§9.2): broadcast to the campaign via package
 //     session's Hub.
@@ -76,6 +75,18 @@
 //     result as narrative.scene_image. Not offered as a DM tool at all
 //     when no provider is configured (s.imageGen == nil), same pattern
 //     as tools requiring a system engine.
+//   - The combat map (§6.2, see internal/combatmap and combat_map.go):
+//     an opt-in generate_combat_map DM tool generates a grid, auto-places
+//     tokens, and sends each connected player their own per-character fog
+//     of war (recursive shadowcasting against the generated blocking
+//     grid) as map.token_state — never Broadcast, since two players
+//     legitimately see different things for the same event
+//     (session.Hub.SendToSender). map.token_move_request validates
+//     ownership, movement speed, and the blocking grid before accepting.
+//     Grid/position data does not reach the System Engine in this
+//     version — see internal/combatmap's package doc comment for why
+//     mechanically gating spell/attack range/line-of-sight/cover against
+//     it is separate, deferred work.
 //
 // See CLAUDE.md and each dispatch case's own comments for why a given
 // message either is or isn't implemented yet.
@@ -145,6 +156,17 @@ type Server struct {
 	// has, kept local here since nothing outside this package touches it.
 	turnOrders   map[string]*turnOrder
 	turnOrdersMu sync.Mutex
+
+	// combatMaps holds each campaign's active combat-map state
+	// (combat_map.go, internal/combatmap, design doc §6.2) — same
+	// in-memory-only, guarded-by-its-own-mutex shape as turnOrders, and
+	// the same documented "lost on Master restart" limitation. Unlike
+	// turnOrders, a campaign with no map generated for its current combat
+	// simply has no entry here; this is always optional, never required
+	// for combat to function (see dmGenerateCombatMap's own doc comment
+	// for why it's a separate opt-in DM tool rather than automatic).
+	combatMaps   map[string]*combatMapMeta
+	combatMapsMu sync.Mutex
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -182,6 +204,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		policy:         policyProvider,
 		imageGen:       imageGenProvider,
 		turnOrders:     make(map[string]*turnOrder),
+		combatMaps:     make(map[string]*combatMapMeta),
 	}
 }
 
@@ -294,7 +317,7 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 		return err
 	}
 
-	return s.serve(ctx, conn, campaignID)
+	return s.serve(ctx, conn, campaignID, connect.SenderID)
 }
 
 // sendSessionState sends a system.session_state message to conn.
@@ -316,9 +339,13 @@ func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, cam
 // write pump delivering session.Hub broadcasts to this client, and a
 // read loop dispatching each inbound message by type. It returns once
 // the connection ends, for any reason — client disconnect, a read/write
-// error, or ctx cancellation.
-func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID string) error {
-	client := s.hub.Register(campaignID)
+// error, or ctx cancellation. senderID is the sender_id this connection
+// authenticated as at handshake time (its system.connect message) —
+// registered with the Hub so a later Hub.SendToSender can target this
+// connection specifically (design doc §9's per-player fog-of-war sends,
+// internal/server/combat_map.go).
+func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID, senderID string) error {
+	client := s.hub.Register(campaignID, senderID)
 	defer s.hub.Unregister(client)
 
 	writeDone := make(chan error, 1)
@@ -443,6 +470,17 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		}
 		recordEvent(ctx, s, req)
 		return s.applyCharacterEffect(ctx, conn, campaignID, envelope.SenderID, req)
+	case protocol.MessageTypeMapTokenMoveRequest:
+		var req protocol.MapTokenMoveRequestMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed map.token_move_request payload: %w", err))
+		}
+		// Not recorded to the event log: the resulting map.token_state
+		// sends are themselves per-recipient and already skip recordEvent
+		// for the same reason (see sendToSender's doc comment) — logging
+		// the request but not its differently-shaped-per-recipient result
+		// would be a misleading half-record.
+		return s.handleMapTokenMoveRequest(ctx, conn, campaignID, envelope.SenderID, req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}

@@ -35,7 +35,9 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "ToolResult_ReturnsTrue", t: MessageTypeToolResult, want: true},
 		{name: "TurnState_ReturnsTrue", t: MessageTypeTurnState, want: true},
 		{name: "NarrativeSceneImage_ReturnsTrue", t: MessageTypeNarrativeSceneImage, want: true},
-		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("map.token_state"), want: false},
+		{name: "MapTokenState_ReturnsTrue", t: MessageTypeMapTokenState, want: true},
+		{name: "MapTokenMoveRequest_ReturnsTrue", t: MessageTypeMapTokenMoveRequest, want: true},
+		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("map.room_adjacency"), want: false},
 		{name: "CharacterReviewStatus_ReturnsFalse_NotImplementedYet", t: MessageType("character.review_status"), want: false},
 		{name: "RollAcknowledge_ReturnsFalse_NotImplementedYet", t: MessageType("roll.acknowledge"), want: false},
 	}

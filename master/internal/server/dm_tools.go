@@ -101,6 +101,11 @@ func dmTools() []llm.Tool {
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
 		{
+			Name:        "generate_combat_map",
+			Description: "Generate a tactical grid map and place every combatant's token on it for the currently active fight — call this only when the physical space genuinely matters (a real dungeon room, not an abstract narrated skirmish), not for every combat automatically, the same restraint generate_scene_image uses. Requires start_combat to have already been called for this campaign. Each player only ever sees what their own character can currently see (fog of war) — this is purely tracking/display, it doesn't change what apply_effect/cast_spell/resolve_check do.",
+			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
+		},
+		{
 			Name:        "get_character_schema",
 			Description: "Get the JSON Schema this campaign's character data must conform to. Call this before create_npc if you don't already know the schema's shape — never guess field names.",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
@@ -199,6 +204,8 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmAdvanceTurn(ctx, campaignID)
 	case "end_combat":
 		return s.dmEndCombat(ctx, campaignID)
+	case "generate_combat_map":
+		return s.dmGenerateCombatMap(ctx, campaignID)
 	case "get_character_schema":
 		return s.dmGetCharacterSchema(ctx)
 	case "create_npc":

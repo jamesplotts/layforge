@@ -142,7 +142,8 @@ OpenCombatEngine is the D&D reference implementation. A future Vampire/Pathfinde
 ### 6.2 Viewport
 - Master publishes renderer-agnostic grid/coordinate state (`map.*` channel). No 3D engine, no camera model assumed.
 - A viewport that lets players *move* their own token needs write-back: `token.move_request` → Master validates → broadcasts accepted state.
-- Reference/example viewports are out of scope for the initial repo; the state feed being genuinely renderer-agnostic is the deliverable.
+- A real interactive tactical/first-person viewport (pan/zoom/drag-to-move, a 3D or grid-crawler engine) is out of scope for this repo — the renderer-agnostic state feed being genuinely renderer-agnostic is the deliverable a viewport project builds against (§11 V3).
+- **Built ahead of that, in this repo, as of the combat-map feature**: Master owns and generates the actual grid (`internal/combatmap` — a native room/corridor generator, recursive-shadowcasting fog of war computed per character, movement validated against speed and the blocking grid), and composites each recipient's own fog-of-war-filtered view into a PNG server-side (`map.token_state`'s `image_url`, alongside the structured `grid`/`tokens` fields a real viewport would consume instead). The reference web client shows that image as a static sidebar thumbnail with click-to-enlarge — display only, no pan/zoom/token-dragging — which is a materially smaller thing than "a viewport" and was judged in-scope for the reference client rather than requiring a separate project. Grid/position data does not reach the System Engine in this version — see `internal/combatmap`'s package doc comment for why mechanically gating spell/attack range/line-of-sight/cover against it is separate, deferred work.
 
 
 ### 6.3 Image-gen provider
@@ -294,7 +295,7 @@ See §6.5. Governs both DM text generation and image-gen calls; enforced via pro
 
 **V2**
 - Image-gen as a pluggable provider contract (ComfyUI/x402 reference implementation)
-- Viewport channel formalized (renderer-agnostic map/token state) — no viewport shipped, just the documented feed
+- Viewport channel formalized (renderer-agnostic map/token state) — done, plus more than originally scoped here: Master generates the actual grid, computes real fog of war, and composites a per-player image server-side (`internal/combatmap`); the reference client shows it as a static sidebar thumbnail with click-to-enlarge. Still no interactive viewport (pan/zoom/drag-to-move) — see §6.2.
 
 **V3**
 - No engine committed in-repo. Protocol already carries what either a Talespire-style tactical 3D viewport or a Gold Box/SSI-style first-person grid-crawler would need (token position, facing, room-adjacency graph), built by whoever takes it on — James is planning the Gold Box-style one himself.

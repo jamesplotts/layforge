@@ -26,8 +26,8 @@ func recvOrTimeout(t *testing.T, ch <-chan []byte, timeout time.Duration) ([]byt
 
 func TestHub_Broadcast_DeliversToAllClientsInCampaign(t *testing.T) {
 	h := session.NewHub()
-	a := h.Register("campaign-1")
-	b := h.Register("campaign-1")
+	a := h.Register("campaign-1", "player-a")
+	b := h.Register("campaign-1", "player-b")
 
 	h.Broadcast("campaign-1", []byte("hello"))
 
@@ -44,8 +44,8 @@ func TestHub_Broadcast_DeliversToAllClientsInCampaign(t *testing.T) {
 
 func TestHub_Broadcast_DoesNotCrossCampaigns(t *testing.T) {
 	h := session.NewHub()
-	inCampaign1 := h.Register("campaign-1")
-	inCampaign2 := h.Register("campaign-2")
+	inCampaign1 := h.Register("campaign-1", "player-a")
+	inCampaign2 := h.Register("campaign-2", "player-a")
 
 	h.Broadcast("campaign-1", []byte("hello"))
 
@@ -65,7 +65,7 @@ func TestHub_Broadcast_UnknownCampaign_NoOp(t *testing.T) {
 
 func TestHub_Unregister_ClosesOutboxAndStopsDelivery(t *testing.T) {
 	h := session.NewHub()
-	c := h.Register("campaign-1")
+	c := h.Register("campaign-1", "player-a")
 
 	h.Unregister(c)
 
@@ -80,8 +80,8 @@ func TestHub_Unregister_ClosesOutboxAndStopsDelivery(t *testing.T) {
 
 func TestHub_Unregister_DoesNotAffectOtherClientsInSameCampaign(t *testing.T) {
 	h := session.NewHub()
-	leaving := h.Register("campaign-1")
-	staying := h.Register("campaign-1")
+	leaving := h.Register("campaign-1", "player-a")
+	staying := h.Register("campaign-1", "player-b")
 
 	h.Unregister(leaving)
 	h.Broadcast("campaign-1", []byte("hello"))
@@ -93,7 +93,7 @@ func TestHub_Unregister_DoesNotAffectOtherClientsInSameCampaign(t *testing.T) {
 
 func TestHub_Broadcast_FullOutbox_DropsRatherThanBlocks(t *testing.T) {
 	h := session.NewHub()
-	c := h.Register("campaign-1")
+	c := h.Register("campaign-1", "player-a")
 
 	// Fill the mailbox to capacity without draining it.
 	for i := 0; i < 16; i++ {
@@ -115,4 +115,45 @@ func TestHub_Broadcast_FullOutbox_DropsRatherThanBlocks(t *testing.T) {
 	if got := len(c.Outbox()); got != 16 {
 		t.Errorf("len(Outbox()) = %d, want 16 (overflow message should have been dropped)", got)
 	}
+}
+
+func TestHub_SendToSender_DeliversOnlyToMatchingSender(t *testing.T) {
+	h := session.NewHub()
+	a := h.Register("campaign-1", "player-a")
+	b := h.Register("campaign-1", "player-b")
+
+	h.SendToSender("campaign-1", "player-a", []byte("for-a-only"))
+
+	got, ok := recvOrTimeout(t, a.Outbox(), time.Second)
+	if !ok {
+		t.Fatal("player-a: no message received")
+	}
+	if string(got) != "for-a-only" {
+		t.Errorf("player-a: got %q, want %q", got, "for-a-only")
+	}
+	if got, ok := recvOrTimeout(t, b.Outbox(), 200*time.Millisecond); ok {
+		t.Errorf("player-b: received %q, want nothing (SendToSender must not cross senders)", got)
+	}
+}
+
+func TestHub_SendToSender_MultipleConnectionsSameSender_DeliversToAll(t *testing.T) {
+	h := session.NewHub()
+	tab1 := h.Register("campaign-1", "player-a")
+	tab2 := h.Register("campaign-1", "player-a")
+
+	h.SendToSender("campaign-1", "player-a", []byte("hello"))
+
+	for name, c := range map[string]*session.Client{"tab1": tab1, "tab2": tab2} {
+		if _, ok := recvOrTimeout(t, c.Outbox(), time.Second); !ok {
+			t.Errorf("%s: no message received, want delivery to every connection for the same sender", name)
+		}
+	}
+}
+
+func TestHub_SendToSender_UnknownSender_NoOp(t *testing.T) {
+	h := session.NewHub()
+	h.Register("campaign-1", "player-a")
+
+	// Must not panic or block.
+	h.SendToSender("campaign-1", "nobody-registered", []byte("hello"))
 }

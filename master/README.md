@@ -403,9 +403,68 @@ with the first time), and the admin page's own poll-and-reload picked the
 new process back up automatically. See `main.go`'s package doc comment
 for a systemd `KillMode` caveat this self-restart interacts with.
 
-Every other message category (map) and the rest of §9 (§9.4's review
-panel, §9.6 spotlight balance, §9.7 knowledge scoping) are still to come
-— see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+The `map.*` message category (design doc §6.2) is now real too: a new
+`generate_combat_map` DM tool (called only when a fight's physical space
+is actually worth tracking, the same restraint `generate_scene_image`
+already uses — not automatic on every `start_combat`) generates a grid
+map natively in Go (`internal/combatmap` — a rooms-and-corridors
+generator, no third-party dependency, matching Master's own
+single-static-binary rule) and auto-places every combatant's token,
+clustered by team. Distance/line-of-sight tracking is real: each
+connected player gets their *own* fog of war (recursive shadowcasting
+against the generated blocking grid, computed server-side) — genuinely
+different `map.token_state` content per recipient for the same event,
+sent via a new `session.Hub.SendToSender` (there was previously no way
+to target one specific player's connection at all; only room-wide
+`Broadcast` or replying to whichever connection triggered the request
+existed). `map.token_move_request` validates token ownership, movement
+speed (`combatStats.speed`), and the blocking grid before accepting a
+move, then re-sends every affected player's own updated view — moving
+can reveal or hide things for someone other than the mover, e.g.
+stepping past a corner.
+
+Each recipient's `map.token_state` also carries a composited PNG
+(`image_url`, Go stdlib `image`/`image/png`, no external service) of
+their own fog-of-war-filtered view — the reference web client shows this
+as a static sidebar thumbnail, click to enlarge in a lightbox, live-
+verified in a real browser end-to-end: `generate_combat_map` ran as part
+of a real DM tool-call chain (`create_npc` → `start_combat` →
+`generate_combat_map`) against `qwen3.8:27b`, the sidebar thumbnail
+appeared showing a real generated room, and the lightbox opened/closed
+correctly (click, the close button, and Escape all worked). One honest,
+observed rough edge from that same run: the auto-placement heuristic
+(cluster the first-seen team near one scan-order extreme, everyone else
+near the other) doesn't guarantee two teams land in the same room or
+even within sight of each other — in the live run, the goblin ended up
+outside Kestrel's own fog of war despite the DM's own narration
+describing them as being in the same room together. Mechanically
+correct (fog of war is doing exactly what it's supposed to with the
+positions it was given), just a rough narrative/placement mismatch worth
+a better placement heuristic later, not silently glossed over here.
+
+Deliberately out of scope for this pass, flagged rather than silently
+built around: grid/position data does not reach the System Engine at
+all — `internal/combatmap` is entirely Master-side, and OpenCombatEngine's
+own `IGridManager`/`StandardGridManager` (a full, tested spatial engine —
+distance, LOS, obstacles, pathfinding, `GetCreaturesInShape` for AOE)
+still never receives real position data from any gRPC call, so it
+mechanically gates nothing yet; `CoverType` is real in
+`StandardCreature.ResolveAttack` but no action ever passes a real cover
+value into it either. Wiring position data across the gRPC boundary so
+that engine-side logic actually activates for real range/LOS/cover
+gating is separate, real, cross-repo follow-up work — this pass makes
+combat position tracking/fog-of-war genuinely correct and useful
+*informationally*, the same "narrative-grounded now, hard-gated later"
+staging this session already used once before for spellcasting itself.
+No token art (plain colored circles), no cave-style generation (one
+room/corridor generator only), no interactive drag-and-drop placement
+(auto-placed at generation, moved only by declaring a destination cell),
+and combat-map state is in-memory only — lost on a Master restart, same
+documented limitation `turnOrder` already has.
+
+The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
+knowledge scoping) is still to come — see
+[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 

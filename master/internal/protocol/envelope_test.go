@@ -58,7 +58,7 @@ func TestEnvelope_Validate(t *testing.T) {
 		},
 		{
 			name:    "UnrecognizedType_ReturnsUnrecognizedType",
-			modify:  func(e Envelope) Envelope { e.Type = MessageType("map.token_state"); return e },
+			modify:  func(e Envelope) Envelope { e.Type = MessageType("map.room_adjacency"); return e },
 			wantErr: ErrUnrecognizedType,
 		},
 		{

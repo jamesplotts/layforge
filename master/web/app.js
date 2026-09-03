@@ -13,8 +13,11 @@
 // actual 3D die), and now a read-only character sheet: character.
 // schema_request/character.get, rendered generically from whatever
 // json_schema the active system engine publishes (see
-// character-sheet.js — not hardcoded to D&D's shape, design doc §4).
-// Still no push-to-talk — Master has no audio pipeline yet.
+// character-sheet.js — not hardcoded to D&D's shape, design doc §4), and
+// a combat-map sidebar thumbnail + lightbox (map.token_state, design doc
+// §6.2) — a current-state widget, not appended to the scrolling log; see
+// onMapTokenState. Still no push-to-talk — Master has no audio pipeline
+// yet.
 //
 // The dice tray (and now the sheet) needs a character Master's store
 // actually recognizes (roll.check_request/character.get are gated on
@@ -95,6 +98,13 @@ const el = {
   effectAmount: document.getElementById("effect-amount"),
   effectDamageButton: document.getElementById("effect-damage-button"),
   effectHealButton: document.getElementById("effect-heal-button"),
+  combatMapWidget: document.getElementById("combat-map-widget"),
+  combatMapThumbButton: document.getElementById("combat-map-thumb-button"),
+  combatMapThumb: document.getElementById("combat-map-thumb"),
+  combatMapLightbox: document.getElementById("combat-map-lightbox"),
+  combatMapLightboxImg: document.getElementById("combat-map-lightbox-img"),
+  combatMapLightboxBackdrop: document.getElementById("combat-map-lightbox-backdrop"),
+  combatMapLightboxClose: document.getElementById("combat-map-lightbox-close"),
 };
 
 el.joinUrl.value = defaultWsUrl();
@@ -110,6 +120,12 @@ el.effectHealButton.addEventListener("click", () => onApplyEffectClick("heal"));
 el.diceSkinSelect.addEventListener("change", () => {
   Dice.applyDiceSkin(state.dieHandle, el.diceSkinSelect.value);
   Dice.saveDiceSkin(el.diceSkinSelect.value);
+});
+el.combatMapThumbButton.addEventListener("click", openCombatMapLightbox);
+el.combatMapLightboxBackdrop.addEventListener("click", closeCombatMapLightbox);
+el.combatMapLightboxClose.addEventListener("click", closeCombatMapLightbox);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !el.combatMapLightbox.hidden) closeCombatMapLightbox();
 });
 
 // Populate the skin picker from the manifest (dice-skins.js) rather than
@@ -308,6 +324,9 @@ function handleMessage(msg) {
       break;
     case "narrative.scene_image":
       appendSceneImage(msg.payload || {});
+      break;
+    case "map.token_state":
+      onMapTokenState(msg.payload || {});
       break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
@@ -568,6 +587,35 @@ function onCharacterStateResponse(msg) {
 function maybeRenderCharacterSheet() {
   if (!state.characterSchema || !state.characterData) return;
   renderCharacterSheetTabs(el.characterTabs, el.characterTabPanels, state.characterSchema, state.characterData);
+}
+
+// onMapTokenState handles map.token_state (design doc §6.2) — a
+// current-state replace, the same semantics onCharacterStateResponse
+// above already has, not narrative.scene_image's append-to-history
+// pattern below: each message is this recipient's own complete,
+// already-fog-of-war-filtered view (see combat_map.go's doc comments on
+// the Master side), so the sidebar thumbnail simply swaps to whatever
+// image_url this message carries rather than accumulating anything.
+// Also keeps the open lightbox (if any) in sync, so a player watching
+// the enlarged view during a fight sees it update live rather than
+// going stale until they close and reopen it.
+function onMapTokenState(payload) {
+  if (!payload.image_url) return;
+  el.combatMapWidget.hidden = false;
+  el.combatMapThumb.src = payload.image_url;
+  if (!el.combatMapLightbox.hidden) {
+    el.combatMapLightboxImg.src = payload.image_url;
+  }
+}
+
+function openCombatMapLightbox() {
+  if (!el.combatMapThumb.src) return;
+  el.combatMapLightboxImg.src = el.combatMapThumb.src;
+  el.combatMapLightbox.hidden = false;
+}
+
+function closeCombatMapLightbox() {
+  el.combatMapLightbox.hidden = true;
 }
 
 // onApplyEffectClick sends character.apply_effect for a "damage" or

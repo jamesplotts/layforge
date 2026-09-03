@@ -272,11 +272,18 @@ func (s *Server) advanceTurn(ctx context.Context, campaignID string) (protocol.T
 // endCombat clears campaignID's turn order and broadcasts the inactive
 // turn.state. Safe to call even when no combat is active — the DM tool
 // can simply narrate "the fight is over" without needing to track
-// whether it already called this.
+// whether it already called this. Also clears any combat map generated
+// for this encounter (combat_map.go) — a map is scoped to one active
+// combat, the same lifecycle turnOrder itself has, not something that
+// persists past the fight it was generated for.
 func (s *Server) endCombat(ctx context.Context, campaignID string) (protocol.TurnStatePayload, error) {
 	s.turnOrdersMu.Lock()
 	delete(s.turnOrders, campaignID)
 	s.turnOrdersMu.Unlock()
+
+	s.combatMapsMu.Lock()
+	delete(s.combatMaps, campaignID)
+	s.combatMapsMu.Unlock()
 
 	payload := protocol.TurnStatePayload{Active: false}
 	if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {

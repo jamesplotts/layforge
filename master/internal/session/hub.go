@@ -25,6 +25,7 @@ const outboxSize = 16
 // actual network connection.
 type Client struct {
 	campaignID string
+	senderID   string
 	outbox     chan []byte
 }
 
@@ -48,10 +49,14 @@ func NewHub() *Hub {
 	return &Hub{rooms: make(map[string]map[*Client]struct{})}
 }
 
-// Register creates and returns a new Client registered under campaignID.
-// The caller must call Unregister exactly once when the connection ends.
-func (h *Hub) Register(campaignID string) *Client {
-	c := &Client{campaignID: campaignID, outbox: make(chan []byte, outboxSize)}
+// Register creates and returns a new Client registered under campaignID,
+// attributed to senderID (the sender_id from that connection's
+// system.connect handshake) — needed so SendToSender can later target this
+// specific player's connection(s), as opposed to Broadcast's room-wide
+// delivery. The caller must call Unregister exactly once when the
+// connection ends.
+func (h *Hub) Register(campaignID, senderID string) *Client {
+	c := &Client{campaignID: campaignID, senderID: senderID, outbox: make(chan []byte, outboxSize)}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -98,6 +103,31 @@ func (h *Hub) Broadcast(campaignID string, payload []byte) {
 	defer h.mu.Unlock()
 
 	for c := range h.rooms[campaignID] {
+		select {
+		case c.outbox <- payload:
+		default:
+		}
+	}
+}
+
+// SendToSender delivers payload only to Client(s) currently registered
+// under campaignID whose senderID matches sender — unlike Broadcast, other
+// players in the same campaign never see it. A sender may have more than
+// one connection open (multiple tabs); all of them receive it. Used for
+// per-player fog-of-war map.token_state sends (internal/server/
+// combat_map.go), where two connected players can legitimately be sent
+// different payloads for the same underlying event — something Broadcast
+// cannot express at all. Sending to a sender with no registered
+// connections is a no-op, not an error; same drop-if-full semantics as
+// Broadcast, for the same reason.
+func (h *Hub) SendToSender(campaignID, sender string, payload []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for c := range h.rooms[campaignID] {
+		if c.senderID != sender {
+			continue
+		}
 		select {
 		case c.outbox <- payload:
 		default:

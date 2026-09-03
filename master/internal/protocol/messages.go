@@ -499,3 +499,90 @@ type NarrativeSceneImagePayload struct {
 
 // NarrativeSceneImageMessage is a narrative.scene_image Message.
 type NarrativeSceneImageMessage = Message[NarrativeSceneImagePayload]
+
+// GridCellPayload is one cell of a MapGridPayload — see that type's doc
+// comment for why this is a coarser model than OpenCombatEngine's own
+// CoverType/ObscurementType (design doc §6.2, internal/combatmap).
+type GridCellPayload struct {
+	X                int  `json:"x"`
+	Y                int  `json:"y"`
+	BlocksMovement   bool `json:"blocks_movement"`
+	BlocksLOS        bool `json:"blocks_los"`
+	DifficultTerrain bool `json:"difficult_terrain,omitempty"`
+}
+
+// MapGridPayload is the blocking-cell grid a MapTokenStatePayload carries —
+// deliberately a binary blocks-movement/blocks-LOS/difficult-terrain model
+// for now, not OpenCombatEngine's richer CoverType/ObscurementType: this
+// grid never reaches OpenCombatEngine today (see MapTokenStatePayload's own
+// doc comment), it only drives Master's own fog-of-war computation and
+// rendering, so there's nothing yet to map the richer enum onto.
+type MapGridPayload struct {
+	Width  int               `json:"width"`
+	Height int               `json:"height"`
+	Cells  []GridCellPayload `json:"cells"`
+}
+
+// GridPositionPayload mirrors protocol/asyncapi.yaml's GridPosition schema
+// exactly (design doc §6.2) — Facing is renderer-agnostic degrees, carried
+// for a future real viewport's own camera/sprite handling; nothing in this
+// version of Master reads or sets it.
+type GridPositionPayload struct {
+	X      int     `json:"x"`
+	Y      int     `json:"y"`
+	Facing float64 `json:"facing,omitempty"`
+}
+
+// TokenPayload is one creature's position on the map, per
+// protocol/asyncapi.yaml's Token schema (design doc §6.2).
+type TokenPayload struct {
+	TokenID     string              `json:"token_id"`
+	CharacterID string              `json:"character_id"`
+	Position    GridPositionPayload `json:"position"`
+}
+
+// MapTokenStatePayload is the payload of a map.token_state message: the
+// current combat-map state, re-sent in full whenever it changes (the same
+// "full snapshot, not a delta" semantics as TurnStatePayload/
+// CharacterStatePayload, not narrative.*'s append-to-history semantics —
+// see internal/server/combat_map.go's doc comment). Unlike every other
+// broadcast message in this protocol, this one is NOT sent identically to
+// every connection: each recipient's Grid/Tokens/ImageURL are filtered to
+// their own character's fog of war (recursive shadowcasting against the
+// blocking grid, internal/combatmap's fov.go) before sending, via
+// session.Hub.SendToSender rather than Broadcast — design doc §9's
+// information-hiding principle (a player's own client should never receive
+// map state their character can't actually see) applied to vision instead
+// of GM secrets.
+//
+// Grid/position data never reaches OpenCombatEngine in this version — see
+// this session's plan doc for why mechanically gating spell/attack range,
+// line of sight, and cover against this grid is deliberately out of scope
+// here; this message exists purely for tracking and display.
+type MapTokenStatePayload struct {
+	RoomID string         `json:"room_id"`
+	Grid   MapGridPayload `json:"grid"`
+	Tokens []TokenPayload `json:"tokens"`
+	// ImageURL is a data: URL of this recipient's own composited PNG view
+	// (grid + their currently-visible tokens, fog already applied) —
+	// Master renders it directly (Go stdlib image/png), no external
+	// service, unlike narrative.scene_image's ImageURL which points at a
+	// configured imagegen.Provider.
+	ImageURL string `json:"image_url"`
+}
+
+// MapTokenStateMessage is a map.token_state Message.
+type MapTokenStateMessage = Message[MapTokenStatePayload]
+
+// MapTokenMoveRequestPayload is the payload of a map.token_move_request
+// message: a player asking to move their own character's token to a new
+// cell (design doc §6.2). Master validates ownership, movement speed, and
+// the blocking grid before accepting — see
+// internal/server/combat_map.go's handler.
+type MapTokenMoveRequestPayload struct {
+	TokenID string              `json:"token_id"`
+	To      GridPositionPayload `json:"to"`
+}
+
+// MapTokenMoveRequestMessage is a map.token_move_request Message.
+type MapTokenMoveRequestMessage = Message[MapTokenMoveRequestPayload]

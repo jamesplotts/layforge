@@ -237,8 +237,22 @@ components:
     MapTokenState:
       name: map.token_state
       messageId: map_token_state
-      title: Token position/facing state
-      summary: Renderer-agnostic grid/coordinate state — no camera-model assumptions, so both a tactical top-down viewport and a first-person grid-crawler can consume the same feed (docs/design.md §6.2).
+      title: Combat map + token position state
+      summary: >
+        Renderer-agnostic grid/coordinate state — no camera-model
+        assumptions, so both a tactical top-down viewport and a
+        first-person grid-crawler can consume the same feed (docs/design.md
+        §6.2). Sent as a full current snapshot whenever it changes (same
+        semantics as TurnState/CharacterState, not an append-to-history
+        narrative.* message), and — unlike every other server-published
+        message — NOT identical for every recipient: grid/tokens/image are
+        filtered to each recipient's own character's fog of war before
+        sending, per-connection rather than broadcast (design doc §9's
+        information-hiding principle applied to vision). Grid/position data
+        does not reach the System Engine in this version — see the map
+        implementation plan for why mechanically gating spell/attack
+        range/line-of-sight/cover against this grid is separate, deferred
+        work; this message exists for tracking and display only.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -249,7 +263,7 @@ components:
                 const: map.token_state
               payload:
                 type: object
-                required: [room_id, tokens]
+                required: [room_id, grid, tokens]
                 properties:
                   room_id:
                     type: string
@@ -258,16 +272,45 @@ components:
                     items:
                       type: string
                     description: IDs of rooms adjacent to room_id, for renderers that need crawler-style navigation.
+                  grid:
+                    type: object
+                    required: [width, height, cells]
+                    description: This recipient's own currently-visible blocking-cell grid (fog of war already applied — cells outside their character's vision are simply absent).
+                    properties:
+                      width:
+                        type: integer
+                      height:
+                        type: integer
+                      cells:
+                        type: array
+                        items:
+                          type: object
+                          required: [x, y, blocks_movement, blocks_los]
+                          properties:
+                            x:
+                              type: integer
+                            y:
+                              type: integer
+                            blocks_movement:
+                              type: boolean
+                            blocks_los:
+                              type: boolean
+                            difficult_terrain:
+                              type: boolean
                   tokens:
                     type: array
                     items:
                       $ref: '#/components/schemas/Token'
+                    description: Only tokens currently within this recipient's own visible set.
+                  image_url:
+                    type: string
+                    description: A data: URL of this recipient's own composited PNG view (grid + visible tokens, fog already applied) — Master renders it directly, no external service.
 
     MapTokenMoveRequest:
       name: map.token_move_request
       messageId: map_token_move_request
       title: Client-initiated token move
-      summary: A viewport letting a player move their own token requests it; Master validates before broadcasting accepted state (docs/design.md §6.2).
+      summary: A player requests moving their own character's token; Master validates ownership, movement speed, and the blocking grid before accepting and broadcasting updated per-player state (docs/design.md §6.2).
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
