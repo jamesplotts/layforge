@@ -20,10 +20,11 @@ import (
 // (which renders only what the player explicitly stated), this pass is
 // where the model is trusted to decide what happens next — that's the
 // whole reason it gets tool access and the fast pass doesn't.
-const dmSlowPassSystemPrompt = `You are the Dungeon Master for a tabletop RPG session. Each message gives you the acting character's ID and their stated action. Narrate the outcome in third-person, present-tense DM prose (2-4 sentences).
+const dmSlowPassSystemPrompt = `You are the Dungeon Master for a tabletop RPG session. Each message gives you the acting character's ID, their current character data (when available), and their stated action. Narrate the outcome in third-person, present-tense DM prose (2-4 sentences).
 
 Rules:
 - Always use the exact Character ID given to you for any tool call — never guess, invent, or shorten it.
+- The character data given to you is the actual source of truth for what that character can currently do — check it before allowing something uncertain. A spell only works if it appears in spellcasting.preparedSpellNames (or, when spellcasting.isPreparedCaster is false, spellcasting.knownSpellNames) and an available slot at that spell's level remains; a feature or action only works if it's actually listed; movement only works up to combatStats.speed (in feet) per turn without a stated, justified reason it doesn't apply. If the stated action isn't supported by the data you were given, narrate that it doesn't work as described (the character hesitates, fumbles, realizes they don't have that readied, etc.) rather than allowing it — you don't need a tool call for this, it's a narrative judgment grounded in the data given, not something to resolve_check your way around.
 - If the action's outcome is uncertain or risky, call resolve_check before narrating the outcome — never invent a success or failure result.
 - If a resolved check, or a clearly-stated action (e.g. drinking a healing potion), should change a character's hit points, call apply_effect — never invent a hit point change.
 - Call get_character_status if you need to know a character's current condition before narrating a scene involving them.
@@ -73,13 +74,32 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	defer cancel()
 
 	// The model has no other way to know which character_id to pass to a
-	// tool call — Master doesn't feed it a character roster or any other
-	// campaign context yet (see this function's doc comment), so the
-	// acting character's ID has to ride along on the one turn it does
+	// tool call — Master doesn't feed it a full campaign roster yet, so
+	// the acting character's ID has to ride along on the one turn it does
 	// get. Caught by real end-to-end testing: without this, the model
 	// guessed at an ID and every tool call failed with
 	// character_not_found.
-	userContent := fmt.Sprintf("Character ID: %s\nPlayer action: %s", input.Payload.CharacterID, input.Payload.Text)
+	userContent := fmt.Sprintf("Character ID: %s\n", input.Payload.CharacterID)
+
+	// Feeding the acting character's own current data along with the ID
+	// gives the model something real to judge feasibility against — a
+	// spell not in spellcasting.preparedSpellNames, a feature not listed,
+	// movement past combatStats.speed — instead of the ungrounded guess
+	// it was making before (this codebase had no character-context
+	// mechanism at all until now; see dmSlowPassSystemPrompt's matching
+	// instruction). Best-effort: a character not yet found (a fresh
+	// stock-character race with character.upload, a bad ID, characters
+	// disabled) just means the turn proceeds without this section rather
+	// than failing outright — the model still has the ID and action to
+	// work with, same as before this existed.
+	if s.characters != nil {
+		if character, err := s.campaignCharacter(ctx, campaignID, input.Payload.CharacterID); err != nil {
+			s.logger.Warn("DM slow pass: could not fetch acting character's data, proceeding without it", "error", err, "campaign_id", campaignID, "character_id", input.Payload.CharacterID)
+		} else {
+			userContent += fmt.Sprintf("Character data: %s\n", character.CharacterData)
+		}
+	}
+	userContent += fmt.Sprintf("Player action: %s", input.Payload.Text)
 	systemPrompt := withMaturityConstraint(dmSlowPassSystemPrompt, s.campaignPolicy(ctx, campaignID))
 	messages := []llm.Message{
 		{Role: llm.RoleSystem, Content: systemPrompt},

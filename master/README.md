@@ -219,6 +219,33 @@ instead of populating its structured tool-call field —
 shapes and drops that turn's narration rather than broadcasting the
 artifact to the table.
 
+The DM's own judgment about whether a stated action is actually
+*possible* — a spell not currently prepared, movement past a
+character's speed — is now grounded in real data instead of a guess:
+`runSlowPass` fetches the acting character's own current
+`character_data` (best-effort — a character not yet found just means the
+turn proceeds without this section, same as before this existed) and
+includes it alongside the character ID every turn, and
+`dmSlowPassSystemPrompt` explicitly tells the model to check it (a spell
+only works if it's in `spellcasting.preparedSpellNames`, movement only
+up to `combatStats.speed`) rather than allow whatever's narratively
+convenient. This closed a real cross-repo gap found live: OpenCombatEngine's
+own schema already modeled the SRD known-vs-prepared-spell distinction
+correctly, but `spellcasting` came back `null` after *every* gRPC round
+trip regardless — a repository-wiring bug in OpenCombatEngine itself
+(`StandardCreature`'s state-restoring constructor needs a real
+`ISpellRepository` to resolve spell names, and the sidecar never
+supplied one), now fixed there by populating one from the live [Open5e
+API](https://open5e.com) at sidecar startup — see that repo's own
+`Program.cs`/`ActorMapping.cs`/`SystemEngineGrpcService.cs` and its
+README. Live-verified end-to-end against a real model (`qwen3.8:27b`):
+a wizard character with Fireball known-but-not-prepared and Magic
+Missile prepared got a narrated refusal (correctly citing both "not
+prepared" and "wrong slot level") for the former and a fully-resolved,
+mechanically-real cast (`resolve_check`/`apply_effect`, real damage) for
+the latter — the model reasoned correctly about the data without any
+additional prompting beyond what's described above.
+
 Two more governance gates now exist too (design doc §9.1, §9.5 — see
 package `policy` and `campaignPolicy`/`withMaturityConstraint` in
 `server.go`): PvP policy is a real mechanical gate — `dmApplyEffect`

@@ -163,6 +163,97 @@ func TestServe_NarrativePlayerInput_SlowPass_NoSystemEngine_OmitsToolsAndBroadca
 	}
 }
 
+// TestServe_NarrativePlayerInput_SlowPass_CharacterFound_IncludesCharacterDataInContext
+// exercises the character-context feature added so the DM has something
+// real to judge action feasibility against (a spell not in
+// spellcasting.preparedSpellNames, movement past combatStats.speed, ...
+// — see dmSlowPassSystemPrompt) instead of the ungrounded guess it made
+// before this existed.
+func TestServe_NarrativePlayerInput_SlowPass_CharacterFound_IncludesCharacterDataInContext(t *testing.T) {
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Kestrel draws a sword."},            // fast pass
+			{Text: "The blade catches the torchlight."}, // slow pass
+		},
+	}
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, nil)
+	defer ts.Close()
+	seedCharacter(t, st, "char-1", "campaign-context", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-context", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-context", "player-a", "char-1", "I draw my sword."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
+	}
+
+	slowPassCall := fakeLLM.callAt(t, 1)
+	if len(slowPassCall.Messages) != 2 {
+		t.Fatalf("slow pass call Messages length = %d, want 2 (system + user)", len(slowPassCall.Messages))
+	}
+	userContent := slowPassCall.Messages[1].Content
+	wantContent := "Character ID: char-1\nCharacter data: {\"name\":\"Kestrel\"}\nPlayer action: I draw my sword."
+	if userContent != wantContent {
+		t.Errorf("slow pass user message = %q, want %q", userContent, wantContent)
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_CharacterNotFound_OmitsDataButStillNarrates
+// covers the graceful-degradation path: a character_id that doesn't
+// resolve (a bad ID, a character not yet uploaded) shouldn't fail the
+// whole turn — the model still has the ID and the stated action to work
+// with, same as before the character-context feature existed.
+func TestServe_NarrativePlayerInput_SlowPass_CharacterNotFound_OmitsDataButStillNarrates(t *testing.T) {
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Someone draws a sword."},            // fast pass
+			{Text: "The blade catches the torchlight."}, // slow pass
+		},
+	}
+	ts, _ := newTestServerWithLLMAndSystemEngine(t, fakeLLM, nil)
+	defer ts.Close()
+	// Deliberately not seeded — char-does-not-exist has no store row.
+
+	conn := dialAndJoin(t, ts, "campaign-context-missing", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-context-missing", "player-a", "char-does-not-exist", "I draw my sword."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
+	}
+	if prose.Payload.Text != "The blade catches the torchlight." {
+		t.Errorf("narrative.dm_prose Text = %q, want the turn to still complete normally", prose.Payload.Text)
+	}
+
+	slowPassCall := fakeLLM.callAt(t, 1)
+	userContent := slowPassCall.Messages[1].Content
+	wantContent := "Character ID: char-does-not-exist\nPlayer action: I draw my sword."
+	if userContent != wantContent {
+		t.Errorf("slow pass user message = %q, want %q (no Character data section)", userContent, wantContent)
+	}
+}
+
 // TestServe_NarrativePlayerInput_SlowPass_MalformedToolCallText_DoesNotBroadcast
 // is grounded in a real failure observed against the actual LAN Ollama
 // server (qwen2.5:32b): the model sometimes emits a failed tool-call

@@ -213,6 +213,15 @@ func TestServe_NarrativePlayerInput_SlowPass_ImageGenConfigured_ToolIsOffered(t 
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
+	// Wait for the slow pass to actually finish (runSlowPass runs in its
+	// own goroutine) before asserting on fakeLLM's recorded calls —
+	// otherwise this races the goroutine and is flaky depending on
+	// exactly how much synchronous work runSlowPass does before its own
+	// Complete() call.
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
+	}
 
 	slowPassCall := fakeLLM.callAt(t, 1)
 	found := false
@@ -244,6 +253,12 @@ func TestServe_NarrativePlayerInput_SlowPass_NoImageGenProvider_ToolNotOffered(t
 	var bubble protocol.NarrativePlayerBubbleMessage
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	// See the sibling ImageGenConfigured test for why this read (and not
+	// asserting on fakeLLM immediately after the bubble) is required.
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
 
 	slowPassCall := fakeLLM.callAt(t, 1)
