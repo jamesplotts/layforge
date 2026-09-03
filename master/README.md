@@ -264,26 +264,32 @@ rejection, not the model's narrative judgment — and a **successful
 `cast_spell` tool result** for the latter, with the model correctly
 narrating the failure/success from the tool result rather than guessing.
 
-**A real, separate bug found during this live verification, not fixed
-here:** every Open5e-sourced spell's `CastSpellResponse.TargetDamaged`
-came back `false` regardless of the spell (checked directly via a
-debug log added and removed for this verification, across repeated
-live casts) — `CastSpellAction`'s own result message was a bare "Cast
-successfully." with no damage applied. Root cause, confirmed by reading
-the code: `OpenCombatEngine.Implementation/Open5e/Open5eAdapter.cs`'s
-`ToStandard(Open5eSpell)` never populates `SpellDto.Damage`/
-`DamageInflict`/`SpellAttack` — and Open5e's own REST API doesn't expose
-those as separate structured fields for spells at all, only as prose
-inside `desc` (e.g. "3d4 + your spellcasting ability modifier force
-damage"), so a real fix needs either prose-parsing or a different data
-source, not a small mapping tweak. Net effect: `cast_spell`'s own
-prepared/slot gate (this task's actual scope) is real and works
-correctly, live-verified above; but no Open5e-sourced spell can
-currently deal real damage through this engine, and `cast_spell`'s own
-post-hoc PvP gate (below) — while real and covered by an 8-case
-table-driven test — isn't currently exercisable end-to-end against a
-live spell for the same reason. Filed as a known gap, not silently
-worked around.
+**A real, separate bug found during this live verification, since
+fixed in OpenCombatEngine:** every Open5e-sourced spell's
+`CastSpellResponse.TargetDamaged` came back `false` regardless of the
+spell (checked directly via a debug log added and removed for this
+verification, across repeated live casts) — `CastSpellAction`'s own
+result message was a bare "Cast successfully." with no damage applied.
+Root cause, confirmed by reading the code:
+`OpenCombatEngine.Implementation/Open5e/Open5eAdapter.cs`'s
+`ToStandard(Open5eSpell)` never populated `SpellDto.Damage`/
+`DamageInflict`/`SavingThrow` — and Open5e's own REST API doesn't
+expose those as separate structured fields for spells at all, only as
+prose inside `desc` (e.g. "3d4 + your spellcasting ability modifier
+force damage"). Fixed there via a new `Open5eSpellTextParser` that
+recovers damage dice/type and saving-throw ability from the SRD's own
+consistent phrasing — see that repo's own README/RELEASE_NOTES. Live
+re-verified after the fix: a prepared Magic Missile cast now genuinely
+damages an unprotected target, and `cast_spell`'s own post-hoc PvP gate
+(below) now fires directly through `cast_spell` itself
+(`reason_code: pvp_blocked`) instead of the model falling back to a
+separate `apply_effect` call once it saw no damage land. Still open,
+found along the way but out of this fix's scope:
+`SpellAttack`/`RequiresAttackRoll` is never populated either (moot —
+`CastSpellAction` doesn't currently branch on it at all), and
+`SpellMapper.MapHealingDice` is a separate, unrelated stub that always
+returns `null` regardless of spell source, so no spell can currently
+heal through this engine either.
 
 Two more governance gates now exist too (design doc §9.1, §9.5 — see
 package `policy` and `campaignPolicy`/`withMaturityConstraint` in
