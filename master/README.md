@@ -636,6 +636,61 @@ written to encourage, actually observed happening on its own.
 data, blocked by the same Open5e outage) — covered by
 `Attack_OffhandKind_*` in OpenCombatEngine's own test suite instead.
 
+**New**: five DM tools — `equip_item`, `unequip_item`, `receive_item`,
+`discard_item`, `give_item` — close a gap that was there from the
+start: until now, `character.upload`'s JSON set a character's equipment
+and inventory exactly once, and nothing afterward — no DM tool, no
+player action — could equip a different weapon, don armor found in
+play, pick something up, drop something, or hand an item to another
+character. This was scoped narrower than your original ask on purpose:
+you also asked about off-site possessions (a mount and its saddlebags
+left outside a dungeon), land holdings for advanced campaigns, combat
+loot, and death-triggered inheritance distribution when a party doesn't
+resurrect a fallen character. Research confirmed all four are real,
+separate, currently-unbuilt pieces — `ILootGenerator` exists engine-side
+and is fully unconnected to any distribution logic; nothing in either
+repo models a location or "left behind" concept outside an active
+combat grid; nothing walks a dead character's belongings when
+`IHitPoints.Died` fires. Each is a natural next pass once these five
+tools exist for it to call into, not silently dropped — see
+[`docs/design.md`](../docs/design.md) for where a future pass should
+pick this up. `equip_item`/`unequip_item`/`receive_item`/`discard_item`
+carry no extra gate beyond ordinary campaign-scoping, the same
+GM-level latitude every other DM tool already has over any character at
+the table; `give_item` alone gets a PvP gate, but a differently-shaped
+one than `grapple`/`melee_attack`/`cast_spell`'s post-hoc pattern — it's
+checked *before* calling the engine at all, since an item transfer has
+no "the attempt still happened, only the outcome is blocked" half-state
+worth preserving the way a failed grapple attempt does. The gate is
+keyed on the *giving* character's owner relative to the player whose
+narrative triggered the tool call, not the recipient's — handing
+something to a different player's character is never hostile; taking
+something away from one without that player's own action driving it is.
+`receive_item` resolves the named item against the sidecar's real
+Open5e-backed item catalog exactly like every other tool this session
+that touches named content — an unrecognized name is a real rejection,
+never invented.
+
+**Not verified live this pass**: Open5e was unreachable from this
+environment during this pass's verification window (repeated direct
+`curl` timeouts against `api.open5e.com`, same outage
+`get_available_actions`/`Grapple`/`Shove` hit earlier), and unlike
+spells, OpenCombatEngine's item library has no local on-disk cache yet
+(`StandardItemLibrary`/`Open5eContentSource` are network-only —
+confirmed by reading the sidecar's own `Program.cs`, which already
+flags this as a known future gap in its own comments) — so with Open5e
+down, the sidecar starts with an *empty* item library and
+`receive_item`/`equip_item` against a real catalog item genuinely
+cannot be exercised live right now, not just "wasn't tried." Reported
+honestly rather than skipped silently, same as this session's two
+earlier Open5e-outage passes. All five tools are instead covered by the
+deterministic test suites on both sides: 16 new `SystemEngineGrpcServiceTests`
+in OpenCombatEngine (success/rejection/attunement-on-transfer/
+equipped-item-auto-unequips-on-transfer for each RPC) and 15 new tests
+in `master/internal/server/inventory_test.go` (success/persistence,
+engine-rejection, invalid-slot rejection, and a 4-case `give_item`
+PvP-gate table mirroring `grapple`/`shove`'s own).
+
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
 knowledge scoping) is still to come — see
 [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.

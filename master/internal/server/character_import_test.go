@@ -133,6 +133,39 @@ type fakeSystemEngineClient struct {
 	// lastShoveRequest captures the most recent Shove() call's request,
 	// for asserting on what Server actually sent the engine.
 	lastShoveRequest *systemenginepb.ShoveRequest
+
+	equipItemResp *systemenginepb.EquipItemResponse
+	equipItemErr  error
+	// lastEquipItemRequest captures the most recent EquipItem() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastEquipItemRequest *systemenginepb.EquipItemRequest
+
+	unequipItemResp *systemenginepb.UnequipItemResponse
+	unequipItemErr  error
+	// lastUnequipItemRequest captures the most recent UnequipItem() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastUnequipItemRequest *systemenginepb.UnequipItemRequest
+
+	addItemToInventoryResp *systemenginepb.AddItemToInventoryResponse
+	addItemToInventoryErr  error
+	// lastAddItemToInventoryRequest captures the most recent
+	// AddItemToInventory() call's request, for asserting on what Server
+	// actually sent the engine.
+	lastAddItemToInventoryRequest *systemenginepb.AddItemToInventoryRequest
+
+	removeItemFromInventoryResp *systemenginepb.RemoveItemFromInventoryResponse
+	removeItemFromInventoryErr  error
+	// lastRemoveItemFromInventoryRequest captures the most recent
+	// RemoveItemFromInventory() call's request, for asserting on what
+	// Server actually sent the engine.
+	lastRemoveItemFromInventoryRequest *systemenginepb.RemoveItemFromInventoryRequest
+
+	transferItemResp *systemenginepb.TransferItemResponse
+	transferItemErr  error
+	// lastTransferItemRequest captures the most recent TransferItem()
+	// call's request, for asserting on what Server actually sent the
+	// engine.
+	lastTransferItemRequest *systemenginepb.TransferItemRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -199,6 +232,46 @@ func (f *fakeSystemEngineClient) Shove(_ context.Context, in *systemenginepb.Sho
 		return nil, f.shoveErr
 	}
 	return f.shoveResp, nil
+}
+
+func (f *fakeSystemEngineClient) EquipItem(_ context.Context, in *systemenginepb.EquipItemRequest, _ ...grpc.CallOption) (*systemenginepb.EquipItemResponse, error) {
+	f.lastEquipItemRequest = in
+	if f.equipItemErr != nil {
+		return nil, f.equipItemErr
+	}
+	return f.equipItemResp, nil
+}
+
+func (f *fakeSystemEngineClient) UnequipItem(_ context.Context, in *systemenginepb.UnequipItemRequest, _ ...grpc.CallOption) (*systemenginepb.UnequipItemResponse, error) {
+	f.lastUnequipItemRequest = in
+	if f.unequipItemErr != nil {
+		return nil, f.unequipItemErr
+	}
+	return f.unequipItemResp, nil
+}
+
+func (f *fakeSystemEngineClient) AddItemToInventory(_ context.Context, in *systemenginepb.AddItemToInventoryRequest, _ ...grpc.CallOption) (*systemenginepb.AddItemToInventoryResponse, error) {
+	f.lastAddItemToInventoryRequest = in
+	if f.addItemToInventoryErr != nil {
+		return nil, f.addItemToInventoryErr
+	}
+	return f.addItemToInventoryResp, nil
+}
+
+func (f *fakeSystemEngineClient) RemoveItemFromInventory(_ context.Context, in *systemenginepb.RemoveItemFromInventoryRequest, _ ...grpc.CallOption) (*systemenginepb.RemoveItemFromInventoryResponse, error) {
+	f.lastRemoveItemFromInventoryRequest = in
+	if f.removeItemFromInventoryErr != nil {
+		return nil, f.removeItemFromInventoryErr
+	}
+	return f.removeItemFromInventoryResp, nil
+}
+
+func (f *fakeSystemEngineClient) TransferItem(_ context.Context, in *systemenginepb.TransferItemRequest, _ ...grpc.CallOption) (*systemenginepb.TransferItemResponse, error) {
+	f.lastTransferItemRequest = in
+	if f.transferItemErr != nil {
+		return nil, f.transferItemErr
+	}
+	return f.transferItemResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetAvailableActions(_ context.Context, in *systemenginepb.GetAvailableActionsRequest, _ ...grpc.CallOption) (*systemenginepb.GetAvailableActionsResponse, error) {

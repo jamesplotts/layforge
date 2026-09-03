@@ -186,6 +186,68 @@ func dmTools() []llm.Tool {
 			}`),
 		},
 		{
+			Name:        "equip_item",
+			Description: "Move an item already in a character's inventory into an equipment slot (ready a weapon, don armor, put on a ring). The item must already be carried — call receive_item first if it isn't. A shield goes in the \"shield\" slot even though the engine tracks it alongside off-hand weapons internally; use whichever of \"off_hand\"/\"shield\" matches what's actually being equipped.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "item_name", "slot"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The character equipping the item."},
+					"item_name": {"type": "string", "description": "Must already be a real member of this character's inventory."},
+					"slot": {"type": "string", "enum": ["main_hand", "off_hand", "armor", "shield", "head", "neck", "shoulders", "hands", "waist", "feet", "ring_1", "ring_2"]}
+				}
+			}`),
+		},
+		{
+			Name:        "unequip_item",
+			Description: "Clear one of a character's equipment slots. The item stays in the character's inventory — this only changes what's readied, not what's carried.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "slot"],
+				"properties": {
+					"character_id": {"type": "string"},
+					"slot": {"type": "string", "enum": ["main_hand", "off_hand", "armor", "shield", "head", "neck", "shoulders", "hands", "waist", "feet", "ring_1", "ring_2"]}
+				}
+			}`),
+		},
+		{
+			Name:        "receive_item",
+			Description: "Add a real item to a character's inventory (found treasure, a purchase, something handed to them narratively). item_name is resolved against the real item catalog — an unrecognized name is rejected, never invented. This adds exactly one item per call; for multiple identical items (e.g. 5 torches), call it once per item.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "item_name"],
+				"properties": {
+					"character_id": {"type": "string"},
+					"item_name": {"type": "string", "description": "A real item name from the catalog — do not invent one."}
+				}
+			}`),
+		},
+		{
+			Name:        "discard_item",
+			Description: "Permanently remove a real item from a character's inventory (dropped, destroyed, thrown away). If the item was equipped, it's automatically unreadied first. There is no \"item on the ground\" to pick back up — this is permanent.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "item_name"],
+				"properties": {
+					"character_id": {"type": "string"},
+					"item_name": {"type": "string", "description": "Must already be a real member of this character's inventory."}
+				}
+			}`),
+		},
+		{
+			Name:        "give_item",
+			Description: "Move a real item from one character's inventory directly into another's (a trade, a handoff, a gift). If the item is currently attuned, attunement ends. Giving an item away FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy and may be rejected.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "target_character_id", "item_name"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The giving character's ID."},
+					"target_character_id": {"type": "string", "description": "The receiving character's ID."},
+					"item_name": {"type": "string", "description": "Must already be a real member of the giving character's inventory."}
+				}
+			}`),
+		},
+		{
 			Name:        "get_available_actions",
 			Description: "Get the real, engine-computed list of everything a character can legally do right now — every equipped-weapon attack option (melee, ranged, and an off-hand/secondary weapon), Grapple and Shove options, and every currently-castable prepared/known spell, each against every other character currently in this campaign's active combat. Call this before improvising what a character can do in combat, or before choosing melee_attack/ranged_attack/cast_spell when you're not certain what's actually legal — it tells you exactly which option is real, so you never have to guess or narrate around a mechanical limitation (a melee-only weapon fired at range, a spell with no slots left, no free hand to grapple). If the character cannot act at all this turn (e.g. Paralyzed), can_act will be false with a real reason — narrate that, don't invent an action for them.",
 			Parameters: json.RawMessage(`{
@@ -278,6 +340,16 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmGrapple(ctx, campaignID, actingSenderID, call.Arguments)
 	case "shove":
 		return s.dmShove(ctx, campaignID, actingSenderID, call.Arguments)
+	case "equip_item":
+		return s.dmEquipItem(ctx, campaignID, call.Arguments)
+	case "unequip_item":
+		return s.dmUnequipItem(ctx, campaignID, call.Arguments)
+	case "receive_item":
+		return s.dmReceiveItem(ctx, campaignID, call.Arguments)
+	case "discard_item":
+		return s.dmDiscardItem(ctx, campaignID, call.Arguments)
+	case "give_item":
+		return s.dmGiveItem(ctx, campaignID, actingSenderID, call.Arguments)
 	case "get_available_actions":
 		return s.dmGetAvailableActions(ctx, campaignID, call.Arguments)
 	case "get_character_status":
@@ -952,6 +1024,354 @@ func (s *Server) dmShove(ctx context.Context, campaignID, actingSenderID string,
 		"shoved":    resp.Shoved,
 		"message":   resp.ResultMessage,
 	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// parseEquipmentSlot maps a DM tool's slot string to the real proto
+// enum — an unrecognized value is a real rejection, never guessed at,
+// same reasoning as dmShove's effect string.
+func parseEquipmentSlot(s string) (systemenginepb.EquipmentSlot, bool) {
+	switch s {
+	case "main_hand":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_MAIN_HAND, true
+	case "off_hand":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_OFF_HAND, true
+	case "armor":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_ARMOR, true
+	case "shield":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_SHIELD, true
+	case "head":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_HEAD, true
+	case "neck":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_NECK, true
+	case "shoulders":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_SHOULDERS, true
+	case "hands":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_HANDS, true
+	case "waist":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_WAIST, true
+	case "feet":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_FEET, true
+	case "ring_1":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_RING_1, true
+	case "ring_2":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_RING_2, true
+	default:
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_UNSPECIFIED, false
+	}
+}
+
+// dmEquipItem moves an item already in a character's inventory into an
+// equipment slot. No PvP gate — same "DM has GM-level latitude over any
+// character at the table" precedent every other DM tool relies on
+// (campaignCharacter's own doc comment).
+func (s *Server) dmEquipItem(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+		ItemName    string `json:"item_name"`
+		Slot        string `json:"slot"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	slot, ok := parseEquipmentSlot(args.Slot)
+	if !ok {
+		return fmt.Sprintf("invalid slot %q", args.Slot), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.EquipItem(ctx, &systemenginepb.EquipItemRequest{
+		RequestId:  "dm-tool-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		ItemName:   args.ItemName,
+		Slot:       slot,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "equip_failed"
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"equipped": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmUnequipItem clears one of a character's equipment slots — the item
+// stays in inventory. No PvP gate, same reasoning as dmEquipItem.
+func (s *Server) dmUnequipItem(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+		Slot        string `json:"slot"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	slot, ok := parseEquipmentSlot(args.Slot)
+	if !ok {
+		return fmt.Sprintf("invalid slot %q", args.Slot), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.UnequipItem(ctx, &systemenginepb.UnequipItemRequest{
+		RequestId:  "dm-tool-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		Slot:       slot,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "unequip_failed"
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"unequipped": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmReceiveItem resolves item_name against the sidecar's real
+// Open5e-backed item catalog and adds it to a character's inventory — an
+// unrecognized name is a real rejection, never invented (CLAUDE.md's
+// "gates over prompting"). No PvP gate: receiving an item is never
+// hostile.
+func (s *Server) dmReceiveItem(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+		ItemName    string `json:"item_name"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.AddItemToInventory(ctx, &systemenginepb.AddItemToInventoryRequest{
+		RequestId:  "dm-tool-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		ItemName:   args.ItemName,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "receive_failed"
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"received": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmDiscardItem permanently removes a real item from a character's
+// inventory — no PvP gate, since a character can only discard its own
+// belongings (there is no target argument at all).
+func (s *Server) dmDiscardItem(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+		ItemName    string `json:"item_name"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.RemoveItemFromInventory(ctx, &systemenginepb.RemoveItemFromInventoryRequest{
+		RequestId:  "dm-tool-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		ItemName:   args.ItemName,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "discard_failed"
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"discarded": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmGiveItem moves a real item from one character's inventory into
+// another's. Unlike dmGrapple/dmShove, the PvP gate here runs BEFORE
+// calling the engine, not after: a transfer has no "the attempt still
+// happened, only the outcome is blocked" half-state worth preserving —
+// letting the item vanish from source without landing in target would
+// be strictly worse than never having called the engine at all.
+func (s *Server) dmGiveItem(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID       string `json:"character_id"`
+		TargetCharacterID string `json:"target_character_id"`
+		ItemName          string `json:"item_name"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if args.TargetCharacterID == "" {
+		return "target_character_id is required", false, "invalid_arguments"
+	}
+
+	source, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	sourceData := &structpb.Struct{}
+	if err := protojson.Unmarshal(source.CharacterData, sourceData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	target, err := s.campaignCharacter(ctx, campaignID, args.TargetCharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	targetData := &structpb.Struct{}
+	if err := protojson.Unmarshal(target.CharacterData, targetData); err != nil {
+		return fmt.Sprintf("parsing stored target data: %v", err), false, "internal_error"
+	}
+
+	// PvP gate (design doc §9.1): taking an item away from a different
+	// player's character without their own action driving it is the
+	// same kind of hostile-without-consent effect apply_effect's damage
+	// path already gates — checked BEFORE calling the engine, since
+	// unlike grapple/shove a transfer has no "the attempt still
+	// happened, only the outcome is blocked" half-state to preserve.
+	if source.OwnerID != "" && source.OwnerID != masterSenderID && source.OwnerID != actingSenderID {
+		pol := s.campaignPolicy(ctx, campaignID)
+		switch pol.PvPPolicy {
+		case policy.PvPPolicyAllowed:
+			// proceed
+		case policy.PvPPolicyWithConsent:
+			if !slices.Contains(pol.PvPConsent, source.OwnerID) {
+				return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
+			}
+		default:
+			return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take an item from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
+		}
+	}
+
+	resp, err := s.systemEngine.TransferItem(ctx, &systemenginepb.TransferItemRequest{
+		RequestId:  "dm-tool-" + source.ID,
+		CampaignId: campaignID,
+		Source:     &systemenginepb.Actor{ActorId: source.ID, CharacterData: sourceData, SchemaVersion: source.SchemaVersion},
+		Target:     &systemenginepb.Actor{ActorId: target.ID, CharacterData: targetData, SchemaVersion: target.SchemaVersion},
+		ItemName:   args.ItemName,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "give_failed"
+	}
+
+	newSourceData, err := protojson.Marshal(resp.Source.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	source.CharacterData = newSourceData
+	source.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, source); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	newTargetData, err := protojson.Marshal(resp.Target.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated target data: %v", err), false, "internal_error"
+	}
+	target.CharacterData = newTargetData
+	target.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, target); err != nil {
+		return fmt.Sprintf("saving updated target: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"given": true, "message": resp.ResultMessage})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
 	}
