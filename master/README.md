@@ -283,13 +283,18 @@ re-verified after the fix: a prepared Magic Missile cast now genuinely
 damages an unprotected target, and `cast_spell`'s own post-hoc PvP gate
 (below) now fires directly through `cast_spell` itself
 (`reason_code: pvp_blocked`) instead of the model falling back to a
-separate `apply_effect` call once it saw no damage land. Still open,
-found along the way but out of this fix's scope:
-`SpellAttack`/`RequiresAttackRoll` is never populated either (moot —
-`CastSpellAction` doesn't currently branch on it at all), and
-`SpellMapper.MapHealingDice` is a separate, unrelated stub that always
-returns `null` regardless of spell source, so no spell can currently
-heal through this engine either.
+separate `apply_effect` call once it saw no damage land. The three
+adjacent gaps found alongside it — `SpellAttack`/`RequiresAttackRoll`
+never populated (and `CastSpellAction` not branching on it at all, so
+an attack-roll spell always hit for full damage), `SpellMapper.
+MapHealingDice` a permanent stub always returning `null`, and a
+multi-instance spell like Magic Missile's three darts only ever
+resolving as one instance — are since fixed there too (new `ISpell.
+InstanceCount`/`InstanceCountPerUpcastLevel`, a real attack roll vs
+the target's AC, prose-based healing-dice extraction). Live
+re-verified again after that follow-up fix: a prepared Magic Missile
+cast dealt 8 damage (three real 1d4+1 darts, not one), and a prepared
+Cure Wounds cast raised the caster from 10/18 to 16/18 HP.
 
 Two more governance gates now exist too (design doc §9.1, §9.5 — see
 package `policy` and `campaignPolicy`/`withMaturityConstraint` in
