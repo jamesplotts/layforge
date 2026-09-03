@@ -125,6 +125,30 @@ func dmTools() []llm.Tool {
 			}`),
 		},
 		{
+			Name:        "melee_attack",
+			Description: "Make a melee weapon attack — the only correct way to resolve a martial character's attack, the same real mechanical gate cast_spell already applies to spellcasting. The engine checks the attacker's currently-equipped weapon (never call this without one equipped) and rejects the attack if that weapon can't actually be used in melee (e.g. a bow) — never call apply_effect for a weapon attack instead, and never narrate a hit or miss until you've called this and seen the real result. A rejection is not a miss — it means the attack was never rolled at all (wrong weapon kind equipped, target out of reach, no action left this turn); a real roll that simply doesn't connect is still success=true with a miss narrated from result_message.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "target_character_id"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The attacking character's ID."},
+					"target_character_id": {"type": "string", "description": "The target's ID — required; there is no self-attack."}
+				}
+			}`),
+		},
+		{
+			Name:        "ranged_attack",
+			Description: "Make a ranged weapon attack (a bow, crossbow, sling, or a thrown weapon used at range) — the same real mechanical gate melee_attack applies, for the ranged case. The engine checks the attacker's currently-equipped weapon and rejects the attack if it has neither Ammunition nor Thrown (e.g. a longsword can't be fired or thrown) — never call apply_effect for a weapon attack instead. A rejection means the attack was never rolled at all (wrong weapon kind equipped, target out of range/no line of sight); a real roll that simply misses is still success=true.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "target_character_id"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The attacking character's ID."},
+					"target_character_id": {"type": "string", "description": "The target's ID — required; there is no self-attack."}
+				}
+			}`),
+		},
+		{
 			Name:        "create_npc",
 			Description: "Create a real character record for a monster or NPC you've narrated, from a full character JSON document matching get_character_schema's schema. Call this before referencing that monster/NPC in any other tool (resolve_check, apply_effect, start_combat, get_character_status) — those only work on characters that already exist, and inventing an ID for one that doesn't will always fail. Returns the new character's real ID; use that exact ID afterward, never the name you gave it narratively.",
 			Parameters: json.RawMessage(`{
@@ -196,6 +220,10 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmApplyEffect(ctx, campaignID, actingSenderID, call.Arguments)
 	case "cast_spell":
 		return s.dmCastSpell(ctx, campaignID, actingSenderID, call.Arguments)
+	case "melee_attack":
+		return s.dmAttack(ctx, campaignID, actingSenderID, call.Arguments, systemenginepb.AttackKind_ATTACK_KIND_MELEE)
+	case "ranged_attack":
+		return s.dmAttack(ctx, campaignID, actingSenderID, call.Arguments, systemenginepb.AttackKind_ATTACK_KIND_RANGED)
 	case "get_character_status":
 		return s.dmGetCharacterStatus(ctx, campaignID, call.Arguments)
 	case "start_combat":
@@ -514,6 +542,129 @@ func (s *Server) dmCastSpell(ctx context.Context, campaignID, actingSenderID str
 	payload, err := json.Marshal(map[string]any{
 		"cast":    true,
 		"message": resp.ResultMessage,
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmAttack is the real mechanical gate against a martial character's
+// attack that previously had no RPC at all — melee_attack/ranged_attack
+// both dispatch here with a different AttackKind (design doc §8, §9:
+// "gates over prompting"), the same shape dmCastSpell already
+// established for spellcasting. Modeled line-for-line on dmCastSpell:
+// the attacker's own mutation (action economy spent) always persists —
+// the attack genuinely happened, the resource genuinely spent — while
+// the target's mutation is discarded, not saved, when the campaign's
+// PvP policy would have blocked it (same post-hoc gate reasoning as
+// dmCastSpell's own doc comment, since Master cannot know whether an
+// attack will connect before calling the engine).
+func (s *Server) dmAttack(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage, kind systemenginepb.AttackKind) (string, bool, string) {
+	var args struct {
+		CharacterID       string `json:"character_id"`
+		TargetCharacterID string `json:"target_character_id"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if args.TargetCharacterID == "" {
+		return "target_character_id is required — there is no self-attack", false, "invalid_arguments"
+	}
+
+	attacker, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	attackerData := &structpb.Struct{}
+	if err := protojson.Unmarshal(attacker.CharacterData, attackerData); err != nil {
+		return fmt.Sprintf("parsing stored attacker data: %v", err), false, "internal_error"
+	}
+
+	target, err := s.campaignCharacter(ctx, campaignID, args.TargetCharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	targetData := &structpb.Struct{}
+	if err := protojson.Unmarshal(target.CharacterData, targetData); err != nil {
+		return fmt.Sprintf("parsing stored target data: %v", err), false, "internal_error"
+	}
+
+	req := &systemenginepb.AttackRequest{
+		RequestId:   "dm-tool-" + attacker.ID,
+		CampaignId:  campaignID,
+		Attacker:    &systemenginepb.Actor{ActorId: attacker.ID, CharacterData: attackerData, SchemaVersion: attacker.SchemaVersion},
+		Target:      &systemenginepb.Actor{ActorId: target.ID, CharacterData: targetData, SchemaVersion: target.SchemaVersion},
+		Kind:        kind,
+		GridContext: s.buildGridContext(campaignID, attacker.ID, target.ID),
+	}
+
+	resp, err := s.systemEngine.Attack(ctx, req)
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		// The hard gate itself — resp.Error is a real mechanical rejection
+		// (wrong weapon kind equipped, no weapon equipped, out of range/no
+		// line of sight), computed by the engine, not the model's own
+		// judgment. This is not a miss: the attack was never rolled.
+		return fmt.Sprintf("attack FAILED: %s. Do not narrate this as a hit or a miss — the attack was never rolled.", resp.Error), false, "attack_failed"
+	}
+
+	pvpBlocked := false
+	pvpReason := ""
+	pvpReasonCode := ""
+	if resp.TargetDamaged && target.OwnerID != "" && target.OwnerID != masterSenderID && target.OwnerID != actingSenderID {
+		pol := s.campaignPolicy(ctx, campaignID)
+		switch pol.PvPPolicy {
+		case policy.PvPPolicyAllowed:
+			// proceed
+		case policy.PvPPolicyWithConsent:
+			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
+				pvpBlocked = true
+				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP damage", target.OwnerID)
+				pvpReasonCode = "pvp_no_consent"
+			}
+		default: // PvPPolicyPveOnly, or an unrecognized/unspecified value — fail closed
+			pvpBlocked = true
+			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to damage another player's character (%s)", target.OwnerID)
+			pvpReasonCode = "pvp_blocked"
+		}
+	}
+
+	// The attacker's own mutation (action economy spent) is real
+	// regardless of the PvP gate above — the attack genuinely happened,
+	// even if it then can't land against a forbidden target.
+	newAttackerData, err := protojson.Marshal(resp.Attacker.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated attacker data: %v", err), false, "internal_error"
+	}
+	attacker.CharacterData = newAttackerData
+	attacker.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, attacker); err != nil {
+		return fmt.Sprintf("saving updated attacker: %v", err), false, "internal_error"
+	}
+
+	if pvpBlocked {
+		return pvpReason, false, pvpReasonCode
+	}
+
+	if resp.Target != nil {
+		newTargetData, err := protojson.Marshal(resp.Target.CharacterData)
+		if err != nil {
+			return fmt.Sprintf("marshaling updated target data: %v", err), false, "internal_error"
+		}
+		target.CharacterData = newTargetData
+		target.UpdatedAt = time.Now().UTC()
+		if err := s.characters.SaveCharacter(ctx, target); err != nil {
+			return fmt.Sprintf("saving updated target: %v", err), false, "internal_error"
+		}
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"attacked": true,
+		"hit":      resp.Hit,
+		"message":  resp.ResultMessage,
 	})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"

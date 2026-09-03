@@ -98,6 +98,16 @@ type fakeSystemEngineClient struct {
 	// order — for tests asserting on which characters' turns actually
 	// started and in what sequence.
 	startTurnRequests []*systemenginepb.StartTurnRequest
+
+	attackResp *systemenginepb.AttackResponse
+	attackErr  error
+	// attackFunc, when set, computes the response per call instead of the
+	// fixed attackResp/attackErr above — needed by tests where different
+	// attackers/kinds in the same test must get different results.
+	attackFunc func(*systemenginepb.AttackRequest) (*systemenginepb.AttackResponse, error)
+	// lastAttackRequest captures the most recent Attack() call's request,
+	// for asserting on what Server actually sent the engine.
+	lastAttackRequest *systemenginepb.AttackRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -137,6 +147,17 @@ func (f *fakeSystemEngineClient) CastSpell(_ context.Context, in *systemenginepb
 		return nil, f.castSpellErr
 	}
 	return f.castSpellResp, nil
+}
+
+func (f *fakeSystemEngineClient) Attack(_ context.Context, in *systemenginepb.AttackRequest, _ ...grpc.CallOption) (*systemenginepb.AttackResponse, error) {
+	f.lastAttackRequest = in
+	if f.attackFunc != nil {
+		return f.attackFunc(in)
+	}
+	if f.attackErr != nil {
+		return nil, f.attackErr
+	}
+	return f.attackResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetCharacterSchema(context.Context, *systemenginepb.GetCharacterSchemaRequest, ...grpc.CallOption) (*systemenginepb.GetCharacterSchemaResponse, error) {

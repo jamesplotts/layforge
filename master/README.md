@@ -467,14 +467,85 @@ ResolveAttack` already used it directly, e.g. a manually-supplied
 `AttackResult`), so there was no capability to wire even if this pass
 wanted to. `apply_effect` still has no range/LOS concept at all (it's
 for narratively-clear non-spell effects, with no `Range` field to check
-against), and no RPC exposes `AttackAction` yet, so weapon
-attacks aren't gated this way either — `cast_spell` is the only tool
-this applies to today. No token art (plain colored circles), no
-cave-style generation (one room/corridor generator only), no interactive
-drag-and-drop placement (auto-placed at generation, moved only by
-declaring a destination cell), and combat-map state is in-memory only —
-lost on a Master restart, same documented limitation `turnOrder` already
-has.
+against). No token art (plain colored circles), no cave-style generation
+(one room/corridor generator only), no interactive drag-and-drop
+placement (auto-placed at generation, moved only by declaring a
+destination cell), and combat-map state is in-memory only — lost on a
+Master restart, same documented limitation `turnOrder` already has.
+
+**Since closed**: weapon attacks are now gated too, not just spells —
+`melee_attack` and `ranged_attack` are two new DM tools (`dm_tools.go`'s
+`dmAttack`, dispatched with a different `AttackKind`) wrapping
+OpenCombatEngine's own already-tested `AttackAction` over a new `Attack`
+RPC, the same "gates over prompting" shape `cast_spell` established:
+before this, a fighter or rogue's only option was `apply_effect`, which
+has no weapon-legality or range/LOS concept at all — nothing but the DM
+model's own narrative judgment stood between a player and an attack that
+shouldn't be possible with their equipped weapon. The engine now checks
+the attacker's actual equipped main-hand weapon and rejects the call
+outright when it can't do what's being asked — `ranged_attack` with a
+weapon lacking both `Thrown` and `Ammunition` (a longsword), or
+`melee_attack` with an `Ammunition`-only weapon (a bow) — a real
+mechanical gate on the weapon's own SRD properties, not a guess.
+`buildGridContext` is reused unchanged from the `cast_spell` work — it
+was already fully generic, not spell-specific, so `dmAttack` gets real
+range/line-of-sight gating for free.
+
+Finding and closing this also surfaced a second, unrelated bug in the
+same "real data silently dropped" family that `CastSpellResponse.
+target_damaged`'s earlier fixes were about (see OpenCombatEngine's own
+RELEASE_NOTES.md): `ActorMapping.ToCreature` never had a real
+`IItemLibrary` to resolve inventory item names back into live weapon/
+armor objects, so **every equipped weapon silently came back unequipped
+after a gRPC round trip**, regardless of what a character actually had
+equipped — the same shape as the earlier bug where spellcasting always
+came back `null` before `ISpellRepository` was wired in. Fixed the same
+way: OpenCombatEngine's sidecar now populates a real `IItemLibrary`
+(`StandardItemLibrary`, from Open5e's weapon/armor/magic-item endpoints)
+at startup alongside the spell repository, and threads it through
+`ActorMapping.ToCreature` into every RPC that reconstructs a creature.
+Also closed a genuine "real data thrown away" parsing gap while wiring
+this: Open5e's own weapon `properties` strings already embed a weapon's
+real range (`"thrown (range 20/60)"`), but the existing parser only kept
+the leading word (`"thrown"`) and silently discarded the number —
+`IWeapon` now has a real `Range` (feet) property, parsed from that same
+text rather than a hardcoded lookup table, with an SRD-accurate fallback
+(10 ft for `Reach`, 5 ft otherwise) when a weapon's properties don't
+carry one.
+
+**Verified live** against the real Open5e API (1709 real SRD
+weapons/armor/magic items loaded into the sidecar's item library at
+startup — small enough that, unlike the ~1400-spell catalog, no local
+cache was built for it yet), the gRPC sidecar, and a real downstream
+consumer (Master + a real LLM, `qwen3.8:27b`): a character with a real
+equipped Longsword called `melee_attack` against a goblin NPC, the
+engine rolled a real attack and dealt real damage (the goblin dropped
+from 7 HP to barely conscious), and both the attacker's and target's
+mutated state persisted — the entire chain (Open5e → item library →
+`ActorMapping` → `AttackAction` → `dmAttack` → `store.Character`) proven
+working end to end, not just unit-tested. The weapon-kind *rejection*
+path was **not** proven live the same way: across two real attempts
+(a Shortbow-equipped character narratively describing a melee swing),
+the DM model resolved the outcome purely in prose without ever calling
+`melee_attack` at all — a real, honestly-reported finding, not a
+rejection the engine actually issued. That branch is covered instead by
+deterministic tests on both sides (`Attack_MeleeAttackWithBowEquipped_
+ReturnsFailure`/`Attack_RangedAttackWithLongswordEquipped_ReturnsFailure`
+in OpenCombatEngine, `RangedAttack_EngineRejects_
+ReturnsFailureToolResult` here) — same "can't control what a live LLM
+session does" caveat this repo's own `cast_spell` range-rejection test
+already documented for the identical reason.
+
+Still deliberately out of scope, flagged rather than silently built
+around: the SRD "disadvantage on a ranged attack while a hostile
+creature is within 5 ft" rule, and long-range (the second number in
+Open5e's own `"(range X/Y)"` text) disadvantage — both would require
+touching `AttackAction` itself, which this pass deliberately left
+untouched since it was already correct and tested. No explicit
+weapon-choice argument either — a `melee_attack`/`ranged_attack` call
+always resolves against whatever's in the main hand, same "already-
+equipped, don't re-litigate inventory" reasoning `cast_spell` uses for
+known/prepared spells.
 
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
 knowledge scoping) is still to come — see
