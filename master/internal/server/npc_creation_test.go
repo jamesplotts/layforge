@@ -23,6 +23,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_PersistsCharacterAndRetur
 		t.Fatalf("structpb.NewStruct() error = %v", err)
 	}
 	fakeEngine := &fakeSystemEngineClient{
+		getCharacterSchemaResp: &systemenginepb.GetCharacterSchemaResponse{SchemaVersion: "opencombatengine-v1", JsonSchema: `{"type":"object"}`},
 		fromJsonResp: &systemenginepb.FromJsonResponse{
 			Actor: &systemenginepb.Actor{ActorId: "engine-assigned-id", CharacterData: npcData, SchemaVersion: "opencombatengine-v1"},
 		},
@@ -30,6 +31,11 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_PersistsCharacterAndRetur
 	fakeLLM := &fakeLLMProvider{
 		responses: []llm.CompletionResponse{
 			{Text: "A goblin raider bursts from the treeline."},
+			// runSlowPass now rejects create_npc outright unless
+			// get_character_schema already succeeded earlier in this
+			// same turn (see dm_slow_pass.go's schemaFetched) — a real
+			// DM tool call has to fetch it first.
+			{ToolCalls: []llm.ToolCall{{ID: "call_0", Name: "get_character_schema", Arguments: json.RawMessage(`{}`)}}},
 			{ToolCalls: []llm.ToolCall{{
 				ID: "call_1", Name: "create_npc",
 				Arguments: json.RawMessage(`{"character_json":"{\"name\":\"Goblin Raider\",\"team\":\"Monster\"}"}`),
@@ -55,16 +61,24 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_PersistsCharacterAndRetur
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
 
+	// Two tool.result messages now arrive — get_character_schema, then
+	// create_npc — read generically by tool name rather than assuming
+	// create_npc's is the first one.
 	var toolResult protocol.ToolResultMessage
-	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
-		t.Fatalf("Read(tool.result) error = %v", err)
+	for i := 0; i < 5; i++ {
+		if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+			t.Fatalf("Read(tool.result) error = %v", err)
+		}
+		if toolResult.Payload.ToolName == "create_npc" {
+			break
+		}
 	}
 	if toolResult.Payload.ToolName != "create_npc" || !toolResult.Payload.Success {
 		t.Fatalf("tool.result = %+v, want a successful create_npc", toolResult.Payload)
 	}
 
-	secondSlowPassCall := fakeLLM.callAt(t, 2)
-	lastMsg := secondSlowPassCall.Messages[len(secondSlowPassCall.Messages)-1]
+	thirdSlowPassCall := fakeLLM.callAt(t, 3)
+	lastMsg := thirdSlowPassCall.Messages[len(thirdSlowPassCall.Messages)-1]
 	if lastMsg.Role != llm.RoleTool || lastMsg.ToolCallID != "call_1" {
 		t.Fatalf("last message before final narration = %+v, want a RoleTool reply to call_1", lastMsg)
 	}
@@ -92,6 +106,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_PersistsCharacterAndRetur
 
 func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_ValidationError_ReturnsFailure(t *testing.T) {
 	fakeEngine := &fakeSystemEngineClient{
+		getCharacterSchemaResp: &systemenginepb.GetCharacterSchemaResponse{SchemaVersion: "opencombatengine-v1", JsonSchema: `{"type":"object"}`},
 		fromJsonResp: &systemenginepb.FromJsonResponse{
 			Warnings: []*systemenginepb.ValidationWarning{
 				{FieldPath: "/name", Message: "name is required", Severity: "error"},
@@ -101,6 +116,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_ValidationError_ReturnsFa
 	fakeLLM := &fakeLLMProvider{
 		responses: []llm.CompletionResponse{
 			{Text: "Something stirs in the dark."},
+			{ToolCalls: []llm.ToolCall{{ID: "call_0", Name: "get_character_schema", Arguments: json.RawMessage(`{}`)}}},
 			{ToolCalls: []llm.ToolCall{{
 				ID: "call_1", Name: "create_npc",
 				Arguments: json.RawMessage(`{"character_json":"{}"}`),
@@ -127,14 +143,85 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_ValidationError_ReturnsFa
 	}
 
 	var toolResult protocol.ToolResultMessage
-	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
-		t.Fatalf("Read(tool.result) error = %v", err)
+	for i := 0; i < 5; i++ {
+		if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+			t.Fatalf("Read(tool.result) error = %v", err)
+		}
+		if toolResult.Payload.ToolName == "create_npc" {
+			break
+		}
+	}
+	if toolResult.Payload.ToolName != "create_npc" {
+		t.Fatalf("never saw a create_npc tool.result, last was %+v", toolResult.Payload)
 	}
 	if toolResult.Payload.Success {
 		t.Fatal("tool.result Success = true, want false (FromJson reported an error-severity warning)")
 	}
 	if toolResult.Payload.ReasonCode != "invalid_character" {
 		t.Errorf("tool.result ReasonCode = %q, want %q", toolResult.Payload.ReasonCode, "invalid_character")
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_CreateNPC_WithoutSchemaFetch_RejectedWithoutReachingEngine
+// is grounded in a real failure observed live against a real Ollama
+// server (qwen2.5:32b) and a real OpenCombatEngine sidecar: the model
+// called create_npc directly, without ever calling get_character_schema
+// first, and authored a completely invented, non-OpenCombatEngine JSON
+// document (generic D&D fields like race/class/alignment/nested ability
+// scores) that failed validation. dm_slow_pass.go's schemaFetched gate
+// now rejects create_npc outright when that hasn't happened yet this
+// turn — asserted here by fromJsonResp being left unset: if the gate
+// didn't fire and dmCreateNPC actually reached FromJson, the fake would
+// return a nil *FromJsonResponse and dmCreateNPC would panic on
+// resp.Actor, which the test's context deadline would surface as a
+// failure to ever see a tool.result at all.
+func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_WithoutSchemaFetch_RejectedWithoutReachingEngine(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{}
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "A goblin raider bursts from the treeline."},
+			{ToolCalls: []llm.ToolCall{{
+				ID: "call_1", Name: "create_npc",
+				Arguments: json.RawMessage(`{"character_json":"{\"race\":\"Goblin\",\"class\":\"Scout\"}"}`),
+			}}},
+			{Text: "The goblin raider snarls, weapon drawn."},
+		},
+	}
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "char-a", "campaign-npc-no-schema", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-npc-no-schema", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-npc-no-schema", "player-a", "char-a", "A goblin attacks!"); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	var toolResult protocol.ToolResultMessage
+	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+		t.Fatalf("Read(tool.result) error = %v", err)
+	}
+	if toolResult.Payload.ToolName != "create_npc" || toolResult.Payload.Success {
+		t.Fatalf("tool.result = %+v, want a failed create_npc", toolResult.Payload)
+	}
+	if toolResult.Payload.ReasonCode != "schema_not_fetched" {
+		t.Errorf("tool.result ReasonCode = %q, want %q", toolResult.Payload.ReasonCode, "schema_not_fetched")
+	}
+
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
+	}
+	if prose.Payload.Text != "The goblin raider snarls, weapon drawn." {
+		t.Errorf("narrative.dm_prose Text = %q, want the final narration to still be broadcast (the rejection just steers the model, it doesn't kill the whole turn)", prose.Payload.Text)
 	}
 }
 
@@ -214,6 +301,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPCThenStartCombat_IncludesRe
 		t.Fatalf("structpb.NewStruct() error = %v", err)
 	}
 	fakeEngine := &fakeSystemEngineClient{
+		getCharacterSchemaResp: &systemenginepb.GetCharacterSchemaResponse{SchemaVersion: "opencombatengine-v1", JsonSchema: `{"type":"object"}`},
 		fromJsonResp: &systemenginepb.FromJsonResponse{
 			Actor: &systemenginepb.Actor{ActorId: "engine-assigned-id", CharacterData: npcData, SchemaVersion: "opencombatengine-v1"},
 		},
@@ -238,11 +326,15 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPCThenStartCombat_IncludesRe
 			case 0:
 				return llm.CompletionResponse{Text: "A goblin raider leaps out to attack."}, nil
 			case 1:
+				// Required before create_npc — see dm_slow_pass.go's
+				// schemaFetched.
+				return llm.CompletionResponse{ToolCalls: []llm.ToolCall{{ID: "call_0", Name: "get_character_schema", Arguments: json.RawMessage(`{}`)}}}, nil
+			case 2:
 				return llm.CompletionResponse{ToolCalls: []llm.ToolCall{{
 					ID: "call_1", Name: "create_npc",
 					Arguments: json.RawMessage(`{"character_json":"{\"name\":\"Goblin Raider\",\"team\":\"Monster\"}"}`),
 				}}}, nil
-			case 2:
+			case 3:
 				lastMsg := req.Messages[len(req.Messages)-1]
 				var result struct {
 					CharacterID string `json:"character_id"`

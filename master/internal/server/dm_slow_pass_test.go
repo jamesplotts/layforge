@@ -318,3 +318,95 @@ func TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAn
 		t.Errorf("tool result content total = %v, want 14", toolResultPayload["total"])
 	}
 }
+
+// TestServe_NarrativePlayerInput_SlowPass_StartCombatFails_ClaimsTurnOrderAnyway_DoesNotBroadcast
+// reproduces a real failure observed live against a real Ollama server
+// (qwen2.5:32b) and a real OpenCombatEngine sidecar: start_combat failed
+// (here, because one of the given character_ids doesn't exist — the same
+// underlying cause as a create_npc call for that combatant having failed
+// earlier), the failure was broadcast as a genuine tool.result, and the
+// model's final narration nonetheless announced "the initiative is
+// rolled" and who goes first — directly contradicting both the tool
+// result it was just handed and dm_slow_pass.go's own system-prompt
+// instruction not to do this. runSlowPass's turnOrderCallFailed +
+// looksLikeUnearnedTurnOrderClaim backstop must catch this and broadcast
+// nothing, the same "no usable narration this turn" treatment
+// looksLikeMalformedToolCall already gets.
+func TestServe_NarrativePlayerInput_SlowPass_StartCombatFails_ClaimsTurnOrderAnyway_DoesNotBroadcast(t *testing.T) {
+	// char-1 (the first, real ID in the tool call below) must clear every
+	// step startCombat takes before it reaches char-npc-never-created and
+	// fails there — a status check, an initiative roll, and (once
+	// initiative order is established) a StartTurn call for whoever ends
+	// up first — so all three need a valid canned response, same as
+	// turn_order_test.go's own combat-happy-path fakes.
+	fakeEngine := &fakeSystemEngineClient{
+		getCharacterStatusResp: &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE},
+		resolveCheckResp: &systemenginepb.ResolveCheckResponse{
+			Success: true,
+			Outcome: &systemenginepb.Outcome{Total: 15, ResultSummary: "resolved"},
+		},
+		startTurnResp: noOpStartTurnResp,
+	}
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Four goblin scouts leap from the scrub."}, // fast pass
+			{ToolCalls: []llm.ToolCall{{
+				ID:        "call_1",
+				Name:      "start_combat",
+				Arguments: json.RawMessage(`{"character_ids":["char-1","char-npc-never-created"]}`),
+			}}}, // slow pass: start_combat with an ID that was never actually created
+			{Text: "The initiative is rolled and it seems the Goblin Scouts strike first."}, // final narration, despite the failure above
+		},
+	}
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "char-1", "campaign-slow-turn-order", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-slow-turn-order", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-slow-turn-order", "player-a", "char-1", "Goblins attack!"); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	// char-1 (the tool call's first, real ID) rolls a genuine initiative
+	// check before the loop ever reaches char-npc-never-created and
+	// fails — so a roll.request/roll.result pair for that roll is
+	// expected here too, not just the tool.result; read generically by
+	// type (same approach the ToolCall_BroadcastsRollToolResultAndDmProse
+	// test above uses) rather than assuming a strict order.
+	var sawToolResult bool
+	var toolResult protocol.ToolResultMessage
+	for i := 0; i < 10 && !sawToolResult; i++ {
+		typ, data, err := readEnvelopeType(ctx, conn)
+		if err != nil {
+			t.Fatalf("reading message %d error = %v", i, err)
+		}
+		if typ == protocol.MessageTypeToolResult {
+			sawToolResult = true
+			if err := json.Unmarshal(data, &toolResult); err != nil {
+				t.Fatalf("unmarshaling tool.result error = %v", err)
+			}
+		}
+	}
+	if !sawToolResult {
+		t.Fatal("never saw a tool.result message")
+	}
+	if toolResult.Payload.Success {
+		t.Fatalf("tool.result Success = true, want false (start_combat should have failed on a nonexistent character_id)")
+	}
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer shortCancel()
+	if _, _, err := readEnvelopeType(shortCtx, conn); err == nil {
+		t.Fatal("expected no narrative.dm_prose after start_combat failed and the model claimed turn order anyway, but a message arrived")
+	}
+}

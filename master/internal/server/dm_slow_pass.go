@@ -27,7 +27,7 @@ Rules:
 - If the action's outcome is uncertain or risky, call resolve_check before narrating the outcome — never invent a success or failure result.
 - If a resolved check, or a clearly-stated action (e.g. drinking a healing potion), should change a character's hit points, call apply_effect — never invent a hit point change.
 - Call get_character_status if you need to know a character's current condition before narrating a scene involving them.
-- Every character or creature you resolve_check, apply_effect, get_character_status, or start_combat against must already have a real character ID — never invent one for a narrated monster/NPC. If you introduce a monster/NPC that needs mechanical presence, call get_character_schema once (skip it if you already know the shape from earlier in this conversation), then create_npc with a full character JSON matching it, and use the character_id it returns from then on — never the name you gave it narratively.
+- Every character or creature you resolve_check, apply_effect, get_character_status, or start_combat against must already have a real character ID — never invent one for a narrated monster/NPC. If you introduce a monster/NPC that needs mechanical presence, call get_character_schema first — every time, even if you think you already know the shape, since this engine's actual field names are not something to guess — then create_npc with a full character JSON matching exactly what it returned, and use the character_id it returns from then on — never the name you gave it narratively, and never a placeholder ID if create_npc failed.
 - When a fight actually breaks out (not just narratively-described danger) and every combatant has a real character ID (create one with create_npc first if needed), call start_combat — this rolls real initiative and announces turn order. Once a character's turn is narratively over, call advance_turn — never decide or narrate whose turn is next yourself; Master computes it, skipping only the dead. An unconscious/dying character still gets a turn — Master automatically rolls their death save, you don't need to call anything for that. If start_combat or advance_turn fails, don't narrate as if it succeeded — acknowledge the fight is happening without formal turn order instead. Call end_combat once the fight is over.
 - If generate_scene_image is available and a moment is genuinely worth illustrating (a striking new location, a dramatic reveal — not every beat), call it with a complete, self-contained visual description. It's slow and costly, so use it sparingly, and never claim an image was generated if the call fails. The image is shown to the table separately and automatically — never write a URL, a markdown image link, or any mention of "the image above" in your own narration text.
 - Once you have everything you need, respond with narration only — no further tool calls, no meta-commentary, no quotation marks around it.`
@@ -92,6 +92,42 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	}
 
 	var finalText string
+	// turnOrderCallFailed tracks whether a start_combat or advance_turn
+	// call failed anywhere in this turn's tool loop — see the
+	// looksLikeUnearnedTurnOrderClaim check below, which uses it to catch
+	// a real, live-observed failure mode: the model calling start_combat,
+	// having it fail (e.g. because an earlier create_npc for one of the
+	// combatants also failed), and then narrating as if initiative had
+	// been rolled anyway, directly contradicting both the tool result it
+	// was just handed and this file's own system-prompt instruction not
+	// to do that. Scoped to just these two tools (not every possible
+	// failure) because they're the only ones whose success/failure
+	// determines whether a real turn.state exists for players to be
+	// mechanically gated by (see turn_order.go) — narrating past a failed
+	// resolve_check or apply_effect is caught by other means (the model
+	// has no result to narrate from in that case) or is a lower-stakes
+	// flavor-text concern, not this specific mechanical contradiction.
+	var turnOrderCallFailed bool
+	// schemaFetched tracks whether get_character_schema has succeeded
+	// earlier in THIS turn's tool loop — required before create_npc is
+	// allowed to actually reach the system engine. Found necessary via
+	// live testing: the system prompt already says to call
+	// get_character_schema "if you don't already know the shape," and
+	// against a real model the "already know" branch produced a
+	// completely invented, non-OpenCombatEngine JSON document (generic
+	// D&D fields like race/class/alignment, nested ability scores) that
+	// failed validation every time — CLAUDE.md's "gates over prompting"
+	// applied to schema knowledge specifically: the model reliably does
+	// NOT already know this engine's real shape, so create_npc without a
+	// schema fetch this turn is now rejected before it ever reaches
+	// FromJson, rather than trusting the model's own judgment about
+	// whether it needs to check. Deliberately per-turn, not persisted
+	// across turns: each runSlowPass call is a fresh conversation with no
+	// memory of an earlier turn's schema fetch (see this function's own
+	// doc comment on why the character ID has to ride along every time
+	// for the same reason), so "already fetched" can only ever mean
+	// "already fetched in this exact reply."
+	var schemaFetched bool
 	for i := 0; i < slowPassMaxToolIterations; i++ {
 		resp, err := s.llm.Complete(ctx, llm.CompletionRequest{
 			Model:    s.narrativeModel,
@@ -110,8 +146,32 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 
 		messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: resp.Text, ToolCalls: resp.ToolCalls})
 		for _, call := range resp.ToolCalls {
+			if call.Name == "create_npc" && !schemaFetched {
+				const reason = "create_npc rejected: you have not called get_character_schema in this reply yet. Call get_character_schema now, then retry create_npc with a character_json that matches its schema exactly — do not guess the shape."
+				s.broadcastToolResult(ctx, campaignID, call.Name, false, "schema_not_fetched")
+				messages = append(messages, llm.Message{Role: llm.RoleTool, Content: reason, ToolCallID: call.ID})
+				continue
+			}
+
 			result, success, reasonCode := s.callDMTool(ctx, campaignID, input.SenderID, call)
 			s.broadcastToolResult(ctx, campaignID, call.Name, success, reasonCode)
+			if call.Name == "get_character_schema" && success {
+				schemaFetched = true
+			}
+			if !success {
+				// Diagnostic only (no behavior change) — added after live
+				// testing turned up a resolve_check that failed with
+				// character_not_found despite this turn's own context
+				// supplying the correct ID: the call.Arguments the model
+				// actually sent is otherwise never logged anywhere, so a
+				// recurrence of that (or any other silent tool-call
+				// failure) couldn't previously be root-caused after the
+				// fact — only observed as a confusing table-side note.
+				s.logger.Warn("DM tool call failed", "campaign_id", campaignID, "tool", call.Name, "reason_code", reasonCode, "arguments", string(call.Arguments))
+				if call.Name == "start_combat" || call.Name == "advance_turn" {
+					turnOrderCallFailed = true
+				}
+			}
 			messages = append(messages, llm.Message{Role: llm.RoleTool, Content: result, ToolCallID: call.ID})
 		}
 	}
@@ -132,6 +192,21 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		// exists to prevent, so this counts as no usable narration this
 		// turn, not a best-effort display of whatever the model produced.
 		s.logger.Warn("DM slow pass produced a malformed tool-call artifact instead of narration; not broadcasting", "campaign_id", campaignID)
+		return
+	}
+	if turnOrderCallFailed && looksLikeUnearnedTurnOrderClaim(finalText) {
+		// Also observed live: exactly the sequence turnOrderCallFailed
+		// documents above, followed by narration confidently announcing
+		// "initiative is rolled" and who goes first — despite the
+		// tool.result already broadcast to the table (via
+		// broadcastToolResult above) showing start_combat failed. The
+		// system prompt already tells the model not to do this; this is
+		// the CLAUDE.md "gates over prompting" backstop for when it does
+		// it anyway — same "no usable narration this turn" treatment as
+		// looksLikeMalformedToolCall above, not a best-effort partial
+		// broadcast, since there's no reliable way to strip just the false
+		// claim out of otherwise-fine prose.
+		s.logger.Warn("DM slow pass claimed turn order was established after start_combat/advance_turn failed; not broadcasting", "campaign_id", campaignID)
 		return
 	}
 
@@ -182,4 +257,28 @@ func looksLikeMalformedToolCall(text string) bool {
 		return true
 	}
 	return strings.Contains(text, `"arguments"`) && strings.Contains(text, `"name"`)
+}
+
+// looksLikeUnearnedTurnOrderClaim reports whether text reads as narrating
+// that structured turn order/initiative now exists — see runSlowPass's
+// turnOrderCallFailed check, the only place this is called, for why that
+// only matters when the start_combat/advance_turn call that would have
+// actually established it is known to have failed. Deliberately loose,
+// same trade-off looksLikeMalformedToolCall documents: a false positive
+// costs one DM turn going silent instead of broadcasting a contradiction;
+// a false negative lets real narration through. Keyword-based rather
+// than trying to parse intent, on purpose — this only ever runs after
+// turnOrderCallFailed is already true, so the keywords only need to catch
+// the ways a model actually describes turn order/initiative, not
+// distinguish combat narration in general (plenty of legitimate fight
+// prose — "the goblin strikes first" as pure color, with no
+// turnOrderCallFailed — never reaches this check at all).
+func looksLikeUnearnedTurnOrderClaim(text string) bool {
+	lower := strings.ToLower(text)
+	for _, phrase := range []string{"initiative", "turn order", "whose turn", "goes first", "acts first"} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }

@@ -431,7 +431,14 @@ func (s *Server) dmStartCombat(ctx context.Context, campaignID string, argsJSON 
 
 	state, err := s.startCombat(ctx, campaignID, args.CharacterIDs)
 	if err != nil {
-		return err.Error(), false, "start_combat_failed"
+		// The corrective instruction is repeated here, not just in the
+		// system prompt, because it's the failure itself that needs to
+		// land, not a general rule stated once far earlier in context —
+		// live testing found the model narrating success anyway despite
+		// the system prompt already saying not to (see dm_slow_pass.go's
+		// looksLikeUnearnedTurnOrderClaim for the code-level backstop for
+		// when this still doesn't land).
+		return fmt.Sprintf("start_combat FAILED, no turn order exists: %v. Do not narrate initiative, turn order, or who goes first — narrate the danger/fight without any of that.", err), false, "start_combat_failed"
 	}
 	payload, err := json.Marshal(state)
 	if err != nil {
@@ -443,7 +450,9 @@ func (s *Server) dmStartCombat(ctx context.Context, campaignID string, argsJSON 
 func (s *Server) dmAdvanceTurn(ctx context.Context, campaignID string) (string, bool, string) {
 	state, err := s.advanceTurn(ctx, campaignID)
 	if err != nil {
-		return err.Error(), false, "advance_turn_failed"
+		// See dmStartCombat's identical reasoning for repeating the
+		// corrective instruction at the point of failure.
+		return fmt.Sprintf("advance_turn FAILED, turn order was not updated: %v. Do not narrate whose turn it is now — narrate the scene without claiming a turn order change.", err), false, "advance_turn_failed"
 	}
 	payload, err := json.Marshal(state)
 	if err != nil {

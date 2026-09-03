@@ -148,19 +148,53 @@ never assembles or assumes the character JSON's shape itself (CLAUDE.md:
 inside Master code that isn't the system-engine adapter"), so the model
 has to actually ask for the schema via `get_character_schema` first and
 author `character_json` to match it, the same way a human integrator
-would. **A real limitation found via live testing:** a mid-size model's
-first-attempt JSON often doesn't validate against OpenCombatEngine's
-actual schema (e.g. an `id` field that isn't a well-formed value the
-engine's deserializer accepts) — `create_npc` correctly rejects it
-rather than silently accepting something malformed, and the system
-prompt tells the model to acknowledge the failure narratively rather
-than claim a monster/turn order exists that doesn't; it doesn't
-currently retry with a corrected document within the same slow pass.
-Also found live: an LLM occasionally emits a failed tool-call attempt as
-plain narration text instead of populating its structured tool-call
-field — `looksLikeMalformedToolCall` in `dm_slow_pass.go` catches the
-common shapes and drops that turn's narration rather than broadcasting
-the artifact to the table.
+would — and now must: `runSlowPass` tracks whether
+`get_character_schema` has actually succeeded earlier in the *same* turn
+(`schemaFetched`) and rejects `create_npc` outright, before it ever
+reaches the engine, if not. This replaced the system prompt's original
+"call it if you don't already know the shape" wording, found live to be
+a real problem: against a real Ollama server (qwen2.5:32b), the model
+routinely skipped the schema call and authored a completely invented,
+generic-D&D-flavored document (`race`, `class`, `alignment`,
+`weapon_proficiencies`, nested `abilities`...) that doesn't remotely
+match OpenCombatEngine's real schema — `create_npc` correctly rejected
+it every time. **A real limitation found via live testing, only
+partially closed by the gate above:** even after the schema fetch is
+forced, the same model's `character_json` attempts still frequently
+don't validate — the schema-fetch gate stops it from *skipping* the
+schema, it doesn't make the model *follow* one once it's seen it. This
+is a model-capability ceiling for complex multi-field JSON authoring,
+not something further prompting or gating can fully close; a stronger
+model, or a stricter validate-and-retry loop inside `create_npc` itself
+(not currently built), would be the next real lever. Either way,
+`create_npc` correctly rejects an invalid document rather than silently
+accepting one, and (see below) the DM's narration correctly stops
+claiming a monster/turn order exists when it doesn't, rather than just
+being told not to and sometimes doing it anyway.
+
+Also found live and now fixed: a chain reaction where `create_npc`
+failing meant `start_combat` had no real NPC ID to use, `start_combat`
+then failed too (it validates every `character_id` is a real,
+already-known character, same as `create_npc`'s own gate exists to
+guarantee), and the model's final narration nonetheless announced
+"initiative is rolled" and who goes first — directly contradicting the
+tool.result already broadcast to the table and the system prompt's own
+instruction not to do this. The system prompt's instruction alone
+wasn't enough (CLAUDE.md's "gates over prompting," proven necessary
+here too): `runSlowPass` now tracks whether `start_combat`/`advance_turn`
+failed this turn and, if the model's narration still reads as claiming
+turn order was established (`looksLikeUnearnedTurnOrderClaim`), drops
+that turn's narration entirely rather than broadcasting the
+contradiction — the same "no usable narration this turn" treatment
+`looksLikeMalformedToolCall` (below) already gets for a different
+failure shape. Verified live, twice, against a real model: the
+narration correctly avoided any turn-order claim both times after the
+fix, where it had wrongly claimed one before. Also found live: an LLM
+occasionally emits a failed tool-call attempt as plain narration text
+instead of populating its structured tool-call field —
+`looksLikeMalformedToolCall` in `dm_slow_pass.go` catches the common
+shapes and drops that turn's narration rather than broadcasting the
+artifact to the table.
 
 Two more governance gates now exist too (design doc §9.1, §9.5 — see
 package `policy` and `campaignPolicy`/`withMaturityConstraint` in
