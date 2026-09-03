@@ -547,6 +547,80 @@ always resolves against whatever's in the main hand, same "already-
 equipped, don't re-litigate inventory" reasoning `cast_spell` uses for
 known/prepared spells.
 
+**Since closed**: a new `get_available_actions` DM tool computes the
+*full concrete menu* a character actually has right now — every
+equipped-weapon attack option (melee, ranged, and a genuinely new
+off-hand/secondary-weapon bonus-action attack, per SRD Two-Weapon
+Fighting), Grapple and Shove options, and every currently-castable
+prepared/known spell, each against every other character currently in
+this campaign's active combat (`combatParticipantIDs`, reusing
+Master's own turn-order state rather than inventing a separate
+campaign-roster concept). This is your own direct correction to an
+earlier, narrower proposal of mine this session — you wanted "the full
+list of things available so that the player has all those choices to
+pick from," not an abstract "is melee legal: yes/no" summary. Building
+it surfaced that OpenCombatEngine's own `ICreature.Actions` — which
+looked like a ready-made menu — actually under-represents a player
+character's real options (it only ever yields a hardcoded "Unarmed
+Strike," ignoring `Equipment.MainHand`/`OffHand` entirely), so the new
+`GetAvailableActions` RPC derives weapon options directly from
+equipment instead, the same way `Attack`'s own handler already did.
+
+Two real mechanics that didn't exist anywhere in OpenCombatEngine
+before this — **Grapple** and **Shove** — were built for real as part
+of this (only the resulting `Grappled`/`Prone` conditions existed;
+nothing ever applied them), composed entirely from primitives already
+tested elsewhere (opposed Athletics/Acrobatics checks, condition
+application, forced movement). A genuine, previously-unenforced SRD
+rule also got closed everywhere it applies: a source creature that is
+itself Paralyzed/Stunned/Petrified/Incapacitated can no longer attack,
+cast, grapple, or shove at all — before this, only a *target's*
+incapacitating conditions were ever checked (for advantage).
+
+That same incapacitation fact now drives turn order directly:
+`advanceTurn`/`start_combat`'s shared search
+(`advanceToNextActionableCharacter`, `turn_order.go`) auto-skips an
+alive-but-incapacitated character's turn with a real, Master-composed
+narration (not routed through the DM's own LLM pass — this session's
+own live verification of `melee_attack`/`ranged_attack` found the
+model narrating around a real gate rather than calling the tool that
+would have surfaced it, so a turn-skip announcement can't be left to
+its judgment either) — this is exactly the "a paralyzed character
+should get skipped in the initiative order" gap you raised directly.
+A full lap finding nobody able to act does not end combat the way
+"everyone's dead" correctly does (a real, temporary battlefield state,
+not the end of the fight) — it lands on the last alive-but-
+incapacitated character found, so cycling `advance_turn` keeps ticking
+condition durations down each round until someone can act again.
+
+**Verified live** against a real sidecar and a real LLM (`qwen3.8:27b`)
+— with one honest asterisk: Open5e was genuinely unreachable during
+this verification run (confirmed via direct `curl` timeouts), so the
+weapon-dependent options (melee/ranged/off-hand/Grapple/Shove) couldn't
+be exercised live this time — that path is covered by the deterministic
+test suite instead (both repos). What did verify live: a character
+with a real prepared spell called `get_available_actions`, and the
+DM's own narration — generated only from the real tool result — 
+correctly reported the prepared spell and full action economy; and a
+real `Paralyzed` condition applied via `apply_effect` produced the
+exact deterministic skip narration ("Kestrel is Paralyzed and cannot
+act this turn.") when `start_combat` searched for the first actionable
+character.
+
+**A real, honestly-flagged gap, not silently shipped as complete**:
+`GetAvailableActions` can tell the DM that Grapple, Shove, and an
+off-hand attack are legal right now — but this pass does not add a way
+to actually *execute* one. `melee_attack`/`ranged_attack`/`cast_spell`
+remain the only DM tools that resolve a real mechanical effect;
+Grapple/Shove/off-hand-attack exist as real, tested engine mechanics
+(`GrappleAction`/`ShoveAction`/off-hand `AttackAction` construction)
+that nothing in Master can call yet. Advertising an option with no way
+to take it is a real usability gap worth closing, likely as new
+`grapple`/`shove` RPCs and DM tools mirroring `Attack`'s own shape (and
+an off-hand-attack mode on `Attack` itself) — deliberately not done in
+this same pass without checking scope first, given how much this pass
+already grew from its original "enumerate what's legal" framing.
+
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
 knowledge scoping) is still to come — see
 [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.

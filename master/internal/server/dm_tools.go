@@ -149,6 +149,17 @@ func dmTools() []llm.Tool {
 			}`),
 		},
 		{
+			Name:        "get_available_actions",
+			Description: "Get the real, engine-computed list of everything a character can legally do right now — every equipped-weapon attack option (melee, ranged, and an off-hand/secondary weapon), Grapple and Shove options, and every currently-castable prepared/known spell, each against every other character currently in this campaign's active combat. Call this before improvising what a character can do in combat, or before choosing melee_attack/ranged_attack/cast_spell when you're not certain what's actually legal — it tells you exactly which option is real, so you never have to guess or narrate around a mechanical limitation (a melee-only weapon fired at range, a spell with no slots left, no free hand to grapple). If the character cannot act at all this turn (e.g. Paralyzed), can_act will be false with a real reason — narrate that, don't invent an action for them.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The character whose available actions to compute."}
+				}
+			}`),
+		},
+		{
 			Name:        "create_npc",
 			Description: "Create a real character record for a monster or NPC you've narrated, from a full character JSON document matching get_character_schema's schema. Call this before referencing that monster/NPC in any other tool (resolve_check, apply_effect, start_combat, get_character_status) — those only work on characters that already exist, and inventing an ID for one that doesn't will always fail. Returns the new character's real ID; use that exact ID afterward, never the name you gave it narratively.",
 			Parameters: json.RawMessage(`{
@@ -224,6 +235,8 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmAttack(ctx, campaignID, actingSenderID, call.Arguments, systemenginepb.AttackKind_ATTACK_KIND_MELEE)
 	case "ranged_attack":
 		return s.dmAttack(ctx, campaignID, actingSenderID, call.Arguments, systemenginepb.AttackKind_ATTACK_KIND_RANGED)
+	case "get_available_actions":
+		return s.dmGetAvailableActions(ctx, campaignID, call.Arguments)
 	case "get_character_status":
 		return s.dmGetCharacterStatus(ctx, campaignID, call.Arguments)
 	case "start_combat":
@@ -665,6 +678,86 @@ func (s *Server) dmAttack(ctx context.Context, campaignID, actingSenderID string
 		"attacked": true,
 		"hit":      resp.Hit,
 		"message":  resp.ResultMessage,
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmGetAvailableActions computes the real, engine-derived list of
+// everything characterID can legally do right now (design doc §8, §9:
+// "gates over prompting") — candidate_targets is every OTHER character
+// currently in this campaign's active combat (combatParticipantIDs,
+// turn_order.go), the same "who's in the fight" source of truth
+// advanceToNextActionableCharacter already uses; outside structured
+// combat this is simply empty, and the response still reports whatever
+// targetless options (self-only/AOE spells) apply. A candidate that
+// fails to resolve is skipped rather than failing the whole call — a
+// stale/removed participant shouldn't hide every other real option.
+func (s *Server) dmGetAvailableActions(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	req := &systemenginepb.GetAvailableActionsRequest{
+		RequestId:  "dm-tool-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+	}
+	for _, participantID := range s.combatParticipantIDs(campaignID) {
+		if participantID == character.ID {
+			continue
+		}
+		participant, err := s.campaignCharacter(ctx, campaignID, participantID)
+		if err != nil {
+			continue
+		}
+		participantData := &structpb.Struct{}
+		if err := protojson.Unmarshal(participant.CharacterData, participantData); err != nil {
+			continue
+		}
+		req.CandidateTargets = append(req.CandidateTargets, &systemenginepb.Actor{ActorId: participant.ID, CharacterData: participantData, SchemaVersion: participant.SchemaVersion})
+	}
+
+	resp, err := s.systemEngine.GetAvailableActions(ctx, req)
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return fmt.Sprintf("get_available_actions FAILED: %s", resp.Error), false, "engine_error"
+	}
+
+	actions := make([]map[string]any, 0, len(resp.Actions))
+	for _, a := range resp.Actions {
+		actions = append(actions, map[string]any{
+			"kind":                    a.Kind.String(),
+			"label":                   a.Label,
+			"source_name":             a.SourceName,
+			"target_character_id":     a.TargetCharacterId,
+			"action_economy_category": a.ActionEconomyCategory.String(),
+		})
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"can_act":           resp.CanAct,
+		"cannot_act_reason": resp.CannotActReason,
+		"has_action":        resp.HasAction,
+		"has_bonus_action":  resp.HasBonusAction,
+		"has_reaction":      resp.HasReaction,
+		"actions":           actions,
 	})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"

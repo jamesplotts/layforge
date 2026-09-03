@@ -6,6 +6,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,40 @@ func readTurnState(ctx context.Context, t *testing.T, conn *websocket.Conn) prot
 	}
 	t.Fatal("no turn.state message arrived within 20 messages")
 	return protocol.TurnStatePayload{}
+}
+
+// readTurnStateCollectingProse behaves like readTurnState but also
+// collects every narrative.dm_prose Text seen along the way — used by
+// the incapacitation-skip tests below to assert on
+// broadcastIncapacitatedSkip's own Master-composed narration, which
+// readTurnState alone would silently skip past.
+func readTurnStateCollectingProse(ctx context.Context, t *testing.T, conn *websocket.Conn) (protocol.TurnStatePayload, []string) {
+	t.Helper()
+	var prose []string
+	for i := 0; i < 20; i++ {
+		typ, data, err := readEnvelopeType(ctx, conn)
+		if err != nil {
+			t.Fatalf("reading message %d: %v", i, err)
+		}
+		if typ == protocol.MessageTypeNarrativeDmProse {
+			var msg protocol.NarrativeDmProseMessage
+			if err := json.Unmarshal(data, &msg); err != nil {
+				t.Fatalf("unmarshaling narrative.dm_prose: %v", err)
+			}
+			prose = append(prose, msg.Payload.Text)
+			continue
+		}
+		if typ != protocol.MessageTypeTurnState {
+			continue
+		}
+		var msg protocol.TurnStateMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("unmarshaling turn.state: %v", err)
+		}
+		return msg.Payload, prose
+	}
+	t.Fatal("no turn.state message arrived within 20 messages")
+	return protocol.TurnStatePayload{}, prose
 }
 
 // noOpStartTurnResp is what most tests in this file want for StartTurn:
@@ -356,12 +391,20 @@ func TestServe_NarrativePlayerInput_SlowPass_AdvanceTurn_AllDead_EndsCombatAutom
 		startTurnResp: noOpStartTurnResp,
 		getCharacterStatusFunc: func(*systemenginepb.GetCharacterStatusRequest) (*systemenginepb.GetCharacterStatusResponse, error) {
 			statusCalls++
-			// The first two status checks are start_combat's (both
-			// characters must be non-dead to enter initiative); every
-			// check from then on — all inside advance_turn — reports
-			// dead, simulating both combatants dying over the course of
-			// the fight before advance_turn is next called.
-			if statusCalls <= 2 {
+			// The first two status checks are start_combat's own
+			// initiative-rolling non-dead checks (both characters must be
+			// non-dead to enter initiative); the third is
+			// advanceToNextActionableCharacter's own dead-check on
+			// whichever character start_combat lands the first turn on
+			// (start_combat now searches for the first actionable
+			// character the same way advance_turn does, rather than
+			// unconditionally starting on order[0]) — that one must also
+			// report ACTIVE so start_combat itself still succeeds and
+			// broadcasts a real turn.state. Every check from then on —
+			// all inside the later advance_turn call — reports dead,
+			// simulating both combatants dying over the course of the
+			// fight before advance_turn is next called.
+			if statusCalls <= 3 {
 				return &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE}, nil
 			}
 			return &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_DEAD}, nil
@@ -453,5 +496,183 @@ func TestServe_NarrativePlayerInput_SlowPass_EndCombat_BroadcastsInactiveTurnSta
 	}
 	if len(state.Order) != 0 || state.CurrentCharacterID != "" {
 		t.Errorf("turn.state after end_combat = %+v, want a bare inactive payload", state)
+	}
+}
+
+// Regression coverage for the new turn-order incapacitation gate
+// (advanceToNextActionableCharacter, turn_order.go): before this,
+// nothing skipped an alive-but-Paralyzed/Stunned/Petrified character's
+// turn — only a dead one. These tests exercise the real
+// GetAvailableActions-driven skip, not just the "engine call failed,
+// assume they can act" degrade path other tests above rely on by
+// leaving getAvailableActionsResp/Func unconfigured.
+
+func canActFuncFor(cannotActID, reason string) func(*systemenginepb.GetAvailableActionsRequest) (*systemenginepb.GetAvailableActionsResponse, error) {
+	return func(req *systemenginepb.GetAvailableActionsRequest) (*systemenginepb.GetAvailableActionsResponse, error) {
+		if req.Actor.ActorId == cannotActID {
+			return &systemenginepb.GetAvailableActionsResponse{Success: true, CanAct: false, CannotActReason: reason}, nil
+		}
+		return &systemenginepb.GetAvailableActionsResponse{Success: true, CanAct: true, HasAction: true, HasBonusAction: true, HasReaction: true}, nil
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_AdvanceTurn_ParalyzedCharacter_SkippedWithRealNarration(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{
+		resolveCheckFunc: func(req *systemenginepb.ResolveCheckRequest) (*systemenginepb.ResolveCheckResponse, error) {
+			totals := map[string]int32{"char-a": 15, "char-b": 12, "char-c": 9}
+			total := totals[req.Actor.ActorId]
+			return &systemenginepb.ResolveCheckResponse{Success: true, Outcome: &systemenginepb.Outcome{Total: total, ResultSummary: "resolved", Rolls: []*systemenginepb.DieRoll{{Sides: 20, Result: int32(total), Label: "d20"}}}}, nil
+		},
+		getCharacterStatusResp:  &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE},
+		startTurnResp:           noOpStartTurnResp,
+		getAvailableActionsFunc: canActFuncFor("char-b", "Paralyzed"),
+	}
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Three combatants square off."},
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b","char-c"]}`)}}},
+			{ToolCalls: []llm.ToolCall{{ID: "call_2", Name: "advance_turn", Arguments: json.RawMessage(`{}`)}}},
+			{Text: "The turn moves on."},
+		},
+	}
+	campaignID := "campaign-turn-paralyzed"
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacterWithData(t, st, "char-a", campaignID, "player-a", `{"name":"Ari"}`)
+	seedCharacterWithData(t, st, "char-b", campaignID, "player-a", `{"name":"Bram"}`)
+	seedCharacterWithData(t, st, "char-c", campaignID, "player-a", `{"name":"Cato"}`)
+
+	conn := dialAndJoin(t, ts, campaignID, "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, campaignID, "player-a", "char-a", "We square off."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	_, _ = readTurnStateCollectingProse(ctx, t, conn) // start_combat lands on char-a (Ari)
+	state, prose := readTurnStateCollectingProse(ctx, t, conn)
+
+	if state.CurrentCharacterID != "char-c" {
+		t.Errorf("turn.state CurrentCharacterID = %q, want %q (char-b/Bram skipped for being Paralyzed)", state.CurrentCharacterID, "char-c")
+	}
+	found := false
+	for _, p := range prose {
+		if strings.Contains(p, "Bram") && strings.Contains(p, "Paralyzed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("narrative.dm_prose messages = %v, want one mentioning Bram is Paralyzed", prose)
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_StartCombat_TopRollerParalyzed_SkipsToNext(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{
+		resolveCheckFunc: func(req *systemenginepb.ResolveCheckRequest) (*systemenginepb.ResolveCheckResponse, error) {
+			totals := map[string]int32{"char-a": 18, "char-b": 5}
+			total := totals[req.Actor.ActorId]
+			return &systemenginepb.ResolveCheckResponse{Success: true, Outcome: &systemenginepb.Outcome{Total: total, ResultSummary: "resolved", Rolls: []*systemenginepb.DieRoll{{Sides: 20, Result: int32(total), Label: "d20"}}}}, nil
+		},
+		getCharacterStatusResp:  &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE},
+		startTurnResp:           noOpStartTurnResp,
+		getAvailableActionsFunc: canActFuncFor("char-a", "Stunned"), // char-a rolled highest but can't act
+	}
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "The fight begins."},
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b"]}`)}}},
+			{Text: "It continues."},
+		},
+	}
+	campaignID := "campaign-startcombat-stunned"
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacterWithData(t, st, "char-a", campaignID, "player-a", `{"name":"Ari"}`)
+	seedCharacterWithData(t, st, "char-b", campaignID, "player-a", `{"name":"Bram"}`)
+
+	conn := dialAndJoin(t, ts, campaignID, "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, campaignID, "player-a", "char-a", "The fight begins."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	state, prose := readTurnStateCollectingProse(ctx, t, conn)
+
+	if state.CurrentCharacterID != "char-b" {
+		t.Errorf("turn.state CurrentCharacterID = %q, want %q (char-a/Ari rolled highest but is Stunned)", state.CurrentCharacterID, "char-b")
+	}
+	found := false
+	for _, p := range prose {
+		if strings.Contains(p, "Ari") && strings.Contains(p, "Stunned") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("narrative.dm_prose messages = %v, want one mentioning Ari is Stunned", prose)
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_AdvanceTurn_EveryoneIncapacitated_DoesNotEndCombat(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{
+		resolveCheckFunc: func(req *systemenginepb.ResolveCheckRequest) (*systemenginepb.ResolveCheckResponse, error) {
+			totals := map[string]int32{"char-a": 15, "char-b": 10}
+			total := totals[req.Actor.ActorId]
+			return &systemenginepb.ResolveCheckResponse{Success: true, Outcome: &systemenginepb.Outcome{Total: total, ResultSummary: "resolved", Rolls: []*systemenginepb.DieRoll{{Sides: 20, Result: int32(total), Label: "d20"}}}}, nil
+		},
+		getCharacterStatusResp: &systemenginepb.GetCharacterStatusResponse{Status: systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE},
+		startTurnResp:          noOpStartTurnResp,
+		getAvailableActionsFunc: func(req *systemenginepb.GetAvailableActionsRequest) (*systemenginepb.GetAvailableActionsResponse, error) {
+			// Everyone is Held — nobody in this fight can act.
+			return &systemenginepb.GetAvailableActionsResponse{Success: true, CanAct: false, CannotActReason: "Paralyzed"}, nil
+		},
+	}
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "A wave of magic washes over the battlefield."},
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b"]}`)}}},
+			{ToolCalls: []llm.ToolCall{{ID: "call_2", Name: "advance_turn", Arguments: json.RawMessage(`{}`)}}},
+			{Text: "Nothing moves."},
+		},
+	}
+	campaignID := "campaign-turn-all-held"
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacterWithData(t, st, "char-a", campaignID, "player-a", `{"name":"Ari"}`)
+	seedCharacterWithData(t, st, "char-b", campaignID, "player-a", `{"name":"Bram"}`)
+
+	conn := dialAndJoin(t, ts, campaignID, "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, campaignID, "player-a", "char-a", "Everyone is held."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	_, _ = readTurnStateCollectingProse(ctx, t, conn) // start_combat's own lap, also all-incapacitated
+	state, _ := readTurnStateCollectingProse(ctx, t, conn)
+
+	if !state.Active {
+		t.Error("turn.state Active = false after advance_turn found everyone incapacitated (but alive), want true — combat should not end")
 	}
 }

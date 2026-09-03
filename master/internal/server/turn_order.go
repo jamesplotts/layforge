@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -130,6 +131,164 @@ func (s *Server) startTurnFor(ctx context.Context, campaignID, characterID strin
 	return nil
 }
 
+// checkCanAct calls the system engine's GetAvailableActions for
+// characterID and reports whether they can act at all this turn and, if
+// not, why — the real gate advanceToNextActionableCharacter uses to
+// skip a Paralyzed/Stunned/Petrified character's turn automatically,
+// the same "gates over prompting" reasoning as every other mechanical
+// check in this codebase (CLAUDE.md).
+func (s *Server) checkCanAct(ctx context.Context, campaignID, characterID string) (canAct bool, reason string, err error) {
+	character, err := s.campaignCharacter(ctx, campaignID, characterID)
+	if err != nil {
+		return false, "", err
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return false, "", fmt.Errorf("parsing stored character data for %q: %w", characterID, err)
+	}
+	resp, err := s.systemEngine.GetAvailableActions(ctx, &systemenginepb.GetAvailableActionsRequest{
+		RequestId:  "turn-canact-" + characterID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+	})
+	if err != nil {
+		return false, "", fmt.Errorf("calling system engine GetAvailableActions for %q: %w", characterID, err)
+	}
+	// Generated protobuf Getters, not direct field access: resp can be a
+	// bare nil here (a System Engine test double that never configured a
+	// response, or a genuinely degenerate real reply) without a real
+	// error — Get* methods are nil-receiver-safe and return zero values,
+	// so this degrades through the same "assume they can act" fallback
+	// the caller already has for a real error, rather than panicking.
+	if !resp.GetSuccess() {
+		return false, "", fmt.Errorf("checking available actions for %q: %s", characterID, resp.GetError())
+	}
+	return resp.GetCanAct(), resp.GetCannotActReason(), nil
+}
+
+// broadcastIncapacitatedSkip announces that character's turn is being
+// skipped because they cannot act (reason, e.g. "Paralyzed") — composed
+// directly by Master, not routed through the DM's own narrative-
+// transform LLM pass: this session's own live verification of melee_
+// attack/ranged_attack found the DM model narrating around a real gate
+// rather than calling the tool that would have surfaced it, so a
+// turn-skip announcement can't be left to the model's own judgment
+// either.
+func (s *Server) broadcastIncapacitatedSkip(ctx context.Context, campaignID string, character store.Character, reason string) error {
+	name := character.ID
+	var data map[string]any
+	if err := json.Unmarshal(character.CharacterData, &data); err == nil {
+		if n, ok := data["name"].(string); ok && n != "" {
+			name = n
+		}
+	}
+	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeDmProse, protocol.NarrativeDmProsePayload{
+		Text: fmt.Sprintf("%s is %s and cannot act this turn.", name, reason),
+	})
+	if err != nil {
+		return fmt.Errorf("building narrative.dm_prose message: %w", err)
+	}
+	recordEvent(ctx, s, msg)
+	return broadcastMessage(s, msg)
+}
+
+// advanceToNextActionableCharacter moves state to the next character in
+// order who is both alive and able to act (checkCanAct), running each
+// landed-on character's own start-of-turn bookkeeping (startTurnFor)
+// along the way — including a character who turns out to be
+// incapacitated, since StartTurn is what ticks their blocking
+// condition's duration down toward expiring. A dead character is
+// skipped entirely (characterIsDead), same as before this existed. An
+// alive-but-incapacitated character (Paralyzed/Stunned/Petrified) gets
+// a real, Master-composed skip narration (broadcastIncapacitatedSkip)
+// instead of a DM tool call, then the search continues.
+//
+// If a full lap finds no one both alive and able to act, that does NOT
+// end combat the way "everyone's dead" correctly does (endCombat) —
+// widespread temporary incapacitation (e.g. a whole party Held) is a
+// real, recoverable battlefield state, not the end of the fight. The
+// search instead lands on the last alive-but-incapacitated character
+// found during the lap, so a further advance_turn call keeps cycling
+// rounds (ticking conditions down each pass) until someone can act
+// again.
+func (s *Server) advanceToNextActionableCharacter(ctx context.Context, campaignID string, state *turnOrder) (protocol.TurnStatePayload, error) {
+	lastAliveIndex := -1
+
+	for step := 0; step < len(state.order); step++ {
+		state.currentIndex++
+		if state.currentIndex >= len(state.order) {
+			state.currentIndex = 0
+			state.round++
+		}
+		character, err := s.campaignCharacter(ctx, campaignID, state.order[state.currentIndex])
+		if err != nil {
+			return protocol.TurnStatePayload{}, err
+		}
+		dead, err := s.characterIsDead(ctx, character)
+		if err != nil {
+			return protocol.TurnStatePayload{}, err
+		}
+		if dead {
+			continue
+		}
+
+		if err := s.startTurnFor(ctx, campaignID, character.ID); err != nil {
+			s.logger.Warn("failed to run start-of-turn bookkeeping", "error", err, "campaign_id", campaignID, "character_id", character.ID)
+		}
+
+		canAct, reason, err := s.checkCanAct(ctx, campaignID, character.ID)
+		if err != nil {
+			// Degrade to "assume they can act" rather than getting combat
+			// permanently stuck on a character behind an engine error —
+			// the same "don't let an optional check block the whole
+			// operation" posture Master already uses elsewhere.
+			s.logger.Warn("failed to check available actions; assuming the character can act", "error", err, "campaign_id", campaignID, "character_id", character.ID)
+			canAct = true
+		}
+		if !canAct {
+			lastAliveIndex = state.currentIndex
+			if err := s.broadcastIncapacitatedSkip(ctx, campaignID, character, reason); err != nil {
+				s.logger.Warn("failed to broadcast incapacitation skip narration", "error", err, "campaign_id", campaignID, "character_id", character.ID)
+			}
+			continue
+		}
+
+		payload := state.toPayload()
+		if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {
+			s.logger.Warn("failed to broadcast turn.state", "error", err, "campaign_id", campaignID)
+		}
+		return payload, nil
+	}
+
+	if lastAliveIndex != -1 {
+		state.currentIndex = lastAliveIndex
+		payload := state.toPayload()
+		if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {
+			s.logger.Warn("failed to broadcast turn.state", "error", err, "campaign_id", campaignID)
+		}
+		return payload, nil
+	}
+
+	return s.endCombat(ctx, campaignID)
+}
+
+// combatParticipantIDs returns a copy of campaignID's current turn order
+// (every character in the active fight), or nil if no combat is active.
+// Used by dmGetAvailableActions (dm_tools.go) to supply
+// GetAvailableActionsRequest's candidate_targets — Master's own
+// turn-order state is already the "who's in this fight" source of
+// truth (docs/design.md §3.1), so this reuses it rather than
+// introducing a separate campaign-wide roster concept.
+func (s *Server) combatParticipantIDs(campaignID string) []string {
+	s.turnOrdersMu.Lock()
+	defer s.turnOrdersMu.Unlock()
+	state, ok := s.turnOrders[campaignID]
+	if !ok || !state.active {
+		return nil
+	}
+	return append([]string(nil), state.order...)
+}
+
 // startCombat establishes initiative order for campaignID from
 // characterIDs. Master rolls a real Dexterity ability check per
 // character through the system engine — never trusts the DM model to
@@ -203,32 +362,31 @@ func (s *Server) startCombat(ctx context.Context, campaignID string, characterID
 		order[i] = r.characterID
 	}
 
-	state := &turnOrder{active: true, order: order, currentIndex: 0, round: 1}
+	// currentIndex starts at -1 so advanceToNextActionableCharacter's own
+	// first currentIndex++ lands on order[0] — reusing the exact same
+	// dead-skip/incapacitation-skip search for the very first turn of
+	// combat (e.g. a monster that rolled highest initiative but is
+	// already Paralyzed when the fight starts), instead of
+	// unconditionally starting on order[0] regardless of whether they
+	// can actually act.
+	state := &turnOrder{active: true, order: order, currentIndex: -1, round: 1}
 	s.turnOrdersMu.Lock()
 	s.turnOrders[campaignID] = state
 	s.turnOrdersMu.Unlock()
 
-	// Combat starting also starts order[0]'s own turn.
-	if err := s.startTurnFor(ctx, campaignID, order[0]); err != nil {
-		s.logger.Warn("failed to run start-of-turn bookkeeping for the first character in initiative", "error", err, "campaign_id", campaignID, "character_id", order[0])
-	}
-
-	payload := state.toPayload()
-	if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {
-		s.logger.Warn("failed to broadcast turn.state", "error", err, "campaign_id", campaignID)
-	}
-	return payload, nil
+	return s.advanceToNextActionableCharacter(ctx, campaignID, state)
 }
 
 // advanceTurn moves campaignID's turn order to the next character who
-// isn't dead — design doc §9.3's requirement that this bookkeeping is
-// mechanical, not left to the DM to remember. Landing on an unconscious/
-// dying character still starts their turn (startTurnFor): SRD play has
-// them roll a death saving throw instead of acting, which is exactly
-// what that call does automatically — see characterIsDead's doc comment
-// for why they aren't skipped the way a dead character is. If every
-// character in order is dead, combat ends automatically: there is no
-// one left who could take a turn.
+// is both alive and able to act — design doc §9.3's requirement that
+// this bookkeeping is mechanical, not left to the DM to remember. See
+// advanceToNextActionableCharacter (which this delegates to) for the
+// dead-skip, incapacitation-skip, and full-lap-fallback rules. Landing
+// on an unconscious/dying (but not incapacitated by a condition) character
+// still starts their turn: SRD play has them roll a death saving throw
+// instead of acting, which startTurnFor does automatically — see
+// characterIsDead's doc comment for why they aren't skipped the way a
+// dead character is.
 func (s *Server) advanceTurn(ctx context.Context, campaignID string) (protocol.TurnStatePayload, error) {
 	s.turnOrdersMu.Lock()
 	state, ok := s.turnOrders[campaignID]
@@ -236,37 +394,7 @@ func (s *Server) advanceTurn(ctx context.Context, campaignID string) (protocol.T
 	if !ok || !state.active {
 		return protocol.TurnStatePayload{}, errors.New("no combat is active for this campaign")
 	}
-
-	for step := 0; step < len(state.order); step++ {
-		state.currentIndex++
-		if state.currentIndex >= len(state.order) {
-			state.currentIndex = 0
-			state.round++
-		}
-		character, err := s.campaignCharacter(ctx, campaignID, state.order[state.currentIndex])
-		if err != nil {
-			return protocol.TurnStatePayload{}, err
-		}
-		dead, err := s.characterIsDead(ctx, character)
-		if err != nil {
-			return protocol.TurnStatePayload{}, err
-		}
-		if dead {
-			continue
-		}
-
-		if err := s.startTurnFor(ctx, campaignID, character.ID); err != nil {
-			s.logger.Warn("failed to run start-of-turn bookkeeping", "error", err, "campaign_id", campaignID, "character_id", character.ID)
-		}
-
-		payload := state.toPayload()
-		if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {
-			s.logger.Warn("failed to broadcast turn.state", "error", err, "campaign_id", campaignID)
-		}
-		return payload, nil
-	}
-
-	return s.endCombat(ctx, campaignID)
+	return s.advanceToNextActionableCharacter(ctx, campaignID, state)
 }
 
 // endCombat clears campaignID's turn order and broadcasts the inactive

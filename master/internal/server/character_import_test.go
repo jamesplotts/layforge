@@ -108,6 +108,19 @@ type fakeSystemEngineClient struct {
 	// lastAttackRequest captures the most recent Attack() call's request,
 	// for asserting on what Server actually sent the engine.
 	lastAttackRequest *systemenginepb.AttackRequest
+
+	getAvailableActionsResp *systemenginepb.GetAvailableActionsResponse
+	getAvailableActionsErr  error
+	// getAvailableActionsFunc, when set, computes the response per call
+	// instead of the fixed getAvailableActionsResp/getAvailableActionsErr
+	// above — needed by tests where different characters in the same
+	// test must get different results (e.g. turn-order incapacitation
+	// skipping).
+	getAvailableActionsFunc func(*systemenginepb.GetAvailableActionsRequest) (*systemenginepb.GetAvailableActionsResponse, error)
+	// lastGetAvailableActionsRequest captures the most recent
+	// GetAvailableActions() call's request, for asserting on what Server
+	// actually sent the engine.
+	lastGetAvailableActionsRequest *systemenginepb.GetAvailableActionsRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -158,6 +171,17 @@ func (f *fakeSystemEngineClient) Attack(_ context.Context, in *systemenginepb.At
 		return nil, f.attackErr
 	}
 	return f.attackResp, nil
+}
+
+func (f *fakeSystemEngineClient) GetAvailableActions(_ context.Context, in *systemenginepb.GetAvailableActionsRequest, _ ...grpc.CallOption) (*systemenginepb.GetAvailableActionsResponse, error) {
+	f.lastGetAvailableActionsRequest = in
+	if f.getAvailableActionsFunc != nil {
+		return f.getAvailableActionsFunc(in)
+	}
+	if f.getAvailableActionsErr != nil {
+		return nil, f.getAvailableActionsErr
+	}
+	return f.getAvailableActionsResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetCharacterSchema(context.Context, *systemenginepb.GetCharacterSchemaRequest, ...grpc.CallOption) (*systemenginepb.GetCharacterSchemaResponse, error) {
