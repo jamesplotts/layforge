@@ -10,13 +10,13 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/jamesplotts/layforge/master/internal/frontmatter"
 )
 
 // LoadPack reads a campaign pack directory (design doc §6.4) — dir must
 // contain a campaign.md, and may contain locations/, npcs/, and
 // encounters/ subdirectories of *.md files, each in the front matter +
-// body shape splitFrontMatter parses. Every location, NPC, and
+// body shape package frontmatter parses. Every location, NPC, and
 // encounter must have a real id — an empty one is a real rejection,
 // since every DM tool built on this package looks entries up by id.
 // Files within each subdirectory are loaded in sorted filename order,
@@ -39,7 +39,7 @@ func LoadPack(dir string) (Pack, error) {
 		Author          string   `yaml:"author"`
 		ContentWarnings []string `yaml:"content_warnings"`
 	}
-	overview, err := parseFrontMatter(campaignBytes, &campaignFrontMatter)
+	overview, err := frontmatter.Parse(campaignBytes, &campaignFrontMatter)
 	if err != nil {
 		return Pack{}, fmt.Errorf("campaignpack: parsing campaign.md: %w", err)
 	}
@@ -75,7 +75,7 @@ func LoadPack(dir string) (Pack, error) {
 			ID          string   `yaml:"id"`
 			Connections []string `yaml:"connections"`
 		}
-		body, err := parseFrontMatter(data, &frontMatter)
+		body, err := frontmatter.Parse(data, &frontMatter)
 		if err != nil {
 			return Pack{}, fmt.Errorf("campaignpack: parsing %s: %w", path, err)
 		}
@@ -104,7 +104,7 @@ func LoadPack(dir string) (Pack, error) {
 			StatBlockRef string `yaml:"stat_block_ref"`
 			Voice        string `yaml:"voice"`
 		}
-		body, err := parseFrontMatter(data, &frontMatter)
+		body, err := frontmatter.Parse(data, &frontMatter)
 		if err != nil {
 			return Pack{}, fmt.Errorf("campaignpack: parsing %s: %w", path, err)
 		}
@@ -134,7 +134,7 @@ func LoadPack(dir string) (Pack, error) {
 			Location string   `yaml:"location"`
 			Involves []string `yaml:"involves"`
 		}
-		body, err := parseFrontMatter(data, &frontMatter)
+		body, err := frontmatter.Parse(data, &frontMatter)
 		if err != nil {
 			return Pack{}, fmt.Errorf("campaignpack: parsing %s: %w", path, err)
 		}
@@ -176,26 +176,4 @@ func sortedMarkdownFiles(dir string) ([]string, error) {
 		paths[i] = filepath.Join(dir, name)
 	}
 	return paths, nil
-}
-
-// parseFrontMatter splits content into a YAML front matter block
-// (delimited by "---" lines, unmarshaled into frontMatter) and a
-// markdown body, returned with leading/trailing whitespace trimmed.
-func parseFrontMatter(content []byte, frontMatter any) (body string, err error) {
-	text := strings.ReplaceAll(string(content), "\r\n", "\n")
-	lines := strings.Split(text, "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return "", fmt.Errorf("must start with a \"---\" front matter delimiter")
-	}
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) != "---" {
-			continue
-		}
-		rawFrontMatter := strings.Join(lines[1:i], "\n")
-		if err := yaml.Unmarshal([]byte(rawFrontMatter), frontMatter); err != nil {
-			return "", fmt.Errorf("parsing front matter: %w", err)
-		}
-		return strings.TrimSpace(strings.Join(lines[i+1:], "\n")), nil
-	}
-	return "", fmt.Errorf("front matter has no closing \"---\" delimiter")
 }

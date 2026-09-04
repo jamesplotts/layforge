@@ -1054,6 +1054,54 @@ trade, and the shrine's two-layer guardian/Hollow-Flame structure —
 all pulled from the real committed encounter/NPC text, not
 paraphrased summaries.
 
+**New**: a real `maturity_tiers/*.md` loader (design doc §6.5), closing
+the last interim-scope note the campaign-pack loader left standing —
+`campaign.md`'s own `maturity_tier` field is a *reference* to a
+separate tier file (id/display_name/rank front matter, real
+prompt-constraint text as the body), not a prompt string `campaign.md`
+carries directly, and nothing resolved that reference until now. A new
+`internal/maturitytiers` package parses a tier directory the same
+markdown-plus-front-matter shape `internal/campaignpack` already uses —
+factored the actual front-matter-plus-body split out into a small new
+`internal/frontmatter` package once both needed the identical logic,
+rather than duplicating it. A new `-maturity-tiers-dir` flag (mirroring
+`-campaign-policies`/`-room-passwords`'s own "host-authored, trusted,
+flag-loaded" shape — this is host config, not something the admin panel
+edits live) loads the registry once at startup;
+`admin.CampaignPackPolicyProvider` — the same provider already
+resolving `pvp_policy` from a bound pack — now resolves `maturity_tier`
+against it too, independently: an unresolvable tier id (no registry
+configured, or an id not in it) doesn't block a real `pvp_policy` from
+still applying, and vice versa. Caught and fixed a real, pre-existing
+bug from the campaign-pack pass along the way: the provider used to
+return a bare `CampaignPolicy{PvPPolicy: ...}` on a pack match, silently
+discarding whatever `PvPConsent`/`ImageMaturityTierPrompt`/
+`PriceMultiplier` the admin-panel fallback had set — it now starts from
+the fallback's own resolved policy and only overrides the fields the
+pack actually has an opinion on.
+
+Ships three real, original example tiers
+(`maturity-tiers/family_friendly.md`/`standard.md`/`mature.md`,
+matching design doc §6.5's own example filenames) — written to stay
+unambiguously on the safe side of CLAUDE.md's content-maturity rule at
+every rank, `mature` included, which says so explicitly in its own
+body text. `rank`'s other named purpose — sanity-checking that an
+image-gen tier override isn't set more permissive than the text tier —
+is parsed and available but not yet enforced anywhere: nothing in this
+codebase resolves an *image* maturity tier from a tier id the way
+`maturity_tier` now resolves a text one, so there's no second rank to
+compare against yet. A real, named, separate follow-on.
+
+**Verified live**: real sidecar + Master + `qwen3.8:27b`, the real
+`sable-ravine` pack bound (`maturity_tier: standard`) and a scratch tier
+registry containing a `standard` tier whose prompt text included a
+distinctive, testable marker instruction. The DM's real narration
+opened with that exact marker, unprompted — proving the resolved tier
+text actually reached generation, not just that the resolution logic
+was correct in isolation (which the deterministic
+`CampaignPackPolicyProvider` tests already cover, including the
+field-preservation fix above).
+
 **Verified live**: the admin API round-trip above (create a named
 campaign, list it back with real defaults, archive it, confirm a player
 can still join) ran against a real Master process with a real
@@ -1091,10 +1139,16 @@ internal/store/                repository/DAO abstraction over storage (design
                               doc §10): EventStore + CharacterStore interfaces,
                               both implemented by SQLiteEventStore, the
                               zero-config default (pure-Go driver, no cgo)
+internal/frontmatter/          shared markdown + YAML front-matter parser
+                              (design doc §6.4/§6.5) — used by both
+                              internal/campaignpack and internal/maturitytiers
 internal/campaignpack/         parses a campaign pack directory (design
                               doc §6.4) — campaign.md/locations/npcs/encounters,
                               markdown + YAML front matter — into structured data;
                               mutable session state lives in internal/store instead
+internal/maturitytiers/        parses a maturity-tier definitions directory
+                              (design doc §6.5) — one *.md file per tier
+                              (id/display_name/rank + prompt-constraint text)
 internal/llm/                  LLM-provider contract (design doc §3.1) +
                               OllamaProvider, the first implementation
 internal/auth/                  join-authorization contract (design doc §6.6) +

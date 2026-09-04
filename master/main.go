@@ -78,6 +78,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/imagegen"
 	"github.com/jamesplotts/layforge/master/internal/llm"
+	"github.com/jamesplotts/layforge/master/internal/maturitytiers"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/server"
 	"github.com/jamesplotts/layforge/master/internal/store"
@@ -98,10 +99,11 @@ func main() {
 	comfyUIWorkflowPath := flag.String("comfyui-workflow", "", "path to an API-format ComfyUI workflow JSON file (exported from ComfyUI's own UI via \"Save (API Format)\"), containing the literal token %%LAYFORGE_PROMPT%% in place of the positive-prompt node's text value. Master has no way to know your checkpoint/sampler/node graph, so it never constructs a workflow itself — see package imagegen. Required if -comfyui-url is set.")
 	adminAddr := flag.String("admin-addr", "127.0.0.1:8090", "address for the local-only admin/operator settings panel (design doc §3.3) — deliberately not 0.0.0.0: this listener has no login of its own, only the bind address stands between it and anyone who can reach it, so it must never be reverse-proxied or otherwise exposed off the host. Leave empty to disable the admin panel entirely.")
 	adminWebDir := flag.String("admin-web-dir", defaultAdminWebDir(), "directory to serve the admin panel's web UI from, mirroring -web-dir's own reasoning; empty disables serving it (the JSON API under /api/ on -admin-addr still works, useful for headless/scripted admin access).")
+	maturityTiersDir := flag.String("maturity-tiers-dir", "", "path to a directory of maturity-tier definitions (design doc §6.5), e.g. maturity-tiers/ at the repo root — one *.md file per tier (id/display_name/rank front matter, prompt-constraint text as the body). Host-authored and trusted like any other host config; Master does not police tier content. Leave empty (today's default) to resolve maturity_tier_prompt only from -campaign-policies/the admin panel, never from a campaign pack's own maturity_tier reference.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -200,7 +202,7 @@ func defaultAdminWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir string, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -255,6 +257,20 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("campaign policies loaded", "path", campaignPoliciesPath, "campaign_count", len(policies))
 	}
 
+	// maturityTiers stays nil (every campaign pack's own maturity_tier
+	// reference resolves to no prompt constraint at all, same as today)
+	// unless -maturity-tiers-dir is set — same opt-in-per-self-hoster
+	// reasoning as campaignPoliciesPath/roomPasswordsPath above.
+	var tiers map[string]maturitytiers.Tier
+	if maturityTiersDir != "" {
+		var err error
+		tiers, err = maturitytiers.LoadTiers(maturityTiersDir)
+		if err != nil {
+			return err
+		}
+		logger.Info("maturity tiers loaded", "path", maturityTiersDir, "tier_count", len(tiers))
+	}
+
 	// restartRequested is nil (every case reading it in this function's
 	// final select blocks forever, matching Go's nil-channel semantics)
 	// unless -admin-addr enables the admin panel below — see that block.
@@ -276,11 +292,16 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 	// -campaign-policies JSON file — closing the interim scope
 	// campaign-packs/README.md itself names ("resolved from a flat
 	// per-campaign JSON file... rather than campaign.md front matter...
-	// once Master actually loads campaign packs").
+	// once Master actually loads campaign packs"). maturity_tier
+	// resolves the same way, but only once -maturity-tiers-dir is also
+	// set (tiers stays nil otherwise, and CampaignPackPolicyProvider
+	// leaves MaturityTierPrompt unset in that case — see its own doc
+	// comment for why a raw tier name is never used as prompt text
+	// directly).
 	var adminServer *admin.Server
 	if adminAddr != "" {
 		authProvider = admin.NewAuthProvider(events, authProvider)
-		policyProvider = admin.NewCampaignPackPolicyProvider(events, policyProvider)
+		policyProvider = admin.NewCampaignPackPolicyProvider(events, tiers, policyProvider)
 		policyProvider = admin.NewPolicyProvider(events, policyProvider)
 		restartRequested = make(chan struct{}, 1)
 		systemSeed := map[string]string{

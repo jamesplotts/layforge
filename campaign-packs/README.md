@@ -41,13 +41,13 @@ nothing. `state.json`'s own mutable fields
 store instead of this file, which stays what it always was: the
 starting shape, not something read or written at runtime.
 
-`pvp_policy` — one of the two fields §9.1/§9.5's governance gates need —
-now really does resolve from this file's own front matter (`pve_only`
-above) when a pack is bound and the admin panel hasn't set an explicit
-override, closing the interim scope this section used to describe. See
-`internal/admin/campaign_pack_policy_provider.go`. `maturity_tier` is
-not yet resolved this way: design doc §6.5 defines it as a *reference*
-to a separate `maturity_tiers/<id>.md` file (the actual prompt-
-constraint text lives there, not in `campaign.md` itself), and that
-loader doesn't exist yet — a real, named, separate follow-on, not
-silently dropped.
+`pvp_policy` and `maturity_tier` — the two fields §9.1/§9.5's governance
+gates need — now really do resolve from this file's own front matter
+(`pve_only`/`standard` above) when a pack is bound and the admin panel
+hasn't set an explicit override, closing the interim scope this section
+used to describe. See `internal/admin/campaign_pack_policy_provider.go`.
+`maturity_tier` resolves independently of `pvp_policy` and only when a
+`-maturity-tiers-dir` is configured (see
+[`../maturity-tiers/README.md`](../maturity-tiers/README.md)) — a
+campaign pack's own real `pvp_policy` still applies even when no tier
+registry is set up at all.
