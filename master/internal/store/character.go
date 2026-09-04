@@ -106,4 +106,14 @@ type CharacterStore interface {
 	// GetCharacter returns the character with the given ID, or
 	// ErrCharacterNotFound if none exists.
 	GetCharacter(ctx context.Context, characterID string) (Character, error)
+
+	// ListCharacters returns every character (player-owned and NPC alike
+	// — callers that need only real player characters filter on OwnerID
+	// themselves, e.g. against the "master" sender_id create_npc saves
+	// NPCs under) recorded for campaignID, in no particular guaranteed
+	// order. Used by design doc §9.6's spotlight-balance tracking to know
+	// the campaign's full character roster, not just whoever has spoken
+	// recently. Returns an empty slice, not an error, for a campaign with
+	// no characters at all.
+	ListCharacters(ctx context.Context, campaignID string) ([]Character, error)
 }

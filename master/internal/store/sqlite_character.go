@@ -72,3 +72,41 @@ func (s *SQLiteEventStore) GetCharacter(ctx context.Context, characterID string)
 	}
 	return c, nil
 }
+
+// ListCharacters implements CharacterStore.
+func (s *SQLiteEventStore) ListCharacters(ctx context.Context, campaignID string) ([]Character, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT character_id, campaign_id, owner_id, schema_version, status, character_data, created_at, updated_at
+		 FROM characters
+		 WHERE campaign_id = ?`,
+		campaignID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing characters: %w", err)
+	}
+	defer rows.Close()
+
+	characters := make([]Character, 0)
+	for rows.Next() {
+		var c Character
+		var status, characterData, createdAt, updatedAt string
+		if err := rows.Scan(&c.ID, &c.CampaignID, &c.OwnerID, &c.SchemaVersion, &status, &characterData, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("store: scanning character row: %w", err)
+		}
+		c.Status = CharacterStatus(status)
+		c.CharacterData = json.RawMessage(characterData)
+		c.CreatedAt, err = time.Parse(occurredAtLayout, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("store: parsing created_at for character %q: %w", c.ID, err)
+		}
+		c.UpdatedAt, err = time.Parse(occurredAtLayout, updatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("store: parsing updated_at for character %q: %w", c.ID, err)
+		}
+		characters = append(characters, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterating character rows: %w", err)
+	}
+	return characters, nil
+}

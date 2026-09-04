@@ -1223,8 +1223,8 @@ only changes connection pooling, not read/write correctness). Both new
 store tables and every new admin API endpoint have their own
 deterministic test coverage in `internal/store` and `internal/admin`.
 
-The rest of §9 (§9.4's review panel, §9.6 spotlight balance) is still to
-come — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+The rest of §9 (§9.4's review panel) is still to come — see
+[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 Push-to-talk voice input (design doc §4) now works too: `audio.chunk`
 (the streamed, base64-encoded recording a held mic button uploads) and
@@ -1305,6 +1305,43 @@ configured, confirming the mic button renders in the right place with no
 console errors — actually holding it and speaking into a real microphone
 still needs a human check with real hardware, since this environment has
 no audio input device to automate that half of the flow.
+
+**New**: design doc §9.6 Spotlight Balance — a soft signal, not a hard
+gate, surfacing which player characters have gone quiet so the DM can
+proactively draw them back in. Deliberately computed by reading the same
+durable event log every other log-derived feature already reads (see
+`store.EventStore`'s own doc comment, which already named spotlight
+tracking as a consumer before this pass existed) rather than maintaining
+separate bookkeeping — `spotlightContextText`
+(`internal/server/spotlight.go`) scans the campaign's most recent 500
+events for `narrative.player_input`, and for each real player character
+(`CharacterStore.ListCharacters`, a new method — excluding NPCs, which
+`create_npc` saves under the `"master"` sender_id, not a real player)
+reports how many turns have passed since their own last one. A character
+who's never appeared in that window at all gets "no turns in recent
+history" rather than a possibly-misleading exact count — an approximate
+signal is exactly the fidelity a DM nudge needs, not perfect bookkeeping
+back to session one. Capped to the 3 quietest characters per turn so
+it's a short, actionable line, not a full roster dump every message; a
+new `dmSlowPassSystemPrompt` rule tells the model this section is
+informational only — look for a natural opening, never force it, never
+mention the tracking itself in narration.
+
+**Verified live**: real Master + real `qwen3.8:27b`, two seeded
+characters (Kestrel, controlled by the only connected player; Bram,
+silent throughout). Four consecutive turns from Kestrel alone: by turn
+2 the guard's "eyes flick briefly toward Bram, as though expecting him
+to object"; turn 3 brings Bram fully into the scene on its own ("seated
+against a boulder... clearly watching the same edges of the treeline");
+turn 4 gives Bram an active beat aimed squarely at prompting Kestrel's
+attention ("a low, questioning glance, as if waiting to hear which
+version of the story Kestrel will tell"). The model organically
+escalated toward the quiet character exactly as the nudge intends,
+without ever mentioning the tracking mechanism itself. `internal/server/
+spotlight_test.go` covers the deterministic cases this live run can't
+by itself: the exact turns-since count, "no turns in recent history" for
+a character absent from the whole window, NPCs never flagged, and no
+section at all with fewer than two real players.
 
 ## Layout
 

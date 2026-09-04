@@ -33,6 +33,7 @@ Rules:
 - Every character or creature you resolve_check, apply_effect, get_character_status, or start_combat against must already have a real character ID — never invent one for a narrated monster/NPC. If you introduce a monster/NPC that needs mechanical presence, call get_character_schema first — every time, even if you think you already know the shape, since this engine's actual field names are not something to guess — then create_npc with a full character JSON matching exactly what it returned, and use the character_id it returns from then on — never the name you gave it narratively, and never a placeholder ID if create_npc failed.
 - When a fight actually breaks out (not just narratively-described danger) and every combatant has a real character ID (create one with create_npc first if needed), call start_combat — this rolls real initiative and announces turn order. Once a character's turn is narratively over, call advance_turn — never decide or narrate whose turn is next yourself; Master computes it, skipping only the dead. An unconscious/dying character still gets a turn — Master automatically rolls their death save, you don't need to call anything for that. If start_combat or advance_turn fails, don't narrate as if it succeeded — acknowledge the fight is happening without formal turn order instead. Call end_combat once the fight is over.
 - If generate_scene_image is available and a moment is genuinely worth illustrating (a striking new location, a dramatic reveal — not every beat), call it with a complete, self-contained visual description. It's slow and costly, so use it sparingly, and never claim an image was generated if the call fails. The image is shown to the table separately and automatically — never write a URL, a markdown image link, or any mention of "the image above" in your own narration text.
+- If a "Spotlight balance" section is present, it's a soft signal only — real bookkeeping of who's spoken recently, not a rule or a turn order. Use it to look for a natural opening to involve a quieter character (an NPC addresses them directly, something happens near them, the scene simply widens to include them) when the moment allows — never force it into a scene where it doesn't fit, and never mention the tracking itself in your narration.
 - Once you have everything you need, respond with narration only — no further tool calls, no meta-commentary, no quotation marks around it.`
 
 // slowPassMaxToolIterations bounds the tool-call loop below — a
@@ -110,6 +111,11 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	if s.campaignPack != nil {
 		userContent += s.locationContextText(ctx, campaignID)
 	}
+	// Same best-effort reasoning again: spotlightContextText already
+	// returns "" for any reason it can't produce a real answer (no
+	// characters/events store, fewer than two players, nobody's actually
+	// quiet right now) — nothing here needs its own error handling.
+	userContent += s.spotlightContextText(ctx, campaignID)
 	userContent += fmt.Sprintf("Player action: %s", input.Payload.Text)
 	pol := s.campaignPolicy(ctx, campaignID)
 	systemPrompt := withMaturityConstraint(dmSlowPassSystemPrompt, pol)
