@@ -43,6 +43,10 @@ const el = {
   imageMaturityTierPrompt: document.getElementById("image-maturity-tier-prompt"),
   priceMultiplier: document.getElementById("price-multiplier"),
   campaignSave: document.getElementById("campaign-save"),
+  campaignPackDir: document.getElementById("campaign-pack-dir"),
+  campaignPackCurrent: document.getElementById("campaign-pack-current"),
+  campaignPackSave: document.getElementById("campaign-pack-save"),
+  campaignPackSaveStatus: document.getElementById("campaign-pack-save-status"),
   campaignSaveStatus: document.getElementById("campaign-save-status"),
   roomPassword: document.getElementById("room-password"),
   securitySave: document.getElementById("security-save"),
@@ -265,7 +269,7 @@ el.campaignSelect.addEventListener("change", () => selectCampaign(el.campaignSel
 async function selectCampaign(id) {
   state.campaignId = id;
   el.campaignSelect.value = id;
-  await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id)]);
+  await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id), loadCampaignPack(id)]);
 }
 
 // --- Campaign tab ---
@@ -301,6 +305,31 @@ el.campaignSave.addEventListener("click", async () => {
     body: JSON.stringify(body),
   });
   setStatus(el.campaignSaveStatus, resp.ok ? "Saved." : `Failed: ${await errorText(resp)}`, !resp.ok);
+});
+
+async function loadCampaignPack(id) {
+  const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/pack`);
+  const data = await resp.json();
+  el.campaignPackDir.value = data.pack_dir || "";
+  el.campaignPackCurrent.textContent = data.pack_dir
+    ? `Currently bound: ${data.pack_id} (${data.pack_dir})`
+    : "No campaign pack bound.";
+}
+
+el.campaignPackSave.addEventListener("click", async () => {
+  if (!state.campaignId) return;
+  setStatus(el.campaignPackSaveStatus, "Binding…");
+  const resp = await fetch(`/api/campaigns/${encodeURIComponent(state.campaignId)}/pack`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pack_dir: el.campaignPackDir.value }),
+  });
+  if (!resp.ok) {
+    setStatus(el.campaignPackSaveStatus, `Failed: ${await errorText(resp)}`, true);
+    return;
+  }
+  setStatus(el.campaignPackSaveStatus, "Bound.");
+  await loadCampaignPack(state.campaignId);
 });
 
 // --- Security tab ---

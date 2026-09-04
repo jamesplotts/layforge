@@ -21,7 +21,7 @@ func newTestServer(t *testing.T, restartRequested chan struct{}) (*admin.Server,
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
 	seed := map[string]string{admin.SystemKeyAddr: ":8080", admin.SystemKeyLLMModel: "seed-model"}
-	srv := admin.New(logger, s, "", "127.0.0.1:8090", seed, restartRequested)
+	srv := admin.New(logger, s, s, "", "127.0.0.1:8090", seed, restartRequested)
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return srv, httpSrv
@@ -426,6 +426,84 @@ func TestServer_PutCampaignPolicy_SameOriginRequest_Allowed(t *testing.T) {
 		map[string]any{"pvp_policy": "pvp_allowed"}, "http://127.0.0.1:8090")
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200 for a same-origin request", resp.StatusCode)
+	}
+}
+
+// sableRavinePackDir is the real, committed example pack — see
+// campaignpack's own loader_test.go for the same fixture, and
+// internal/server's location_test.go for its own copy of this constant
+// (each package keeps its own relative path from its own directory).
+const sableRavinePackDir = "../../../campaign-packs/sable-ravine"
+
+func TestServer_PutThenGetCampaignPack_RoundTrips(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+	url := httpSrv.URL + "/api/campaigns/campaign-1/pack"
+
+	putResp := doJSON(t, http.MethodPut, url, map[string]any{"pack_dir": sableRavinePackDir}, "")
+	if putResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(putResp.Body)
+		t.Fatalf("PUT status = %d, body = %s", putResp.StatusCode, body)
+	}
+
+	getResp := doJSON(t, http.MethodGet, url, nil, "")
+	var got struct {
+		PackDir string `json:"pack_dir"`
+		PackID  string `json:"pack_id"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.PackDir != sableRavinePackDir {
+		t.Errorf("PackDir = %q, want %q", got.PackDir, sableRavinePackDir)
+	}
+	if got.PackID != "sable-ravine" {
+		t.Errorf("PackID = %q, want %q (parsed from the real campaign.md)", got.PackID, "sable-ravine")
+	}
+}
+
+func TestServer_GetCampaignPack_NeverBound_ReturnsEmpty(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/campaigns/campaign-never-bound/pack", nil, "")
+	var got struct {
+		PackDir string `json:"pack_dir"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.PackDir != "" {
+		t.Errorf("PackDir = %q, want empty", got.PackDir)
+	}
+}
+
+func TestServer_PutCampaignPack_DirectoryDoesNotParse_ReturnsBadRequestAndBindsNothing(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+	url := httpSrv.URL + "/api/campaigns/campaign-1/pack"
+
+	resp := doJSON(t, http.MethodPut, url, map[string]any{"pack_dir": t.TempDir()}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for a directory with no campaign.md", resp.StatusCode)
+	}
+
+	getResp := doJSON(t, http.MethodGet, url, nil, "")
+	var got struct {
+		PackDir string `json:"pack_dir"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.PackDir != "" {
+		t.Errorf("PackDir = %q, want empty (a rejected bind must not partially apply)", got.PackDir)
+	}
+}
+
+func TestServer_PutCampaignPack_CrossOriginRequest_Rejected(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/pack",
+		map[string]any{"pack_dir": sableRavinePackDir}, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a cross-origin request", resp.StatusCode)
 	}
 }
 

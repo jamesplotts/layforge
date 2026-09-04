@@ -472,6 +472,20 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmVendorSellItem(ctx, campaignID, actingSenderID, call.Arguments)
 	case "vendor_buy_item":
 		return s.dmVendorBuyItem(ctx, campaignID, actingSenderID, call.Arguments)
+	case "list_locations":
+		return s.dmListLocations(ctx, campaignID)
+	case "travel_to":
+		return s.dmTravelTo(ctx, campaignID, call.Arguments)
+	case "stash_item":
+		return s.dmStashItem(ctx, campaignID, call.Arguments)
+	case "retrieve_item":
+		return s.dmRetrieveItem(ctx, campaignID, call.Arguments)
+	case "stash_currency":
+		return s.dmStashCurrency(ctx, campaignID, call.Arguments)
+	case "retrieve_currency":
+		return s.dmRetrieveCurrency(ctx, campaignID, call.Arguments)
+	case "claim_location":
+		return s.dmClaimLocation(ctx, campaignID, call.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool %q", call.Name), false, "unknown_tool"
 	}

@@ -174,6 +174,16 @@ type Server struct {
 	// the feature" pattern every other optional dependency on this
 	// struct already uses.
 	combatState store.CombatStateStore
+
+	// campaignPack persists which campaign-pack directory (if any) is
+	// bound to each campaign, plus the mutable session state a loaded
+	// pack's locations need — party location, discovered/claimed
+	// locations, stashed possessions (location.go, design doc §6.4).
+	// nil means no campaign ever has a pack bound — the location_*/
+	// stash_* DM tools then simply reject every call with a real "no
+	// campaign pack is bound to this campaign" error, the same
+	// nil-disables-the-feature pattern as combatState/imageGen/policy.
+	campaignPack store.CampaignPackStore
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -203,7 +213,7 @@ type Server struct {
 // combat_state.go existed — a caller that sets it should also call
 // WarmUpCombatState once at startup, before Handler() starts accepting
 // connections, to rehydrate whatever was persisted from a prior run.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore) *Server {
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
@@ -218,6 +228,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		turnOrders:     make(map[string]*turnOrder),
 		combatMaps:     make(map[string]*combatMapMeta),
 		combatState:    combatStateStore,
+		campaignPack:   campaignPackStore,
 	}
 }
 

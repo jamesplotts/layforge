@@ -180,6 +180,13 @@ type fakeSystemEngineClient struct {
 	// request, for asserting on what Server actually sent the engine.
 	lastAddCurrencyRequest *systemenginepb.AddCurrencyRequest
 
+	removeCurrencyResp *systemenginepb.RemoveCurrencyResponse
+	removeCurrencyErr  error
+	// lastRemoveCurrencyRequest captures the most recent RemoveCurrency()
+	// call's request, for asserting on what Server actually sent the
+	// engine.
+	lastRemoveCurrencyRequest *systemenginepb.RemoveCurrencyRequest
+
 	transferCurrencyResp *systemenginepb.TransferCurrencyResponse
 	transferCurrencyErr  error
 	// lastTransferCurrencyRequest captures the most recent
@@ -323,6 +330,14 @@ func (f *fakeSystemEngineClient) AddCurrency(_ context.Context, in *systemengine
 	return f.addCurrencyResp, nil
 }
 
+func (f *fakeSystemEngineClient) RemoveCurrency(_ context.Context, in *systemenginepb.RemoveCurrencyRequest, _ ...grpc.CallOption) (*systemenginepb.RemoveCurrencyResponse, error) {
+	f.lastRemoveCurrencyRequest = in
+	if f.removeCurrencyErr != nil {
+		return nil, f.removeCurrencyErr
+	}
+	return f.removeCurrencyResp, nil
+}
+
 func (f *fakeSystemEngineClient) TransferCurrency(_ context.Context, in *systemenginepb.TransferCurrencyRequest, _ ...grpc.CallOption) (*systemenginepb.TransferCurrencyResponse, error) {
 	f.lastTransferCurrencyRequest = in
 	if f.transferCurrencyErr != nil {
@@ -412,7 +427,7 @@ func newTestServerWithSystemEngine(t *testing.T, fakeEngine *fakeSystemEngineCli
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil, nil, st).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil, nil, st, st).Handler())
 	return ts, st
 }
 

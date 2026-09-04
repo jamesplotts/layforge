@@ -91,6 +91,11 @@ var (
 	// delete a campaign's data without first having deliberately
 	// archived it (see DeleteCampaign's own doc comment).
 	ErrCampaignNotArchived = errors.New("store: campaign must be archived before it can be deleted")
+	// ErrInsufficientStashedCurrency is returned by RemoveStashedCurrency
+	// when a requested denomination exceeds what's actually stashed —
+	// mirrors the system engine's own TransferCurrency rejection (no
+	// change-making across denominations).
+	ErrInsufficientStashedCurrency = errors.New("store: insufficient stashed currency in one or more denominations")
 )
 
 // EventStore is Master's durable, append-only campaign event log — the

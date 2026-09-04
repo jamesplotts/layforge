@@ -780,11 +780,11 @@ under `pve_only`) cover this in both `inventory_test.go` and
 `loot_test.go`, alongside the existing living-source-still-blocked cases
 proving the gate otherwise holds exactly as before.
 
-Off-site possessions (mounts, stashes) and land holdings remain real,
-named, deliberately deferred follow-ons — see
-[`docs/design.md`](../docs/design.md) for where a future pass should
-pick this up; no location/world-state concept exists outside an active
-combat grid. The buy/sell/vendor economy piece is closed below.
+Off-site possessions (stashes) and land holdings are closed further
+below, once a real campaign-pack loader exists to give "somewhere" a
+real meaning. Mounts specifically remain a deferred follow-on — see
+[`docs/design.md`](../docs/design.md). The buy/sell/vendor economy
+piece is closed below.
 
 **New**: session persistence and a real admin campaign list. You raised
 this after noting a campaign is "a live, mutable session" — players
@@ -932,6 +932,99 @@ confirmed the real result: the shopkeeper's Longsword gone and 1
 platinum + 5 gold richer, the buyer holding the Longsword with exactly
 15 gold left.
 
+**New**: a real campaign-pack loader (design doc §6.4), closing the
+final deferred item from the loot pass — off-site possessions and land
+holdings. `campaign-packs/sable-ravine/` was a real, committed example
+pack from an earlier pass, but Master never parsed it; it was
+hand-fed into the DM's context for its own playtest. A new
+`internal/campaignpack` package now parses a pack directory for real —
+`campaign.md`, `locations/*.md`, `npcs/*.md`, `encounters/*.md`, each
+markdown + YAML front matter — with a real, table-driven test suite run
+against that same committed fixture directory, not a hand-built one.
+Deliberately does not load `state.json`: mutable session state (party
+location, discovered locations, stashed possessions, land holdings)
+moves into Master's own SQLite store instead (`campaign_pack`,
+`party_location`, `location_state`, `stashed_items`, `stashed_currency`
+tables), matching how every other piece of live campaign state already
+persists, rather than a running server rewriting a file tracked in the
+pack's own git history — `state.json` stays what its own comment always
+said it was: the starting shape, not something read at runtime.
+
+A host binds a pack directory to a campaign via a new admin action
+(`PUT /api/campaigns/{id}/pack`, admin-web's Campaign tab) — validated
+by actually parsing the directory first, so a bad path is a real
+rejection, not a silent no-op that only breaks the next time the DM
+tries to use a location tool. Once bound, seven new DM tools exist:
+`list_locations` (the real connection graph, discovered/claimed state —
+same "full enumeration, not an abstract summary" principle
+`get_available_actions`/`list_vendor_inventory` already established),
+`travel_to` (a real gate: only legal to a location in the *current*
+one's real `connections`, or anywhere at all for the party's very first
+move), `stash_item`/`retrieve_item` and `stash_currency`/
+`retrieve_currency` (off-site possessions — retrieve only succeeds for
+something actually stashed at the party's *current* location, a real
+mechanical consequence of "you have to be there," not a lookup
+convenience), and `claim_location` (land holdings — a real, persistent
+flag+note on a location, proportionate in scope to how tersely this was
+named in the first place, no ownership-contest mechanic). A new
+`RemoveCurrency` RPC (companion PR, mirroring `AddCurrency`'s shape)
+closes a real gap `TransferCurrency` couldn't: debiting a character into
+a location-scoped stash that isn't itself a creature. Turned out
+simpler than planned once implementing it: since every system-engine
+call is stateless and Master only commits via an explicit
+`SaveCharacter`, no compensating rollback logic was needed anywhere in
+this pass either, the same realization the vendor-economy pass above
+already made.
+
+The DM's own context is grounded in the real current location
+(`runSlowPass`'s existing best-effort userContent sections gained a
+"Current location: ... (connects to: ...)" line) so it doesn't have to
+call `list_locations` on every single turn just to know where the party
+is. And `pvp_policy` — one of the two fields design doc §9.1/§9.5's
+governance gates actually need — now really can resolve from a bound
+pack's own `campaign.md` front matter (a new
+`admin.CampaignPackPolicyProvider`, layered between the admin panel's
+own explicit override and the flat `-campaign-policies` JSON file),
+closing the exact interim scope `campaign-packs/README.md` named.
+`maturity_tier` is deliberately NOT resolved this way: design doc §6.5
+defines it as a *reference* to a separate `maturity_tiers/<id>.md` file
+(the real prompt-constraint text lives there, not in `campaign.md`
+itself), and that loader doesn't exist in this codebase yet — copying
+campaign.md's raw tier name into a prompt-constraint field would be
+wrong, not just incomplete, so this stays a real, named, separate
+follow-on rather than a broken shortcut.
+
+**Verified live**: a real `OpenCombatEngine.GrpcSidecar` + a real Master
+process + `qwen3.8:27b` over a real WebSocket connection, with the real
+`campaign-packs/sable-ravine/` directory bound through the real admin
+API. `list_locations` returned and the DM correctly narrated all six
+real locations and their real connections, correctly noting the party
+hadn't set foot anywhere yet. A bootstrap `travel_to keep-stonewatch`
+succeeded and persisted; an illegal `travel_to ruined-shrine` (not
+directly connected) was rejected with `not_reachable`, and the DM
+correctly narrated the real multi-hop path required instead of just
+failing silently. `stash_item` moved a real Longsword out of the
+character's inventory into a real stash at keep-stonewatch; a
+`retrieve_item` attempt after traveling to old-road correctly failed
+with `nothing_stashed_here` (proving the location gate, not just the
+existence check); a genuine model mistake was caught and reported
+honestly rather than hidden — a later retrieval attempt passed the
+character's internal engine UUID instead of its store character_id,
+plus a lowercase `"longsword"` instead of the exact stored
+`"Longsword"`, and was correctly rejected on both counts (this system's
+existing exact-match convention, not a new gap); a follow-up call with
+the correct identifiers succeeded, moving the item back into the
+character's real inventory and clearing the stash. `stash_currency`
+moved a real 10 gold out of the character's currency (20 → 10) into a
+real per-location stash (confirmed directly against the database, not
+just the tool result), and `claim_location` persisted a real
+`claimed_by_party = true` with the exact note given. Real engine-backed
+`pvp_policy` resolution from `campaign.md` (rather than through the
+admin API, which shows what's explicitly configured, not what's in
+effect) is covered by `CampaignPackPolicyProvider`'s own deterministic
+tests instead, which read the real `pve_only` value out of the real
+committed `campaign.md` file.
+
 **Verified live**: the admin API round-trip above (create a named
 campaign, list it back with real defaults, archive it, confirm a player
 can still join) ran against a real Master process with a real
@@ -969,6 +1062,10 @@ internal/store/                repository/DAO abstraction over storage (design
                               doc §10): EventStore + CharacterStore interfaces,
                               both implemented by SQLiteEventStore, the
                               zero-config default (pure-Go driver, no cgo)
+internal/campaignpack/         parses a campaign pack directory (design
+                              doc §6.4) — campaign.md/locations/npcs/encounters,
+                              markdown + YAML front matter — into structured data;
+                              mutable session state lives in internal/store instead
 internal/llm/                  LLM-provider contract (design doc §3.1) +
                               OllamaProvider, the first implementation
 internal/auth/                  join-authorization contract (design doc §6.6) +

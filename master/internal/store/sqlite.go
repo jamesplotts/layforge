@@ -85,6 +85,43 @@ var initStatements = []string{
 		archived_at  TEXT NOT NULL DEFAULT '',
 		created_at   TEXT NOT NULL
 	);`,
+	`CREATE TABLE IF NOT EXISTS campaign_pack (
+		campaign_id TEXT PRIMARY KEY,
+		pack_dir    TEXT NOT NULL,
+		pack_id     TEXT NOT NULL,
+		loaded_at   TEXT NOT NULL
+	);`,
+	`CREATE TABLE IF NOT EXISTS party_location (
+		campaign_id TEXT PRIMARY KEY,
+		location_id TEXT NOT NULL DEFAULT ''
+	);`,
+	`CREATE TABLE IF NOT EXISTS location_state (
+		campaign_id      TEXT NOT NULL,
+		location_id      TEXT NOT NULL,
+		discovered       INTEGER NOT NULL DEFAULT 0,
+		claimed_by_party INTEGER NOT NULL DEFAULT 0,
+		claim_note       TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (campaign_id, location_id)
+	);`,
+	`CREATE TABLE IF NOT EXISTS stashed_items (
+		id           TEXT PRIMARY KEY,
+		campaign_id  TEXT NOT NULL,
+		location_id  TEXT NOT NULL,
+		character_id TEXT NOT NULL,
+		item_name    TEXT NOT NULL,
+		created_at   TEXT NOT NULL
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_stashed_items_lookup ON stashed_items (campaign_id, location_id, character_id);`,
+	`CREATE TABLE IF NOT EXISTS stashed_currency (
+		campaign_id  TEXT NOT NULL,
+		location_id  TEXT NOT NULL,
+		character_id TEXT NOT NULL,
+		copper       INTEGER NOT NULL DEFAULT 0,
+		silver       INTEGER NOT NULL DEFAULT 0,
+		gold         INTEGER NOT NULL DEFAULT 0,
+		platinum     INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (campaign_id, location_id, character_id)
+	);`,
 }
 
 // SQLiteEventStore is the SQLite-backed EventStore — Master's

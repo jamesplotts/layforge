@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jamesplotts/layforge/master/internal/campaignpack"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/store"
 )
@@ -51,9 +52,10 @@ var systemKeys = []string{
 // enforce that; it only enforces the narrower same-origin check described
 // on requireSameOrigin.
 type Server struct {
-	logger *slog.Logger
-	store  store.AdminSettingsStore
-	webDir string
+	logger       *slog.Logger
+	store        store.AdminSettingsStore
+	campaignPack store.CampaignPackStore
+	webDir       string
 	// origin is this admin listener's own "scheme://host:port", used by
 	// requireSameOrigin to reject a mutating request whose Origin/Referer
 	// header names a different origin — see that method's doc comment.
@@ -77,10 +79,11 @@ type Server struct {
 // with; a key GetSystemSettings has never stored an override for falls
 // back to this map (see handleGetSystem). restartRequested is the
 // send-only end of a channel main.go's run() selects on.
-func New(logger *slog.Logger, s store.AdminSettingsStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}) *Server {
+func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}) *Server {
 	return &Server{
 		logger:           logger,
 		store:            s,
+		campaignPack:     campaignPack,
 		webDir:           webDir,
 		origin:           "http://" + addr,
 		systemSeed:       systemSeed,
@@ -102,6 +105,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/campaigns/{id}/policy", s.requireSameOrigin(s.handlePutCampaignPolicy))
 	mux.HandleFunc("GET /api/campaigns/{id}/security", s.handleGetCampaignSecurity)
 	mux.HandleFunc("PUT /api/campaigns/{id}/security", s.requireSameOrigin(s.handlePutCampaignSecurity))
+	mux.HandleFunc("GET /api/campaigns/{id}/pack", s.handleGetCampaignPack)
+	mux.HandleFunc("PUT /api/campaigns/{id}/pack", s.requireSameOrigin(s.handlePutCampaignPack))
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
 	mux.HandleFunc("PUT /api/system", s.requireSameOrigin(s.handlePutSystem))
 	mux.HandleFunc("POST /api/system/restart", s.requireSameOrigin(s.handleRestart))
@@ -156,6 +161,14 @@ type campaignPolicyDTO struct {
 // store.CampaignSettings.RoomPassword's doc comment.
 type campaignSecurityDTO struct {
 	RoomPassword string `json:"room_password"`
+}
+
+// campaignPackDTO is the pack-binding tab's wire shape. Both fields
+// empty means no pack is bound — the same "absence means unset" pattern
+// campaignPolicyDTO/campaignSecurityDTO already use.
+type campaignPackDTO struct {
+	PackDir string `json:"pack_dir"`
+	PackID  string `json:"pack_id"`
 }
 
 // systemSettingsDTO is the System tab's wire shape — one field per
@@ -389,6 +402,63 @@ func (s *Server) handlePutCampaignSecurity(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.writeJSON(w, http.StatusOK, dto)
+}
+
+func (s *Server) handleGetCampaignPack(w http.ResponseWriter, r *http.Request) {
+	if s.campaignPack == nil {
+		s.writeJSON(w, http.StatusOK, campaignPackDTO{})
+		return
+	}
+	pack, ok, err := s.campaignPack.GetCampaignPack(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	if !ok {
+		s.writeJSON(w, http.StatusOK, campaignPackDTO{})
+		return
+	}
+	s.writeJSON(w, http.StatusOK, campaignPackDTO{PackDir: pack.PackDir, PackID: pack.PackID})
+}
+
+func (s *Server) handlePutCampaignPack(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign id is required")
+		return
+	}
+	if s.campaignPack == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign packs are not configured on this Master")
+		return
+	}
+	var dto campaignPackDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if dto.PackDir == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "pack_dir is required")
+		return
+	}
+
+	// Real validation, not a trusted path string: a directory that
+	// doesn't actually parse as a campaign pack is rejected outright,
+	// the same "gates over prompting" reasoning CLAUDE.md applies to
+	// every other mechanical-consequence action in this codebase —
+	// binding a bad directory would silently break every location DM
+	// tool the next time the DM tries to use one, not fail loudly here
+	// where a host can actually see and fix it.
+	pack, err := campaignpack.LoadPack(dto.PackDir)
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "pack_dir does not parse as a valid campaign pack: "+err.Error())
+		return
+	}
+
+	if err := s.campaignPack.SaveCampaignPack(r.Context(), id, dto.PackDir, pack.ID); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, campaignPackDTO{PackDir: dto.PackDir, PackID: pack.ID})
 }
 
 func (s *Server) handleGetSystem(w http.ResponseWriter, r *http.Request) {

@@ -102,6 +102,13 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 			userContent += fmt.Sprintf("Character data: %s\n", character.CharacterData)
 		}
 	}
+	// Same best-effort reasoning as the character-data section above:
+	// a campaign with no pack bound (s.campaignPack nil, or nothing
+	// bound for this campaign) just means the turn proceeds without a
+	// location section, not a failure.
+	if s.campaignPack != nil {
+		userContent += s.locationContextText(ctx, campaignID)
+	}
 	userContent += fmt.Sprintf("Player action: %s", input.Payload.Text)
 	systemPrompt := withMaturityConstraint(dmSlowPassSystemPrompt, s.campaignPolicy(ctx, campaignID))
 	messages := []llm.Message{
@@ -120,6 +127,18 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	}
 	if s.imageGen != nil {
 		tools = append(tools, imageGenTool())
+	}
+	// Unlike imageGen, location tools stay behind the same system-engine
+	// gate as dmTools(): stash_item/stash_currency/retrieve_item/
+	// retrieve_currency call real engine RPCs (RemoveItemFromInventory/
+	// RemoveCurrency/AddItemToInventory/AddCurrency), so a "no system
+	// engine, only campaignPack" deployment would still get an
+	// inconsistent mix of working (list_locations/travel_to/
+	// claim_location) and always-failing tools — more confusing than
+	// omitting the whole category, the same reasoning dmTools() itself
+	// already applies wholesale.
+	if s.systemEngine != nil && s.characters != nil && s.campaignPack != nil {
+		tools = append(tools, locationTools()...)
 	}
 
 	var finalText string

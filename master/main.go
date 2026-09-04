@@ -269,9 +269,18 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 	// empty: authProvider/policyProvider stay exactly what they were built
 	// as above, so a self-hoster not using this feature sees no behavior
 	// change at all.
+	//
+	// policyProvider gets a second wrap too, in between: a bound campaign
+	// pack's own pvp_policy front matter (design doc §6.4) resolves
+	// beneath the admin panel's own explicit override but above the flat
+	// -campaign-policies JSON file — closing the interim scope
+	// campaign-packs/README.md itself names ("resolved from a flat
+	// per-campaign JSON file... rather than campaign.md front matter...
+	// once Master actually loads campaign packs").
 	var adminServer *admin.Server
 	if adminAddr != "" {
 		authProvider = admin.NewAuthProvider(events, authProvider)
+		policyProvider = admin.NewCampaignPackPolicyProvider(events, policyProvider)
 		policyProvider = admin.NewPolicyProvider(events, policyProvider)
 		restartRequested = make(chan struct{}, 1)
 		systemSeed := map[string]string{
@@ -282,7 +291,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 			admin.SystemKeyComfyUIURL:       comfyUIURL,
 			admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
 		}
-		adminServer = admin.New(logger, events, adminWebDir, adminAddr, systemSeed, restartRequested)
+		adminServer = admin.New(logger, events, events, adminWebDir, adminAddr, systemSeed, restartRequested)
 	}
 
 	// imageGenProvider stays nil (no image generation, the
@@ -344,7 +353,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		}
 	}
 
-	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events)
+	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events)
 	if err := srv.WarmUpCombatState(context.Background()); err != nil {
 		logger.Warn("failed to rehydrate persisted combat state", "error", err)
 	}

@@ -19,19 +19,31 @@ problem itself) — tone-inspired by classic low-level "wilderness
 keep + dungeon-crawl" adventures, reusing none of any specific published
 module's names, maps, NPCs, or text. Start at `sable-ravine/campaign.md`.
 
-Live-playtested against a real running Master (real LLM narration, real
-System Engine dice/combat) by hand-feeding this pack's content into the
-DM's context as a human GM would — see the campaign's own git history
-for that session's notes. That's necessarily how it was tested today:
-Master doesn't parse or load this directory yet (see below), so nothing
-here is validated by any automated ingestion, only by actually playing
-it.
+Originally live-playtested by hand-feeding this pack's content into the
+DM's context as a human GM would, before Master could load it itself —
+see the campaign's own git history for that session's notes. **Since
+closed**: Master now really loads this directory. `internal/campaignpack`
+parses `campaign.md`/`locations/*.md`/`npcs/*.md`/`encounters/*.md`
+directly (this pack's exact real front matter, no hand-feeding); a host
+binds a pack directory to a campaign via the admin panel's Campaign tab
+(`PUT /api/campaigns/{id}/pack`), which validates by actually parsing
+the directory first — a bad path is rejected outright, not silently
+accepted. Once bound, the DM gets real `list_locations`/`travel_to`
+tools gated against this pack's own real `connections` graph, plus
+off-site possessions (`stash_item`/`retrieve_item`/`stash_currency`/
+`retrieve_currency`, gated to the party's actual current location) and
+land holdings (`claim_location`). `state.json`'s own mutable fields
+(`discovered_locations`, party location) are tracked in Master's SQLite
+store instead of this file, which stays what it always was: the
+starting shape, not something read or written at runtime.
 
-Master doesn't load this directory at all yet. `pvp_policy` and
-`maturity_tier` — the two fields §9.1/§9.5's governance gates actually
-need — are real and enforced today, but resolved from a flat
-per-campaign JSON file (`-campaign-policies`, see `master/internal/policy`)
-rather than `campaign.md` front matter here. That's a deliberate,
-documented interim scope (see `policy.JSONFileProvider`'s doc comment) —
-this directory's full markdown tree is still the intended long-term
-source, once Master actually loads campaign packs.
+`pvp_policy` — one of the two fields §9.1/§9.5's governance gates need —
+now really does resolve from this file's own front matter (`pve_only`
+above) when a pack is bound and the admin panel hasn't set an explicit
+override, closing the interim scope this section used to describe. See
+`internal/admin/campaign_pack_policy_provider.go`. `maturity_tier` is
+not yet resolved this way: design doc §6.5 defines it as a *reference*
+to a separate `maturity_tiers/<id>.md` file (the actual prompt-
+constraint text lives there, not in `campaign.md` itself), and that
+loader doesn't exist yet — a real, named, separate follow-on, not
+silently dropped.
