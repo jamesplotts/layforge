@@ -46,13 +46,19 @@ mutable fields
 store instead of this file, which stays what it always was: the
 starting shape, not something read or written at runtime.
 
-`pvp_policy` and `maturity_tier` — the two fields §9.1/§9.5's governance
-gates need — now really do resolve from this file's own front matter
-(`pve_only`/`standard` above) when a pack is bound and the admin panel
-hasn't set an explicit override, closing the interim scope this section
-used to describe. See `internal/admin/campaign_pack_policy_provider.go`.
-`maturity_tier` resolves independently of `pvp_policy` and only when a
+`pvp_policy`, `maturity_tier`, and `shared_knowledge` — the fields
+§9.1/§9.5/§9.7's governance gates need — now really do resolve from this
+file's own front matter (`pve_only`/`standard`/`strict` above) when a
+pack is bound and the admin panel hasn't set an explicit override,
+closing the interim scope this section used to describe. See
+`internal/admin/campaign_pack_policy_provider.go`. `maturity_tier`
+resolves independently of the other two and only when a
 `-maturity-tiers-dir` is configured (see
 [`../maturity-tiers/README.md`](../maturity-tiers/README.md)) — a
-campaign pack's own real `pvp_policy` still applies even when no tier
-registry is set up at all.
+campaign pack's own real `pvp_policy`/`shared_knowledge` still apply
+even when no tier registry is set up at all. `shared_knowledge: strict`
+(this pack's own setting) is what makes the DM's `narrate_privately`
+tool (design doc §9.7, `internal/server/knowledge_scoping.go`) available
+at all — `party_omniscient` (the default for a pack that omits the
+field) leaves it unoffered, matching every campaign's behavior before
+this field existed.

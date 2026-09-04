@@ -13,8 +13,9 @@ import (
 )
 
 // CampaignPackPolicyProvider implements policy.Provider by resolving
-// pvp_policy and maturity_tier from a campaign's bound campaign pack
-// (design doc §6.4) — campaign.md's own front matter. pvp_policy is the
+// pvp_policy, maturity_tier, and shared_knowledge from a campaign's
+// bound campaign pack (design doc §6.4) — campaign.md's own front
+// matter. pvp_policy is the
 // thing campaign-packs/README.md used to name as blocked on real
 // pack-loading ("resolved from a flat per-campaign JSON file... rather
 // than campaign.md front matter... a deliberate, documented interim
@@ -34,6 +35,10 @@ import (
 // or a missing id in it means maturity_tier simply doesn't resolve here
 // (falls through to Fallback for that field), the same as a campaign
 // with no pack bound at all.
+//
+// shared_knowledge resolves the same direct way pvp_policy does — no
+// separate content-file reference the way maturity_tier needs (design
+// doc §9.7).
 type CampaignPackPolicyProvider struct {
 	store    store.CampaignPackStore
 	tiers    map[string]maturitytiers.Tier
@@ -90,6 +95,9 @@ func (p *CampaignPackPolicyProvider) Policy(ctx context.Context, campaignID stri
 	}
 	if tier, ok := p.tiers[pack.MaturityTier]; ok {
 		result.MaturityTierPrompt = tier.Prompt
+	}
+	if policy.SharedKnowledgePolicy(pack.SharedKnowledge).IsValid() {
+		result.SharedKnowledge = policy.SharedKnowledgePolicy(pack.SharedKnowledge)
 	}
 	return result, nil
 }

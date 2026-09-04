@@ -145,6 +145,27 @@ func TestCampaignPackPolicyProvider_NilTiers_MaturityTierPromptFallsBack(t *test
 	}
 }
 
+func TestCampaignPackPolicyProvider_BoundPack_ResolvesSharedKnowledgeFromCampaignMd(t *testing.T) {
+	s := newTestStore(t)
+	fallback := fakePolicyProvider{policy: policy.CampaignPolicy{SharedKnowledge: policy.SharedKnowledgePartyOmniscient}}
+	p := admin.NewCampaignPackPolicyProvider(s, nil, fallback)
+
+	if err := s.SaveCampaignPack(context.Background(), "campaign-1", sableRavinePackDir, "sable-ravine"); err != nil {
+		t.Fatalf("SaveCampaignPack() error = %v", err)
+	}
+
+	got, err := p.Policy(context.Background(), "campaign-1")
+	if err != nil {
+		t.Fatalf("Policy() error = %v", err)
+	}
+	// campaign-packs/sable-ravine/campaign.md's own front matter sets
+	// shared_knowledge: strict — the opposite of the fallback's
+	// party_omniscient, proving the bound pack actually won.
+	if got.SharedKnowledge != policy.SharedKnowledgeStrict {
+		t.Errorf("SharedKnowledge = %q, want %q (from campaign.md, not the fallback)", got.SharedKnowledge, policy.SharedKnowledgeStrict)
+	}
+}
+
 func TestCampaignPackPolicyProvider_BoundPack_PreservesFallbackFieldsItDoesNotOverride(t *testing.T) {
 	s := newTestStore(t)
 	fallback := fakePolicyProvider{policy: policy.CampaignPolicy{

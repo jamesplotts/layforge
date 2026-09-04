@@ -43,6 +43,40 @@ func (p PvPPolicy) IsValid() bool {
 	}
 }
 
+// SharedKnowledgePolicy is the Go translation of design doc §9.7's
+// shared_knowledge enum (strict | party_omniscient). The zero value,
+// SharedKnowledgeUnspecified, is never a real policy value — see
+// IsValid and EffectiveSharedKnowledge, which is what an unspecified
+// policy resolves to in practice.
+type SharedKnowledgePolicy string
+
+// Recognized shared-knowledge policy values (design doc §9.7).
+const (
+	SharedKnowledgeUnspecified SharedKnowledgePolicy = ""
+	// SharedKnowledgeStrict enables real private/split-party narration
+	// (package server's narrate_privately DM tool) — split-party or
+	// private-perception moments are scoped to only the characters
+	// actually present/involved, not broadcast to the whole table.
+	SharedKnowledgeStrict SharedKnowledgePolicy = "strict"
+	// SharedKnowledgePartyOmniscient broadcasts all narration to
+	// everyone regardless of character presence — today's behavior
+	// everywhere else in this codebase, and what an unconfigured
+	// campaign gets (see EffectiveSharedKnowledge): private narration
+	// never appears out of nowhere for a campaign that never asked for it.
+	SharedKnowledgePartyOmniscient SharedKnowledgePolicy = "party_omniscient"
+)
+
+// IsValid reports whether s is one of the two recognized policy values.
+// Deliberately returns false for SharedKnowledgeUnspecified.
+func (s SharedKnowledgePolicy) IsValid() bool {
+	switch s {
+	case SharedKnowledgeStrict, SharedKnowledgePartyOmniscient:
+		return true
+	default:
+		return false
+	}
+}
+
 // CampaignPolicy is one campaign's governance settings (design doc §9).
 type CampaignPolicy struct {
 	// PvPPolicy gates whether a hostile apply_effect against a different
@@ -97,6 +131,26 @@ type CampaignPolicy struct {
 	// letting an unconfigured campaign silently become a free-item
 	// economy.
 	PriceMultiplier float64
+
+	// SharedKnowledge gates whether narrate_privately (package server,
+	// design doc §9.7) exists at all for this campaign — the zero value
+	// means "not configured"; see EffectiveSharedKnowledge, which
+	// resolves that to SharedKnowledgePartyOmniscient (no private-
+	// narration capability), the same "unconfigured never silently
+	// grants a new capability" reasoning PriceMultiplier's own doc
+	// comment uses.
+	SharedKnowledge SharedKnowledgePolicy
+}
+
+// EffectiveSharedKnowledge returns p.SharedKnowledge, or
+// SharedKnowledgePartyOmniscient when it's unset (the zero value) — see
+// SharedKnowledge's own doc comment for why unset must not silently
+// enable private narration nobody configured.
+func (p CampaignPolicy) EffectiveSharedKnowledge() SharedKnowledgePolicy {
+	if p.SharedKnowledge == SharedKnowledgeUnspecified {
+		return SharedKnowledgePartyOmniscient
+	}
+	return p.SharedKnowledge
 }
 
 // EffectivePriceMultiplier returns p.PriceMultiplier, or 1.0 when it's

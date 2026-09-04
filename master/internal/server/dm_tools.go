@@ -498,6 +498,8 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmStableVehicle(ctx, campaignID, call.Arguments)
 	case "take_vehicle":
 		return s.dmTakeVehicle(ctx, campaignID, call.Arguments)
+	case "narrate_privately":
+		return s.dmNarratePrivately(ctx, campaignID, call.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool %q", call.Name), false, "unknown_tool"
 	}

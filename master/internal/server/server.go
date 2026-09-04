@@ -463,7 +463,7 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// Not recorded to the event log: this is a query against the
 		// log, not a game event — recording it would just be recursive
 		// noise (a request to view history, sitting in the history).
-		return s.sendHistory(ctx, conn, campaignID, envelope.MessageID, req.Payload)
+		return s.sendHistory(ctx, conn, campaignID, envelope.MessageID, envelope.SenderID, req.Payload)
 	case protocol.MessageTypeNarrativePlayerInput:
 		var input protocol.NarrativePlayerInputMessage
 		if err := json.Unmarshal(data, &input); err != nil {
@@ -1019,7 +1019,7 @@ func (s *Server) ownedCharacter(ctx context.Context, campaignID, senderID, chara
 // rejects the request (via sendError) if persistence is disabled, since
 // silently returning an empty page would look identical to "this
 // campaign really has no history" rather than "this feature is off".
-func (s *Server) sendHistory(ctx context.Context, conn *websocket.Conn, campaignID, inReplyTo string, req protocol.HistoryRequestPayload) error {
+func (s *Server) sendHistory(ctx context.Context, conn *websocket.Conn, campaignID, inReplyTo, senderID string, req protocol.HistoryRequestPayload) error {
 	if s.events == nil {
 		return s.sendError(ctx, conn, campaignID, inReplyTo, errors.New("history unavailable: persistence is disabled"))
 	}
@@ -1036,17 +1036,28 @@ func (s *Server) sendHistory(ctx context.Context, conn *websocket.Conn, campaign
 		return s.sendError(ctx, conn, campaignID, inReplyTo, fmt.Errorf("fetching history: %w", err))
 	}
 
-	raw := make([]json.RawMessage, len(events))
 	var oldest, newest int64
 	if len(events) > 0 {
 		// events is always oldest-first regardless of paging direction
 		// (EventStore.ListEvents's contract), so the cursors are just
-		// the endpoints — no need to scan for min/max.
+		// the endpoints — no need to scan for min/max. Deliberately
+		// computed from the full, unfiltered page (not the filtered raw
+		// below): pagination cursors describe real positions in the
+		// store's own sequence space, not what happens to be visible to
+		// this particular requester.
 		oldest = events[0].Sequence
 		newest = events[len(events)-1].Sequence
 	}
-	for i, e := range events {
-		raw[i] = e.Raw
+	// Filtered, not a straight 1:1 copy: an event recorded with a real
+	// private VisibilityScope (narrate_privately, design doc §9.7) must
+	// stay hidden from anyone reviewing history who wasn't one of its
+	// actual recipients — "the same visibility scope it had live," not
+	// a raw dump of everything ever recorded.
+	raw := make([]json.RawMessage, 0, len(events))
+	for _, e := range events {
+		if s.eventVisibleTo(ctx, senderID, e.Raw) {
+			raw = append(raw, e.Raw)
+		}
 	}
 
 	msg, err := newMessage(campaignID, protocol.MessageTypeLogHistoryResponse, protocol.HistoryResponsePayload{
@@ -1062,6 +1073,52 @@ func (s *Server) sendHistory(ctx context.Context, conn *websocket.Conn, campaign
 		return fmt.Errorf("writing log.history_response: %w", err)
 	}
 	return nil
+}
+
+// eventVisibleTo reports whether raw (one stored event's own JSON
+// message) should be included in a log.history_response sent to
+// senderID — design doc §9.7's second bullet: persisted chat log
+// entries must carry the same visibility scope they had live, so
+// reviewing history can't leak something that was private in the
+// moment. An event with no recorded visibility, or a public one, is
+// visible to everyone — true for nearly every event type this codebase
+// has ever recorded, since narrate_privately (knowledge_scoping.go) is
+// the only thing that ever sets a private VisibilityScope at all. A
+// private one is visible only to a sender who owns at least one of the
+// characters it names; s.characters == nil or an ownership lookup
+// failure fails closed (not visible), the opposite of this function's
+// own default for "no scope recorded at all" — privacy-sensitive
+// filtering should never silently open up on an error.
+func (s *Server) eventVisibleTo(ctx context.Context, senderID string, raw json.RawMessage) bool {
+	// Visibility lives under payload (protocol.NarrativeDmProsePayload's
+	// own field), not on the envelope itself — every message type nests
+	// its Visibility the same way, so this generic payload wrapper works
+	// regardless of which message type raw actually is.
+	var envelope struct {
+		Payload struct {
+			Visibility *protocol.VisibilityScope `json:"visibility"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.Payload.Visibility == nil {
+		return true
+	}
+	visibility := envelope.Payload.Visibility
+	if visibility.Scope != protocol.VisibilityScopePrivate {
+		return true
+	}
+	if s.characters == nil {
+		return false
+	}
+	for _, characterID := range visibility.VisibleToCharacterIDs {
+		character, err := s.characters.GetCharacter(ctx, characterID)
+		if err != nil {
+			continue
+		}
+		if character.OwnerID == senderID {
+			return true
+		}
+	}
+	return false
 }
 
 // sendError sends a system.error message to conn — the sender only, not

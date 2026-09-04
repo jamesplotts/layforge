@@ -26,6 +26,45 @@ func TestPvPPolicy_IsValid(t *testing.T) {
 	}
 }
 
+func TestSharedKnowledgePolicy_IsValid(t *testing.T) {
+	tests := []struct {
+		name string
+		s    SharedKnowledgePolicy
+		want bool
+	}{
+		{"Unspecified_ReturnsFalse", SharedKnowledgeUnspecified, false},
+		{"Strict_ReturnsTrue", SharedKnowledgeStrict, true},
+		{"PartyOmniscient_ReturnsTrue", SharedKnowledgePartyOmniscient, true},
+		{"UnrecognizedValue_ReturnsFalse", SharedKnowledgePolicy("split_party"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.s.IsValid(); got != tt.want {
+				t.Errorf("SharedKnowledgePolicy(%q).IsValid() = %v, want %v", tt.s, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCampaignPolicy_EffectiveSharedKnowledge(t *testing.T) {
+	tests := []struct {
+		name string
+		p    CampaignPolicy
+		want SharedKnowledgePolicy
+	}{
+		{"Unset_ResolvesToPartyOmniscient", CampaignPolicy{}, SharedKnowledgePartyOmniscient},
+		{"Strict_StaysStrict", CampaignPolicy{SharedKnowledge: SharedKnowledgeStrict}, SharedKnowledgeStrict},
+		{"PartyOmniscient_StaysPartyOmniscient", CampaignPolicy{SharedKnowledge: SharedKnowledgePartyOmniscient}, SharedKnowledgePartyOmniscient},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.EffectiveSharedKnowledge(); got != tt.want {
+				t.Errorf("EffectiveSharedKnowledge() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefault_IsPveOnlyWithNoMaturityConstraint(t *testing.T) {
 	got := Default()
 	if got.PvPPolicy != PvPPolicyPveOnly {

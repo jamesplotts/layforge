@@ -1147,6 +1147,66 @@ input at all) correctly created a second vehicle and broadcast
 `vehicle.imported` on its own, confirmed against the same database
 alongside the first.
 
+**New**: design doc §9.7 Knowledge Scoping — a `narrate_privately` DM
+tool that delivers narration to only specific characters' own players, a
+split-party/private-perception moment "party omniscient" campaigns can't
+express. Gated on a new `SharedKnowledgePolicy` (`strict` /
+`party_omniscient`, resolved through the same admin-override →
+bound-pack `campaign.md` front matter → flat JSON file →
+`policy.Default()` chain every other policy field already uses) — the
+tool is offered to the model only when a campaign resolves to `strict`,
+and `dmNarratePrivately` re-checks that same condition itself, so a
+stray/hallucinated call can't succeed just because the tool wasn't
+offered this turn (the same "gates over prompting" shape every DM tool
+in this package already follows). Delivery reuses two primitives that
+were deliberately built ahead of this pass and sat unused until now:
+`protocol.VisibilityScope` and `internal/session.Hub.SendToSender` (via
+its `internal/server` wrapper, already used for map fog-of-war) — the
+private narration goes out via `sendToSender`, once per distinct
+recipient owner, never broadcast, and is recorded once with a real
+`VisibilityScope` attached.
+
+Shipping delivery alone would have left a real privacy hole: until this
+pass, `log.history_request` returned every stored event's raw JSON to
+any requester with no visibility filtering at all, so a private
+narration would leak the instant anyone paged through history. Fixed in
+the same pass — `sendHistory` now filters each page through a new
+`eventVisibleTo` helper before returning it, keyed on the requester's own
+`sender_id` and character ownership; an event with no recorded
+visibility (everything except `narrate_privately`) stays visible to
+everyone as before, and a private event fails *closed* (hidden) on any
+ownership-lookup error, the opposite of the "no scope recorded at all"
+default — privacy-sensitive filtering should never silently open up on
+an error. Pagination cursors are still computed from the full,
+unfiltered page, not the filtered one, so paging continues correctly
+regardless of how much a given requester's view is trimmed.
+
+**Verified live**: real sidecar + Master + `qwen3.8:27b`, against the
+real `sable-ravine` pack (`shared_knowledge: strict` in its own
+`campaign.md`) bound to a live campaign through the real admin API, with
+two real player connections. Told to pull a companion aside for a
+private aside via `narrate_privately`, the DM called it with the real
+recipient's character id; the companion's own connection received the
+private `narrative.dm_prose` (`visibility.scope = "private"`,
+`visible_to_character_ids` naming exactly that character), the acting
+player's own connection never received it, and both connections still
+got the identical public narration afterward. A follow-up
+`log.history_request` from the acting (non-recipient) player's
+connection came back without the private line; the same request from
+the actual recipient's connection included it. (A first attempt with the
+prompt alone, no character id supplied, surfaced an honest, separate
+limitation instead of a bug: the DM's own context has no party-roster
+listing, so the model correctly asked for the companion's character id
+rather than inventing one — the roster gap is real but out of scope for
+this pass, since `narrate_privately` itself never accepts an unverified
+id.) `internal/server/knowledge_scoping_test.go` also caught a real bug
+before live verification: `eventVisibleTo`'s first draft looked for
+`visibility` at the raw event's top level, but every payload nests it
+under `payload` — the deterministic test failed with the private line
+visible to a non-recipient, exactly the leak this pass exists to close,
+and the fix (matching the real nested shape) made both the deterministic
+and live checks pass.
+
 **Verified live**: the admin API round-trip above (create a named
 campaign, list it back with real defaults, archive it, confirm a player
 can still join) ran against a real Master process with a real
@@ -1163,9 +1223,8 @@ only changes connection pooling, not read/write correctness). Both new
 store tables and every new admin API endpoint have their own
 deterministic test coverage in `internal/store` and `internal/admin`.
 
-The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
-knowledge scoping) is still to come — see
-[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+The rest of §9 (§9.4's review panel, §9.6 spotlight balance) is still to
+come — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
 ## Layout
 

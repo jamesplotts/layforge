@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
+	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 )
 
@@ -110,7 +111,8 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		userContent += s.locationContextText(ctx, campaignID)
 	}
 	userContent += fmt.Sprintf("Player action: %s", input.Payload.Text)
-	systemPrompt := withMaturityConstraint(dmSlowPassSystemPrompt, s.campaignPolicy(ctx, campaignID))
+	pol := s.campaignPolicy(ctx, campaignID)
+	systemPrompt := withMaturityConstraint(dmSlowPassSystemPrompt, pol)
 	messages := []llm.Message{
 		{Role: llm.RoleSystem, Content: systemPrompt},
 		{Role: llm.RoleUser, Content: userContent},
@@ -145,6 +147,14 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	// any of them (a vehicle is never a character/creature record, see
 	// vehicles.go's own doc comment), so unlike campaign-pack tools
 	// above they're gated independently of systemEngine/characters.
+	// narrate_privately needs no system engine either — it's a character-
+	// ownership lookup plus a targeted send — but it's precisely gated on
+	// the resolved policy itself (not just "a pack is bound"), since
+	// that's the actual condition under which it can succeed at all
+	// (design doc §9.7's shared_knowledge: strict).
+	if s.characters != nil && pol.EffectiveSharedKnowledge() == policy.SharedKnowledgeStrict {
+		tools = append(tools, narratePrivatelyTool())
+	}
 	if s.vehicles != nil {
 		tools = append(tools, vehicleTools()...)
 	}
