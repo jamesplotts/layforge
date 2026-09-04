@@ -141,6 +141,13 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	if s.systemEngine != nil && s.characters != nil && s.campaignPack != nil {
 		tools = append(tools, campaignPackTools()...)
 	}
+	// Vehicle tools are pure store operations — no system-engine call in
+	// any of them (a vehicle is never a character/creature record, see
+	// vehicles.go's own doc comment), so unlike campaign-pack tools
+	// above they're gated independently of systemEngine/characters.
+	if s.vehicles != nil {
+		tools = append(tools, vehicleTools()...)
+	}
 
 	var finalText string
 	// turnOrderCallFailed tracks whether a start_combat or advance_turn

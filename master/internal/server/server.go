@@ -184,6 +184,13 @@ type Server struct {
 	// campaign pack is bound to this campaign" error, the same
 	// nil-disables-the-feature pattern as combatState/imageGen/policy.
 	campaignPack store.CampaignPackStore
+
+	// vehicles persists real mounts/carts/wagons/ships (vehicles.go,
+	// design doc §6.4's "off-site possessions (mounts, stashes)" —
+	// stashes' other named half). nil means vehicle tools always reject
+	// with a real "not configured" error, the same nil-disables-the-
+	// feature pattern as campaignPack.
+	vehicles store.VehicleStore
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -213,7 +220,11 @@ type Server struct {
 // combat_state.go existed — a caller that sets it should also call
 // WarmUpCombatState once at startup, before Handler() starts accepting
 // connections, to rehydrate whatever was persisted from a prior run.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore) *Server {
+// campaignPackStore/vehicleStore may independently be nil to run without
+// campaign-pack loading / vehicle tracking at all — the location_*/
+// stash_*/vehicle_* DM tools then simply aren't offered (see
+// dm_slow_pass.go's tool-assembly gate).
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
@@ -229,6 +240,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		combatMaps:     make(map[string]*combatMapMeta),
 		combatState:    combatStateStore,
 		campaignPack:   campaignPackStore,
+		vehicles:       vehicleStore,
 	}
 }
 
@@ -505,6 +517,13 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// the request but not its differently-shaped-per-recipient result
 		// would be a misleading half-record.
 		return s.handleMapTokenMoveRequest(ctx, conn, campaignID, envelope.SenderID, req)
+	case protocol.MessageTypeVehicleImport:
+		var req protocol.VehicleImportMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed vehicle.import payload: %w", err))
+		}
+		recordEvent(ctx, s, req)
+		return s.importVehicle(ctx, conn, campaignID, req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}

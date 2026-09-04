@@ -36,7 +36,12 @@ land holdings (`claim_location`) — and now `list_npcs`/`list_encounters`
 too, so the DM checks this pack's real, pre-authored NPCs and set-piece
 encounters (Captain Orlen Vashti, the goblin-camp parley-or-raid
 branch, the shrine's guardian) before improvising generic ones from
-nothing. `state.json`'s own mutable fields
+nothing. Real mounts/carts/wagons/ships too
+(`list_vehicles`/`acquire_vehicle`/`stable_vehicle`/`take_vehicle`, plus
+a player-facing `vehicle.import` protocol message independent of the
+DM's own tool loop) — a vehicle is tracked by location the same way a
+stash is, never as a character/creature record. `state.json`'s own
+mutable fields
 (`discovered_locations`, party location) are tracked in Master's SQLite
 store instead of this file, which stays what it always was: the
 starting shape, not something read or written at runtime.

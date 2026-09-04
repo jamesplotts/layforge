@@ -374,7 +374,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		}
 	}
 
-	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events)
+	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events)
 	if err := srv.WarmUpCombatState(context.Background()); err != nil {
 		logger.Warn("failed to rehydrate persisted combat state", "error", err)
 	}

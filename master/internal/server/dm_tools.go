@@ -490,6 +490,14 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmRetrieveCurrency(ctx, campaignID, call.Arguments)
 	case "claim_location":
 		return s.dmClaimLocation(ctx, campaignID, call.Arguments)
+	case "list_vehicles":
+		return s.dmListVehicles(ctx, campaignID)
+	case "acquire_vehicle":
+		return s.dmAcquireVehicle(ctx, campaignID, call.Arguments)
+	case "stable_vehicle":
+		return s.dmStableVehicle(ctx, campaignID, call.Arguments)
+	case "take_vehicle":
+		return s.dmTakeVehicle(ctx, campaignID, call.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool %q", call.Name), false, "unknown_tool"
 	}

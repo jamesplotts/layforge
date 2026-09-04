@@ -269,7 +269,7 @@ func TestCombatState_SecondServerSharingStore_RehydratesAndCanAdvanceTurn(t *tes
 	// thing standing between this and "no combat is active."
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	fakeEngine2 := startCombatFakeEngine()
-	srv2 := server.New(logger, st, fakeLLM, "test-model", nil, fakeEngine2, st, nil, nil, st, st)
+	srv2 := server.New(logger, st, fakeLLM, "test-model", nil, fakeEngine2, st, nil, nil, st, st, st)
 	if err := srv2.WarmUpCombatState(ctx); err != nil {
 		t.Fatalf("WarmUpCombatState() error = %v", err)
 	}

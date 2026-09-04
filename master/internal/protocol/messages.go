@@ -586,3 +586,31 @@ type MapTokenMoveRequestPayload struct {
 
 // MapTokenMoveRequestMessage is a map.token_move_request Message.
 type MapTokenMoveRequestMessage = Message[MapTokenMoveRequestPayload]
+
+// VehicleImportPayload is the payload of a vehicle.import message: a
+// player declaring a new mount/cart/wagon/ship the party now has (design
+// doc §6.4's "off-site possessions (mounts, stashes)"). No mechanical
+// schema — a vehicle is never a character/creature record (see
+// internal/server/vehicles.go's own doc comment) — Name/VehicleType are
+// free text.
+type VehicleImportPayload struct {
+	Name        string `json:"name"`
+	VehicleType string `json:"vehicle_type"`
+}
+
+// VehicleImportMessage is a vehicle.import Message.
+type VehicleImportMessage = Message[VehicleImportPayload]
+
+// VehicleImportedPayload is the payload of a vehicle.imported message —
+// broadcast to the whole campaign whenever a new vehicle is added,
+// whether via a real vehicle.import or the DM's own acquire_vehicle
+// tool, so every client learns about a new shared vehicle the same way
+// regardless of which path created it.
+type VehicleImportedPayload struct {
+	VehicleID   string `json:"vehicle_id"`
+	Name        string `json:"name"`
+	VehicleType string `json:"vehicle_type"`
+}
+
+// VehicleImportedMessage is a vehicle.imported Message.
+type VehicleImportedMessage = Message[VehicleImportedPayload]

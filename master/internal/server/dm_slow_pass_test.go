@@ -50,7 +50,7 @@ func newTestServerWithLLMAndSystemEngine(t *testing.T, llmProvider llm.Provider,
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP, nil, st, st).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP, nil, st, st, st).Handler())
 	return ts, st
 }
 
@@ -71,7 +71,7 @@ func newTestServerWithLLMSystemEngineAndImageGen(t *testing.T, llmProvider llm.P
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, nil, imageGenProvider, st, st).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, nil, imageGenProvider, st, st, st).Handler())
 	return ts, st
 }
 
@@ -91,7 +91,7 @@ func newTestServerWithLLMSystemEngineImageGenAndPolicy(t *testing.T, llmProvider
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyProvider, imageGenProvider, st, st).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyProvider, imageGenProvider, st, st, st).Handler())
 	return ts, st
 }
 
@@ -117,7 +117,14 @@ func TestServe_NarrativePlayerInput_SlowPass_NoSystemEngine_OmitsToolsAndBroadca
 			{Text: "The blade catches the torchlight."}, // slow pass — no system engine, so no tools offered
 		},
 	}
-	ts, _ := newTestServerWithLLMAndSystemEngine(t, fakeLLM, nil)
+	// Deliberately not newTestServerWithLLMAndSystemEngine: that helper
+	// always wires a real store for combatState/campaignPack/vehicles,
+	// and vehicle tools (unlike campaign-pack tools) are gated
+	// independently of systemEngine — they'd still be offered even here.
+	// This test's actual intent is narrower: a deployment with nothing
+	// but an LLM configured gets no tools at all.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := httptest.NewServer(server.New(logger, nil, fakeLLM, "test-model", nil, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-slow", "player-a")

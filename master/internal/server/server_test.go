@@ -165,7 +165,7 @@ func TestHandleWebSocket_ValidConnect_PersistsHandshakeEvents(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = events.Close() })
 
-	srv := server.New(logger, events, nil, "", nil, nil, nil, nil, nil, nil, nil)
+	srv := server.New(logger, events, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -428,7 +428,7 @@ func newTestServerWithHistory(t *testing.T) *httptest.Server {
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = events.Close() })
-	return httptest.NewServer(server.New(logger, events, nil, "", nil, nil, nil, nil, nil, nil, nil).Handler())
+	return httptest.NewServer(server.New(logger, events, nil, "", nil, nil, nil, nil, nil, nil, nil, nil).Handler())
 }
 
 func TestServe_LogHistoryRequest_ReturnsRecordedEventsInOrder(t *testing.T) {
@@ -661,7 +661,7 @@ func sendSafetyFlagAndAwaitBroadcast(t *testing.T, conn *websocket.Conn, campaig
 }
 
 func TestServe_LogHistoryRequest_PersistenceDisabled_RespondsWithError(t *testing.T) {
-	ts := newTestServer(t) // uses server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil) — no store
+	ts := newTestServer(t) // uses server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil) — no store
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
@@ -750,7 +750,7 @@ func requestHistory(ctx context.Context, conn *websocket.Conn, campaignID, sende
 func TestServe_NarrativePlayerInput_RendersAndBroadcastsBubble(t *testing.T) {
 	fake := &fakeLLMProvider{response: llm.CompletionResponse{Text: "Player-A draws a sword."}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model", nil, nil, nil, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model", nil, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	a := dialAndJoin(t, ts, "campaign-narrative", "player-a")
@@ -845,7 +845,7 @@ func TestServe_NarrativePlayerInput_NoProvider_RespondsWithError(t *testing.T) {
 func TestServe_NarrativePlayerInput_ProviderError_RespondsWithErrorAndKeepsConnectionOpen(t *testing.T) {
 	fake := &fakeLLMProvider{err: errors.New("model unavailable")}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model", nil, nil, nil, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model", nil, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-1", "player-a")
@@ -1016,7 +1016,7 @@ func dialAndJoin(t *testing.T, ts *httptest.Server, campaignID, sender string) *
 func TestHandleWebSocket_AuthProvider_CorrectPassword_Joins(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authProvider := auth.NewRoomPasswordProvider(map[string]string{"protected-campaign": "hunter2"})
-	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider, nil, nil, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1055,7 +1055,7 @@ func TestHandleWebSocket_AuthProvider_CorrectPassword_Joins(t *testing.T) {
 func TestHandleWebSocket_AuthProvider_WrongPassword_RejectsHandshake(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	authProvider := auth.NewRoomPasswordProvider(map[string]string{"protected-campaign": "hunter2"})
-	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider, nil, nil, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1109,7 +1109,7 @@ func TestHandleWebSocket_AuthProvider_UnconfiguredCampaign_JoinsWithoutPassword(
 	// password configured — per-campaign opt-in, not an all-or-nothing
 	// switch.
 	authProvider := auth.NewRoomPasswordProvider(map[string]string{"protected-campaign": "hunter2"})
-	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider, nil, nil, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", authProvider, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "public-campaign", "player-a")
@@ -1119,7 +1119,7 @@ func TestHandleWebSocket_AuthProvider_UnconfiguredCampaign_JoinsWithoutPassword(
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil)
+	srv := server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
 	return httptest.NewServer(srv.Handler())
 }
 

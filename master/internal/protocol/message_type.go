@@ -45,6 +45,8 @@ const (
 	MessageTypeNarrativeSceneImage       MessageType = "narrative.scene_image"
 	MessageTypeMapTokenState             MessageType = "map.token_state"
 	MessageTypeMapTokenMoveRequest       MessageType = "map.token_move_request"
+	MessageTypeVehicleImport             MessageType = "vehicle.import"
+	MessageTypeVehicleImported           MessageType = "vehicle.imported"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -63,7 +65,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeCharacterApplyEffect,
 		MessageTypeNarrativeDmProse, MessageTypeToolResult, MessageTypeTurnState,
 		MessageTypeNarrativeSceneImage,
-		MessageTypeMapTokenState, MessageTypeMapTokenMoveRequest:
+		MessageTypeMapTokenState, MessageTypeMapTokenMoveRequest,
+		MessageTypeVehicleImport, MessageTypeVehicleImported:
 		return true
 	default:
 		return false

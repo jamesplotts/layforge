@@ -88,6 +88,7 @@ channels:
           - $ref: '#/components/messages/SystemSessionState'
           - $ref: '#/components/messages/SystemError'
           - $ref: '#/components/messages/LogHistoryResponse'
+          - $ref: '#/components/messages/VehicleImported'
     publish:
       operationId: sendClientMessage
       summary: Messages a client sends to Master.
@@ -106,6 +107,7 @@ channels:
           - $ref: '#/components/messages/SafetyFlag'
           - $ref: '#/components/messages/SystemConnect'
           - $ref: '#/components/messages/LogHistoryRequest'
+          - $ref: '#/components/messages/VehicleImport'
 
 components:
   messages:
@@ -711,6 +713,55 @@ components:
                   reason:
                     type: string
                     description: Set when status = rejected, or as change-request notes.
+
+    # --- vehicle.* (docs/design.md §6.4) ---
+
+    VehicleImport:
+      name: vehicle.import
+      messageId: vehicle_import
+      title: Import a real vehicle
+      summary: A player declares a new mount/cart/wagon/ship the party now has — starts traveling with the party. No mechanical schema (a vehicle is never a character/creature record); name and vehicle_type are free text.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: vehicle.import
+              payload:
+                type: object
+                required: [name, vehicle_type]
+                properties:
+                  name:
+                    type: string
+                  vehicle_type:
+                    type: string
+                    description: e.g. "mount", "cart", "wagon", "ship".
+
+    VehicleImported:
+      name: vehicle.imported
+      messageId: vehicle_imported
+      title: A vehicle was added to the campaign
+      summary: Broadcast to the whole campaign in response to a real vehicle.import (or an acquire_vehicle DM tool call) — a new shared vehicle now exists.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: vehicle.imported
+              payload:
+                type: object
+                required: [vehicle_id, name, vehicle_type]
+                properties:
+                  vehicle_id:
+                    type: string
+                  name:
+                    type: string
+                  vehicle_type:
+                    type: string
 
     # --- safety.* (docs/design.md §5, §9.2) ---
 

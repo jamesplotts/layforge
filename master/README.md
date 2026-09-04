@@ -780,11 +780,10 @@ under `pve_only`) cover this in both `inventory_test.go` and
 `loot_test.go`, alongside the existing living-source-still-blocked cases
 proving the gate otherwise holds exactly as before.
 
-Off-site possessions (stashes) and land holdings are closed further
-below, once a real campaign-pack loader exists to give "somewhere" a
-real meaning. Mounts specifically remain a deferred follow-on — see
-[`docs/design.md`](../docs/design.md). The buy/sell/vendor economy
-piece is closed below.
+Off-site possessions (stashes, mounts/carts/wagons/ships) and land
+holdings are all closed further below, once a real campaign-pack loader
+exists to give "somewhere" a real meaning. The buy/sell/vendor economy
+piece is closed below too.
 
 **New**: session persistence and a real admin campaign list. You raised
 this after noting a campaign is "a live, mutable session" — players
@@ -932,9 +931,11 @@ confirmed the real result: the shopkeeper's Longsword gone and 1
 platinum + 5 gold richer, the buyer holding the Longsword with exactly
 15 gold left.
 
-**New**: a real campaign-pack loader (design doc §6.4), closing the
-final deferred item from the loot pass — off-site possessions and land
-holdings. `campaign-packs/sable-ravine/` was a real, committed example
+**New**: a real campaign-pack loader (design doc §6.4) — the
+foundation the final deferred item from the loot pass needed: off-site
+possessions and land holdings, closed further below once locations mean
+something real to be "off-site" from. `campaign-packs/sable-ravine/`
+was a real, committed example
 pack from an earlier pass, but Master never parsed it; it was
 hand-fed into the DM's context for its own playtest. A new
 `internal/campaignpack` package now parses a pack directory for real —
@@ -1101,6 +1102,50 @@ text actually reached generation, not just that the resolution logic
 was correct in isolation (which the deterministic
 `CampaignPackPolicyProvider` tests already cover, including the
 field-preservation fix above).
+
+**New**: real mounts/carts/wagons/ships — off-site possessions' other
+named half, alongside the stash tools above (design doc §6.4's "off-site
+possessions (mounts, stashes)"). A vehicle is deliberately never a
+character/creature record, even for an animal mount: `store.Vehicle`
+only tracks who has it and where it is (id, name, type, and whether it's
+currently traveling with the party or stabled at a specific location) —
+a mount that needs real combat stats (AC, HP, speed) is still created as
+an ordinary character via `create_npc`/`FromJson`, the same as any other
+creature. Four new DM tools mirror the location/stash tools' own gate
+shapes exactly: `list_vehicles` (full enumeration), `acquire_vehicle`
+(creates a vehicle starting in the traveling-with-the-party state — the
+same "the party has to be somewhere" gate `stash_item` already uses),
+`stable_vehicle` (real rejection if the vehicle is already stabled
+somewhere else — take it from there first), and `take_vehicle` (real
+rejection unless it's stabled at the party's *current* location). A
+`travel_to` call needs no vehicle-specific handling at all: a
+non-stabled vehicle has no location field to update, so it's simply
+"with the party" by construction.
+
+You separately asked for player-initiated vehicle import, not just the
+DM's own `acquire_vehicle` — a new `vehicle.import` protocol message
+(design doc §6.4) lets a player declare a new vehicle directly,
+independent of the narrative tool loop entirely: no mechanical schema
+the way `character.upload` has (a vehicle carries no system-engine
+schema at all), just a real "name and vehicle_type aren't blank" check.
+Both creation paths — a real `vehicle.import` and the DM's own
+`acquire_vehicle` — broadcast the same `vehicle.imported` message to the
+whole campaign through one shared helper, so every client learns about
+a new shared vehicle identically regardless of which path created it.
+`protocol/asyncapi.yaml` gained the matching `VehicleImport`/
+`VehicleImported` message components.
+
+**Verified live**: real sidecar + Master + `qwen3.8:27b`. Asked to buy a
+mount at Keep Stonewatch, the DM called `list_vehicles` (confirming none
+existed yet), then `acquire_vehicle`, and the real `vehicle.imported`
+broadcast carried the correct name/type and a real generated id — all
+before narrating the purchase. Asked to stable it there, `stable_vehicle`
+succeeded and the underlying SQLite row confirmed `stabled = 1,
+location_id = keep-stonewatch`. A direct `vehicle.import` sent as a raw
+protocol message (bypassing the DM/LLM path entirely — no narrative
+input at all) correctly created a second vehicle and broadcast
+`vehicle.imported` on its own, confirmed against the same database
+alongside the first.
 
 **Verified live**: the admin API round-trip above (create a named
 campaign, list it back with real defaults, archive it, confirm a player
