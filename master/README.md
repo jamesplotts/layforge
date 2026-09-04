@@ -758,11 +758,31 @@ two inventories, and a real rejection when source can't afford the
 amount) are proven instead by its deterministic test suite on both
 sides.
 
-Off-site possessions (mounts, stashes), land holdings, death/
-inheritance distribution when a party doesn't resurrect a fallen
-character, and a buy/sell/vendor economy remain real, named,
-deliberately deferred follow-ons — see
-[`docs/design.md`](../docs/design.md) for where a future pass should
+**Since closed**: `give_item`/`transfer_currency`'s PvP gate was keyed
+purely on `source.OwnerID`, with no exception for a source that's
+already dead — meaning the party dividing up a fallen ally's own gear
+(who's carrying the body and coin from here on) got wrongly blocked as
+PvP theft under this campaign's default `pve_only` policy, the exact
+scenario `generate_loot`/corpse-looting exists to support. You corrected
+the framing directly: this was never a "does the party choose to raise
+them" workflow the AI DM should proactively ask about — that
+conversation stays entirely the players' own — it's simpler than that,
+a fallen character's own things mechanically need a living carrier, same
+logistics as splitting up an enemy's loot. Both tools now call
+`characterIsDead` (`turn_order.go`'s own real, engine-computed status
+check — the same one `advance_turn`/`start_combat` already use, not the
+DM model's own say-so) and skip the gate entirely when the source is
+dead; a merely-unconscious/dying character (0 HP, not yet dead) still
+keeps the same PvP protection as any other player character, since real
+SRD play still gives them their own turn to roll a death save. Two new
+PvP-gate table cases (a dead, differently-owned source succeeding even
+under `pve_only`) cover this in both `inventory_test.go` and
+`loot_test.go`, alongside the existing living-source-still-blocked cases
+proving the gate otherwise holds exactly as before.
+
+Off-site possessions (mounts, stashes), land holdings, and a buy/sell/
+vendor economy remain real, named, deliberately deferred follow-ons —
+see [`docs/design.md`](../docs/design.md) for where a future pass should
 pick this up; `IItem.Value` still has no reader anywhere, and no
 location/world-state concept exists outside an active combat grid.
 

@@ -371,6 +371,7 @@ func TestServe_NarrativePlayerInput_SlowPass_TransferCurrency_PvPGate(t *testing
 	tests := []struct {
 		name             string
 		sourceOwner      string
+		sourceDead       bool
 		policies         map[string]policy.CampaignPolicy
 		wantSuccess      bool
 		wantReasonCode   string
@@ -405,6 +406,17 @@ func TestServe_NarrativePlayerInput_SlowPass_TransferCurrency_PvPGate(t *testing
 			wantSuccess:      true,
 			wantEngineCalled: true,
 		},
+		{
+			// The party dividing up a fallen ally's own coin — logistics,
+			// not theft — even though the source is a different player's
+			// character under the strictest policy.
+			name:             "TransferFromDeadDifferentPlayersCharacter_NotGated_SucceedsEvenUnderPveOnly",
+			sourceOwner:      "player-b",
+			sourceDead:       true,
+			policies:         map[string]policy.CampaignPolicy{"campaign-transfer-currency-pvp": {PvPPolicy: policy.PvPPolicyPveOnly}},
+			wantSuccess:      true,
+			wantEngineCalled: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -417,6 +429,10 @@ func TestServe_NarrativePlayerInput_SlowPass_TransferCurrency_PvPGate(t *testing
 			if err != nil {
 				t.Fatalf("structpb.NewStruct() error = %v", err)
 			}
+			characterStatus := systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE
+			if tt.sourceDead {
+				characterStatus = systemenginepb.CharacterStatus_CHARACTER_STATUS_DEAD
+			}
 			fakeEngine := &fakeSystemEngineClient{
 				transferCurrencyResp: &systemenginepb.TransferCurrencyResponse{
 					Success:       true,
@@ -424,6 +440,7 @@ func TestServe_NarrativePlayerInput_SlowPass_TransferCurrency_PvPGate(t *testing
 					Source:        &systemenginepb.Actor{ActorId: "actor-char", CharacterData: sourceData, SchemaVersion: "opencombatengine-v1"},
 					Target:        &systemenginepb.Actor{ActorId: "target-char", CharacterData: targetData, SchemaVersion: "opencombatengine-v1"},
 				},
+				getCharacterStatusResp: &systemenginepb.GetCharacterStatusResponse{Status: characterStatus},
 			}
 			fakeLLM := toolCallLLM("transfer_currency", `{"character_id":"actor-char","target_character_id":"target-char","gold":5}`)
 

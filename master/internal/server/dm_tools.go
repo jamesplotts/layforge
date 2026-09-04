@@ -1371,17 +1371,33 @@ func (s *Server) dmGiveItem(ctx context.Context, campaignID, actingSenderID stri
 	// path already gates — checked BEFORE calling the engine, since
 	// unlike grapple/shove a transfer has no "the attempt still
 	// happened, only the outcome is blocked" half-state to preserve.
+	// Exempt when source is dead: the party dividing up a fallen ally's
+	// own things (who's carrying the body and gear from here on) is
+	// logistics, not theft — the AI DM never asks whether the party
+	// intends to raise them, that conversation stays entirely the
+	// players' own. characterIsDead is a real engine-computed status
+	// (turn_order.go), not the DM model's own say-so, so this stays a
+	// real gate, not a prompting workaround. Only checked inside this
+	// same-different-owner branch, same as before this exemption existed
+	// — a self-owned or NPC-owned source never needed the extra engine
+	// round trip and still doesn't.
 	if source.OwnerID != "" && source.OwnerID != masterSenderID && source.OwnerID != actingSenderID {
-		pol := s.campaignPolicy(ctx, campaignID)
-		switch pol.PvPPolicy {
-		case policy.PvPPolicyAllowed:
-			// proceed
-		case policy.PvPPolicyWithConsent:
-			if !slices.Contains(pol.PvPConsent, source.OwnerID) {
-				return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
+		sourceDead, err := s.characterIsDead(ctx, source)
+		if err != nil {
+			return fmt.Sprintf("checking character status: %v", err), false, "engine_error"
+		}
+		if !sourceDead {
+			pol := s.campaignPolicy(ctx, campaignID)
+			switch pol.PvPPolicy {
+			case policy.PvPPolicyAllowed:
+				// proceed
+			case policy.PvPPolicyWithConsent:
+				if !slices.Contains(pol.PvPConsent, source.OwnerID) {
+					return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
+				}
+			default:
+				return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take an item from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
 			}
-		default:
-			return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take an item from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
 		}
 	}
 
@@ -1579,18 +1595,28 @@ func (s *Server) dmTransferCurrency(ctx context.Context, campaignID, actingSende
 	}
 
 	// PvP gate (design doc §9.1) — see dmGiveItem's own doc comment for
-	// why this runs before calling the engine, not post-hoc.
+	// why this runs before calling the engine, not post-hoc, and for why
+	// a dead source (the party dividing up a fallen ally's own coin) is
+	// exempt. Only checked inside this same-different-owner branch, same
+	// as before this exemption existed — a self-owned or NPC-owned
+	// source never needed the extra engine round trip and still doesn't.
 	if source.OwnerID != "" && source.OwnerID != masterSenderID && source.OwnerID != actingSenderID {
-		pol := s.campaignPolicy(ctx, campaignID)
-		switch pol.PvPPolicy {
-		case policy.PvPPolicyAllowed:
-			// proceed
-		case policy.PvPPolicyWithConsent:
-			if !slices.Contains(pol.PvPConsent, source.OwnerID) {
-				return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
+		sourceDead, err := s.characterIsDead(ctx, source)
+		if err != nil {
+			return fmt.Sprintf("checking character status: %v", err), false, "engine_error"
+		}
+		if !sourceDead {
+			pol := s.campaignPolicy(ctx, campaignID)
+			switch pol.PvPPolicy {
+			case policy.PvPPolicyAllowed:
+				// proceed
+			case policy.PvPPolicyWithConsent:
+				if !slices.Contains(pol.PvPConsent, source.OwnerID) {
+					return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
+				}
+			default:
+				return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take currency from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
 			}
-		default:
-			return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take currency from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
 		}
 	}
 
