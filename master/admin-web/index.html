@@ -23,6 +23,27 @@
   </nav>
 
   <main>
+    <!-- Every known campaign, with real party size/last-played/archived
+         status — a host-created display name is shown in place of the
+         raw campaign_id wherever one has been set. Archiving is purely a
+         display filter here: it never affects whether a campaign can
+         actually be joined or played over /ws. -->
+    <div class="campaign-list-wrap">
+      <table id="campaign-table" class="campaign-table">
+        <thead>
+          <tr>
+            <th>Campaign</th>
+            <th>Party</th>
+            <th>Last Played</th>
+            <th></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="campaign-table-body"></tbody>
+      </table>
+      <span id="campaign-list-note" class="note"></span>
+    </div>
+
     <!-- Campaign and Security tabs both act on whichever campaign_id is
          selected here — one picker shared by both tabs rather than two
          separate ones, since it's always the same campaign either way. -->
@@ -31,13 +52,23 @@
         Campaign
         <select id="campaign-select"></select>
       </label>
-      <label>
-        Or a new campaign_id
-        <input id="campaign-manual" type="text" placeholder="not joined yet" />
-      </label>
-      <button id="campaign-manual-use" type="button" class="secondary">Use</button>
-      <span id="campaign-picker-note" class="note"></span>
     </div>
+
+    <details class="create-campaign">
+      <summary>Create a new campaign</summary>
+      <div class="create-campaign-form">
+        <label>
+          Campaign ID (the identifier players use to join)
+          <input id="create-campaign-id" type="text" placeholder="e.g. iron-crown" />
+        </label>
+        <label>
+          Display Name (shown here in the admin panel only)
+          <input id="create-campaign-name" type="text" placeholder="e.g. The Iron Crown — Thursday Group" />
+        </label>
+        <button id="create-campaign-submit" type="button">Create</button>
+        <span id="create-campaign-status" class="save-status"></span>
+      </div>
+    </details>
 
     <section class="tab-panel" data-tab="campaign">
       <p class="panel-hint">Applies immediately — no restart needed.</p>

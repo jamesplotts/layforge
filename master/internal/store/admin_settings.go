@@ -3,7 +3,10 @@
 
 package store
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // CampaignSettings is one campaign's admin-panel-editable governance
 // settings (design doc §3.3, §9.1, §9.5, §6.6) — the SQLite-backed
@@ -38,6 +41,34 @@ type CampaignSettings struct {
 	RoomPassword string
 }
 
+// CampaignSummary is one row of the admin panel's real campaign list
+// (design doc §3.3) — replacing the bare campaign_id list ListCampaignIDs
+// alone provides, with enough for a host to actually recognize and manage
+// a campaign: a human-chosen name, how many characters exist for it, when
+// it was last actually played, and whether the host has archived it.
+type CampaignSummary struct {
+	CampaignID string
+	// DisplayName is empty for a campaign never named via SaveCampaignMeta
+	// — callers fall back to showing CampaignID itself, the same "absence
+	// means show the raw identifier" pattern this package already uses
+	// elsewhere.
+	DisplayName string
+	// PartyCount is how many characters exist for this campaign — not
+	// how many distinct players, since a player can own more than one
+	// character (design doc §9.4 has no account system yet to dedupe by).
+	PartyCount int
+	// LastActiveAt is the most recent event timestamp for this campaign,
+	// falling back to the most recent character update when it has no
+	// events yet (e.g. characters uploaded but no play started). The
+	// zero time.Time means neither exists yet — a campaign the host just
+	// created and named but nobody has touched.
+	LastActiveAt time.Time
+	// Archived is a purely cosmetic admin-panel display filter (see
+	// SetCampaignArchived) — it never affects whether a campaign can
+	// actually be joined or played over the WS endpoint.
+	Archived bool
+}
+
 // AdminSettingsStore is Master's persistence for the admin panel's
 // live-editable settings (design doc §3.3): per-campaign governance via
 // CampaignSettings, plus process-level System-tab settings as a flat
@@ -66,6 +97,28 @@ type AdminSettingsStore interface {
 	// the union of campaigns with events, characters, or admin-panel
 	// settings — sorted for a stable admin-UI picker.
 	ListCampaignIDs(ctx context.Context) ([]string, error)
+
+	// ListCampaignSummaries returns the same set of campaigns
+	// ListCampaignIDs does, plus display name/party size/last-active/
+	// archived status for each — the admin panel's real campaign list
+	// (design doc §3.3).
+	ListCampaignSummaries(ctx context.Context) ([]CampaignSummary, error)
+
+	// SaveCampaignMeta creates campaignID if it doesn't already have a
+	// campaign_meta row (archived defaults false, created_at set to
+	// now), or just updates its DisplayName if it does — archived/
+	// archived_at are left untouched either way, so naming an already-
+	// archived campaign doesn't silently unarchive it. This is the
+	// admin panel's "create/name a campaign" action; it never touches
+	// campaign_settings, characters, or the event log, and doesn't
+	// change how campaignID is joined or played.
+	SaveCampaignMeta(ctx context.Context, campaignID, displayName string) error
+
+	// SetCampaignArchived upserts campaignID's archived flag — a purely
+	// cosmetic admin-panel display filter (see CampaignSummary.Archived).
+	// Creates a campaign_meta row (with an empty DisplayName) if
+	// campaignID didn't already have one, the same as SaveCampaignMeta.
+	SetCampaignArchived(ctx context.Context, campaignID string, archived bool) error
 
 	// GetSystemSettings returns every stored System-tab key/value pair.
 	// A key never saved via the admin panel is simply absent from the

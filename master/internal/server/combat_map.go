@@ -179,6 +179,7 @@ func (s *Server) dmGenerateCombatMap(ctx context.Context, campaignID string) (st
 	s.combatMapsMu.Lock()
 	s.combatMaps[campaignID] = meta
 	s.combatMapsMu.Unlock()
+	s.persistCombatState(ctx, campaignID)
 
 	s.broadcastCombatMapToEveryOwner(campaignID, meta)
 
@@ -373,6 +374,7 @@ func (s *Server) handleMapTokenMoveRequest(ctx context.Context, conn *websocket.
 	}
 
 	meta.state.MoveToken(tok.TokenID, req.Payload.To.X, req.Payload.To.Y)
+	s.persistCombatState(ctx, campaignID)
 	s.broadcastCombatMapToEveryOwner(campaignID, meta)
 	return nil
 }

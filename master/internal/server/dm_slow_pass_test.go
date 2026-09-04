@@ -50,7 +50,7 @@ func newTestServerWithLLMAndSystemEngine(t *testing.T, llmProvider llm.Provider,
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP, nil, st).Handler())
 	return ts, st
 }
 
@@ -71,7 +71,7 @@ func newTestServerWithLLMSystemEngineAndImageGen(t *testing.T, llmProvider llm.P
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, nil, imageGenProvider).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, nil, imageGenProvider, st).Handler())
 	return ts, st
 }
 
@@ -91,7 +91,7 @@ func newTestServerWithLLMSystemEngineImageGenAndPolicy(t *testing.T, llmProvider
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyProvider, imageGenProvider).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyProvider, imageGenProvider, st).Handler())
 	return ts, st
 }
 

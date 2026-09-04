@@ -95,6 +95,107 @@ func (s *SQLiteEventStore) ListCampaignIDs(ctx context.Context) ([]string, error
 	return campaignIDs, nil
 }
 
+// ListCampaignSummaries implements AdminSettingsStore. last_active_at
+// prefers the most recent event timestamp, falling back to the most
+// recent character update for a campaign with characters but no events
+// yet (freshly uploaded, no play started) — either LEFT JOIN misses
+// leave it NULL, which COALESCE resolves to '' (parsed as the zero
+// time.Time below).
+func (s *SQLiteEventStore) ListCampaignSummaries(ctx context.Context) ([]CampaignSummary, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT
+			ids.campaign_id,
+			COALESCE(cm.display_name, '') AS display_name,
+			COALESCE(pc.party_count, 0) AS party_count,
+			COALESCE(ev.last_active_at, ch.last_active_at, '') AS last_active_at,
+			COALESCE(cm.archived, 0) AS archived
+		 FROM (
+			SELECT campaign_id FROM events
+			UNION SELECT campaign_id FROM characters
+			UNION SELECT campaign_id FROM campaign_settings
+			UNION SELECT campaign_id FROM campaign_meta
+		 ) ids
+		 LEFT JOIN campaign_meta cm ON cm.campaign_id = ids.campaign_id
+		 LEFT JOIN (SELECT campaign_id, COUNT(*) AS party_count FROM characters GROUP BY campaign_id) pc
+			ON pc.campaign_id = ids.campaign_id
+		 LEFT JOIN (SELECT campaign_id, MAX(occurred_at) AS last_active_at FROM events GROUP BY campaign_id) ev
+			ON ev.campaign_id = ids.campaign_id
+		 LEFT JOIN (SELECT campaign_id, MAX(updated_at) AS last_active_at FROM characters GROUP BY campaign_id) ch
+			ON ch.campaign_id = ids.campaign_id
+		 ORDER BY ids.campaign_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing campaign summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []CampaignSummary
+	for rows.Next() {
+		var summary CampaignSummary
+		var lastActiveAt string
+		var archived int
+		if err := rows.Scan(&summary.CampaignID, &summary.DisplayName, &summary.PartyCount, &lastActiveAt, &archived); err != nil {
+			return nil, fmt.Errorf("store: scanning campaign summary row: %w", err)
+		}
+		if lastActiveAt != "" {
+			parsed, err := time.Parse(occurredAtLayout, lastActiveAt)
+			if err != nil {
+				return nil, fmt.Errorf("store: parsing last_active_at for campaign %q: %w", summary.CampaignID, err)
+			}
+			summary.LastActiveAt = parsed
+		}
+		summary.Archived = archived != 0
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: reading campaign summary rows: %w", err)
+	}
+	return summaries, nil
+}
+
+// SaveCampaignMeta implements AdminSettingsStore.
+func (s *SQLiteEventStore) SaveCampaignMeta(ctx context.Context, campaignID, displayName string) error {
+	if campaignID == "" {
+		return ErrCampaignIDRequired
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO campaign_meta (campaign_id, display_name, archived, archived_at, created_at)
+		 VALUES (?, ?, 0, '', ?)
+		 ON CONFLICT (campaign_id) DO UPDATE SET display_name = excluded.display_name`,
+		campaignID, displayName, time.Now().UTC().Format(occurredAtLayout),
+	)
+	if err != nil {
+		return fmt.Errorf("store: saving campaign meta: %w", err)
+	}
+	return nil
+}
+
+// SetCampaignArchived implements AdminSettingsStore.
+func (s *SQLiteEventStore) SetCampaignArchived(ctx context.Context, campaignID string, archived bool) error {
+	if campaignID == "" {
+		return ErrCampaignIDRequired
+	}
+
+	archivedInt := 0
+	archivedAt := ""
+	if archived {
+		archivedInt = 1
+		archivedAt = time.Now().UTC().Format(occurredAtLayout)
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO campaign_meta (campaign_id, display_name, archived, archived_at, created_at)
+		 VALUES (?, '', ?, ?, ?)
+		 ON CONFLICT (campaign_id) DO UPDATE SET archived = excluded.archived, archived_at = excluded.archived_at`,
+		campaignID, archivedInt, archivedAt, time.Now().UTC().Format(occurredAtLayout),
+	)
+	if err != nil {
+		return fmt.Errorf("store: setting campaign archived: %w", err)
+	}
+	return nil
+}
+
 // GetSystemSettings implements AdminSettingsStore.
 func (s *SQLiteEventStore) GetSystemSettings(ctx context.Context) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM system_settings`)

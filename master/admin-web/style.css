@@ -86,6 +86,64 @@ main {
   padding: 20px;
 }
 
+.campaign-list-wrap {
+  margin-bottom: 16px;
+}
+
+.campaign-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.campaign-table th,
+.campaign-table td {
+  padding: 8px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.campaign-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.campaign-table td button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.campaign-row-archived {
+  opacity: 0.55;
+}
+
+.campaign-id-hint {
+  margin-left: 2px;
+}
+
+.create-campaign {
+  margin-bottom: 20px;
+}
+
+.create-campaign summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.create-campaign-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.create-campaign-form label {
+  flex: 1 1 220px;
+}
+
 .campaign-picker {
   display: flex;
   flex-wrap: wrap;

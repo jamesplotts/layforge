@@ -60,13 +60,119 @@ func TestServer_ListCampaigns_NoneKnown_ReturnsEmptyList(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	var got struct {
-		CampaignIDs []string `json:"campaign_ids"`
+		Campaigns []map[string]any `json:"campaigns"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if len(got.CampaignIDs) != 0 {
-		t.Errorf("CampaignIDs = %v, want empty", got.CampaignIDs)
+	if len(got.Campaigns) != 0 {
+		t.Errorf("Campaigns = %v, want empty", got.Campaigns)
+	}
+}
+
+func TestServer_CreateCampaign_ThenListShowsRealDisplayNameAndDefaults(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	createResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaigns", map[string]any{
+		"campaign_id": "campaign-1", "display_name": "The Iron Crown",
+	}, "")
+	if createResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("POST status = %d, body = %s", createResp.StatusCode, body)
+	}
+
+	listResp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/campaigns", nil, "")
+	var got struct {
+		Campaigns []struct {
+			CampaignID   string `json:"campaign_id"`
+			DisplayName  string `json:"display_name"`
+			PartyCount   int    `json:"party_count"`
+			LastActiveAt string `json:"last_active_at"`
+			Archived     bool   `json:"archived"`
+		} `json:"campaigns"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Campaigns) != 1 {
+		t.Fatalf("len(Campaigns) = %d, want 1", len(got.Campaigns))
+	}
+	c := got.Campaigns[0]
+	if c.CampaignID != "campaign-1" || c.DisplayName != "The Iron Crown" {
+		t.Errorf("campaign = %+v, want campaign_id=campaign-1 display_name=%q", c, "The Iron Crown")
+	}
+	if c.PartyCount != 0 {
+		t.Errorf("PartyCount = %d, want 0", c.PartyCount)
+	}
+	if c.LastActiveAt != "" {
+		t.Errorf("LastActiveAt = %q, want empty (nobody has joined yet)", c.LastActiveAt)
+	}
+	if c.Archived {
+		t.Error("Archived = true, want false (default)")
+	}
+}
+
+func TestServer_CreateCampaign_MissingCampaignID_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaigns", map[string]any{"display_name": "no id"}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_CreateCampaign_CrossOriginRequest_Rejected(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaigns",
+		map[string]any{"campaign_id": "campaign-1", "display_name": "x"}, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a cross-origin request", resp.StatusCode)
+	}
+}
+
+func TestServer_PutCampaignArchived_TogglesAndReflectsInList(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	createResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaigns", map[string]any{
+		"campaign_id": "campaign-1", "display_name": "The Iron Crown",
+	}, "")
+	if createResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST status = %d", createResp.StatusCode)
+	}
+
+	archiveResp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/archive", map[string]any{"archived": true}, "")
+	if archiveResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(archiveResp.Body)
+		t.Fatalf("PUT archive status = %d, body = %s", archiveResp.StatusCode, body)
+	}
+
+	listResp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/campaigns", nil, "")
+	var got struct {
+		Campaigns []struct {
+			CampaignID  string `json:"campaign_id"`
+			DisplayName string `json:"display_name"`
+			Archived    bool   `json:"archived"`
+		} `json:"campaigns"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Campaigns) != 1 || !got.Campaigns[0].Archived {
+		t.Fatalf("Campaigns = %+v, want a single archived campaign", got.Campaigns)
+	}
+	if got.Campaigns[0].DisplayName != "The Iron Crown" {
+		t.Errorf("DisplayName = %q, want %q (archiving must not clear it)", got.Campaigns[0].DisplayName, "The Iron Crown")
+	}
+}
+
+func TestServer_PutCampaignArchived_CrossOriginRequest_Rejected(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/archive",
+		map[string]any{"archived": true}, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a cross-origin request", resp.StatusCode)
 	}
 }
 

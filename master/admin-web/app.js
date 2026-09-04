@@ -5,7 +5,11 @@
 // no build step — same "plain files, no bundler" style as
 // master/web/app.js, and drives the JSON API package internal/admin's
 // Server exposes on this same listener:
-//   GET  /api/campaigns
+//   GET  /api/campaigns                   (real party size/last-played/
+//                                           archived status per campaign)
+//   POST /api/campaigns                   (create/name a campaign)
+//   PUT  /api/campaigns/{id}/archive      (archive is a display filter
+//                                           only — never blocks joining)
 //   GET/PUT /api/campaigns/{id}/policy    (Campaign tab — applies live)
 //   GET/PUT /api/campaigns/{id}/security  (Security tab — applies live)
 //   GET/PUT /api/system                   (System tab — persists only)
@@ -27,9 +31,12 @@ const el = {
   tabButtons: document.querySelectorAll(".tab-button"),
   tabPanels: document.querySelectorAll(".tab-panel"),
   campaignSelect: document.getElementById("campaign-select"),
-  campaignManual: document.getElementById("campaign-manual"),
-  campaignManualUse: document.getElementById("campaign-manual-use"),
-  campaignPickerNote: document.getElementById("campaign-picker-note"),
+  campaignTableBody: document.getElementById("campaign-table-body"),
+  campaignListNote: document.getElementById("campaign-list-note"),
+  createCampaignId: document.getElementById("create-campaign-id"),
+  createCampaignName: document.getElementById("create-campaign-name"),
+  createCampaignSubmit: document.getElementById("create-campaign-submit"),
+  createCampaignStatus: document.getElementById("create-campaign-status"),
   pvpPolicy: document.getElementById("pvp-policy"),
   pvpConsent: document.getElementById("pvp-consent"),
   maturityTierPrompt: document.getElementById("maturity-tier-prompt"),
@@ -62,43 +69,124 @@ function selectTab(tabId) {
   for (const panel of el.tabPanels) panel.hidden = panel.dataset.tab !== tabId;
 }
 
-// --- Campaign picker ---
+// --- Campaign list, picker, and creation ---
+
+// formatLastActive renders an RFC3339 timestamp (or empty string, for a
+// campaign nobody has joined yet) as a short human-readable string —
+// this page has no build step / date library, so a plain locale format
+// is enough; precision beyond "roughly when" isn't the point here.
+function formatLastActive(iso) {
+  if (!iso) return "never";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "never";
+  return d.toLocaleString();
+}
 
 async function loadCampaignList() {
   const resp = await fetch("/api/campaigns");
   const data = await resp.json();
+  const campaigns = data.campaigns || [];
+
   el.campaignSelect.innerHTML = "";
-  for (const id of data.campaign_ids || []) {
+  el.campaignTableBody.innerHTML = "";
+
+  for (const c of campaigns) {
     const option = document.createElement("option");
-    option.value = id;
-    option.textContent = id;
+    option.value = c.campaign_id;
+    option.textContent = c.display_name || c.campaign_id;
     el.campaignSelect.appendChild(option);
+
+    const row = document.createElement("tr");
+    if (c.archived) row.classList.add("campaign-row-archived");
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = c.display_name || c.campaign_id;
+    if (c.display_name) {
+      const idHint = document.createElement("span");
+      idHint.className = "note campaign-id-hint";
+      idHint.textContent = ` (${c.campaign_id})`;
+      nameCell.appendChild(idHint);
+    }
+    row.appendChild(nameCell);
+
+    const partyCell = document.createElement("td");
+    partyCell.textContent = String(c.party_count || 0);
+    row.appendChild(partyCell);
+
+    const lastActiveCell = document.createElement("td");
+    lastActiveCell.textContent = formatLastActive(c.last_active_at);
+    row.appendChild(lastActiveCell);
+
+    const selectCell = document.createElement("td");
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "secondary";
+    selectButton.textContent = "Edit";
+    selectButton.addEventListener("click", () => selectCampaign(c.campaign_id));
+    selectCell.appendChild(selectButton);
+    row.appendChild(selectCell);
+
+    const archiveCell = document.createElement("td");
+    const archiveButton = document.createElement("button");
+    archiveButton.type = "button";
+    archiveButton.className = "secondary";
+    archiveButton.textContent = c.archived ? "Unarchive" : "Archive";
+    archiveButton.addEventListener("click", () => toggleArchived(c.campaign_id, !c.archived));
+    archiveCell.appendChild(archiveButton);
+    row.appendChild(archiveCell);
+
+    el.campaignTableBody.appendChild(row);
   }
-  if (data.campaign_ids && data.campaign_ids.length) {
-    selectCampaign(data.campaign_ids[0]);
+
+  if (campaigns.length) {
+    if (!state.campaignId || !campaigns.some((c) => c.campaign_id === state.campaignId)) {
+      selectCampaign(campaigns[0].campaign_id);
+    } else {
+      el.campaignSelect.value = state.campaignId;
+    }
+    el.campaignListNote.textContent = "";
   } else {
-    el.campaignPickerNote.textContent = "No campaigns known yet — type one above to pre-configure it.";
+    el.campaignListNote.textContent = "No campaigns known yet — create one below.";
   }
 }
 
-el.campaignSelect.addEventListener("change", () => selectCampaign(el.campaignSelect.value));
-el.campaignManualUse.addEventListener("click", () => {
-  const id = el.campaignManual.value.trim();
-  if (!id) return;
-  if (![...el.campaignSelect.options].some((o) => o.value === id)) {
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = id;
-    el.campaignSelect.appendChild(option);
+async function toggleArchived(id, archived) {
+  await fetch(`/api/campaigns/${encodeURIComponent(id)}/archive`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived }),
+  });
+  loadCampaignList();
+}
+
+el.createCampaignSubmit.addEventListener("click", async () => {
+  const id = el.createCampaignId.value.trim();
+  if (!id) {
+    setStatus(el.createCampaignStatus, "Campaign ID is required.", true);
+    return;
   }
-  el.campaignSelect.value = id;
+  setStatus(el.createCampaignStatus, "Creating…");
+  const resp = await fetch("/api/campaigns", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ campaign_id: id, display_name: el.createCampaignName.value.trim() }),
+  });
+  if (!resp.ok) {
+    setStatus(el.createCampaignStatus, `Failed: ${await errorText(resp)}`, true);
+    return;
+  }
+  el.createCampaignId.value = "";
+  el.createCampaignName.value = "";
+  setStatus(el.createCampaignStatus, "Created.");
+  await loadCampaignList();
   selectCampaign(id);
 });
+
+el.campaignSelect.addEventListener("change", () => selectCampaign(el.campaignSelect.value));
 
 async function selectCampaign(id) {
   state.campaignId = id;
   el.campaignSelect.value = id;
-  el.campaignPickerNote.textContent = "";
   await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id)]);
 }
 

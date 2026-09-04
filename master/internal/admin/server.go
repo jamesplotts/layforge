@@ -95,6 +95,8 @@ func New(logger *slog.Logger, s store.AdminSettingsStore, webDir, addr string, s
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/campaigns", s.handleListCampaigns)
+	mux.HandleFunc("POST /api/campaigns", s.requireSameOrigin(s.handleCreateCampaign))
+	mux.HandleFunc("PUT /api/campaigns/{id}/archive", s.requireSameOrigin(s.handlePutCampaignArchived))
 	mux.HandleFunc("GET /api/campaigns/{id}/policy", s.handleGetCampaignPolicy)
 	mux.HandleFunc("PUT /api/campaigns/{id}/policy", s.requireSameOrigin(s.handlePutCampaignPolicy))
 	mux.HandleFunc("GET /api/campaigns/{id}/security", s.handleGetCampaignSecurity)
@@ -184,16 +186,93 @@ func systemSettingsDTOFromMap(m map[string]string) systemSettingsDTO {
 	}
 }
 
+// campaignSummaryDTO is one row of the campaign list's wire shape —
+// store.CampaignSummary's fields, JSON-cased, with LastActiveAt omitted
+// (empty string) rather than serialized as Go's zero time.Time when no
+// activity has happened yet.
+type campaignSummaryDTO struct {
+	CampaignID   string `json:"campaign_id"`
+	DisplayName  string `json:"display_name"`
+	PartyCount   int    `json:"party_count"`
+	LastActiveAt string `json:"last_active_at,omitempty"`
+	Archived     bool   `json:"archived"`
+}
+
 func (s *Server) handleListCampaigns(w http.ResponseWriter, r *http.Request) {
-	ids, err := s.store.ListCampaignIDs(r.Context())
+	summaries, err := s.store.ListCampaignSummaries(r.Context())
 	if err != nil {
 		s.writeError(w, err)
 		return
 	}
-	if ids == nil {
-		ids = []string{}
+	dtos := make([]campaignSummaryDTO, len(summaries))
+	for i, summary := range summaries {
+		dto := campaignSummaryDTO{
+			CampaignID:  summary.CampaignID,
+			DisplayName: summary.DisplayName,
+			PartyCount:  summary.PartyCount,
+			Archived:    summary.Archived,
+		}
+		if !summary.LastActiveAt.IsZero() {
+			dto.LastActiveAt = summary.LastActiveAt.UTC().Format(time.RFC3339)
+		}
+		dtos[i] = dto
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"campaign_ids": ids})
+	s.writeJSON(w, http.StatusOK, map[string]any{"campaigns": dtos})
+}
+
+// createCampaignDTO is POST /api/campaigns' request body.
+type createCampaignDTO struct {
+	CampaignID  string `json:"campaign_id"`
+	DisplayName string `json:"display_name"`
+}
+
+// handleCreateCampaign is the admin panel's "create/name a campaign"
+// action (see store.AdminSettingsStore.SaveCampaignMeta's doc comment) —
+// upserts a display name against campaign_id without touching how it's
+// joined, played, or governed. Naming an already-active campaign (one
+// with real characters/events already) just attaches a label; it never
+// resets or clears anything real.
+func (s *Server) handleCreateCampaign(w http.ResponseWriter, r *http.Request) {
+	var dto createCampaignDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if dto.CampaignID == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign_id is required")
+		return
+	}
+	if err := s.store.SaveCampaignMeta(r.Context(), dto.CampaignID, dto.DisplayName); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, dto)
+}
+
+type campaignArchivedDTO struct {
+	Archived bool `json:"archived"`
+}
+
+// handlePutCampaignArchived toggles a campaign's archived display-filter
+// flag — see store.AdminSettingsStore.SetCampaignArchived's doc comment:
+// this never affects whether the campaign can be joined or played over
+// the WS endpoint, purely what the admin panel's own list shows.
+func (s *Server) handlePutCampaignArchived(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign id is required")
+		return
+	}
+	var dto campaignArchivedDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if err := s.store.SetCampaignArchived(r.Context(), id, dto.Archived); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, dto)
 }
 
 func (s *Server) handleGetCampaignPolicy(w http.ResponseWriter, r *http.Request) {

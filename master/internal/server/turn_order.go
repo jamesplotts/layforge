@@ -257,6 +257,7 @@ func (s *Server) advanceToNextActionableCharacter(ctx context.Context, campaignI
 		if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {
 			s.logger.Warn("failed to broadcast turn.state", "error", err, "campaign_id", campaignID)
 		}
+		s.persistCombatState(ctx, campaignID)
 		return payload, nil
 	}
 
@@ -266,6 +267,7 @@ func (s *Server) advanceToNextActionableCharacter(ctx context.Context, campaignI
 		if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {
 			s.logger.Warn("failed to broadcast turn.state", "error", err, "campaign_id", campaignID)
 		}
+		s.persistCombatState(ctx, campaignID)
 		return payload, nil
 	}
 
@@ -412,6 +414,12 @@ func (s *Server) endCombat(ctx context.Context, campaignID string) (protocol.Tur
 	s.combatMapsMu.Lock()
 	delete(s.combatMaps, campaignID)
 	s.combatMapsMu.Unlock()
+
+	if s.combatState != nil {
+		if err := s.combatState.DeleteCombatState(ctx, campaignID); err != nil {
+			s.logger.Warn("failed to delete persisted combat state", "error", err, "campaign_id", campaignID)
+		}
+	}
 
 	payload := protocol.TurnStatePayload{Active: false}
 	if err := s.broadcastTurnState(ctx, campaignID, payload); err != nil {

@@ -344,8 +344,13 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		}
 	}
 
+	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events)
+	if err := srv.WarmUpCombatState(context.Background()); err != nil {
+		logger.Warn("failed to rehydrate persisted combat state", "error", err)
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("/ws", server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider).Handler())
+	mux.Handle("/ws", srv.Handler())
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {

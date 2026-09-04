@@ -72,6 +72,18 @@ var initStatements = []string{
 		value      TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	);`,
+	`CREATE TABLE IF NOT EXISTS combat_state (
+		campaign_id TEXT PRIMARY KEY,
+		payload     TEXT NOT NULL,
+		updated_at  TEXT NOT NULL
+	);`,
+	`CREATE TABLE IF NOT EXISTS campaign_meta (
+		campaign_id  TEXT PRIMARY KEY,
+		display_name TEXT NOT NULL DEFAULT '',
+		archived     INTEGER NOT NULL DEFAULT 0,
+		archived_at  TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL
+	);`,
 }
 
 // SQLiteEventStore is the SQLite-backed EventStore — Master's

@@ -786,6 +786,67 @@ see [`docs/design.md`](../docs/design.md) for where a future pass should
 pick this up; `IItem.Value` still has no reader anywhere, and no
 location/world-state concept exists outside an active combat grid.
 
+**New**: session persistence and a real admin campaign list. You raised
+this after noting a campaign is "a live, mutable session" — players
+need to be able to save progress and reconvene later, and the host
+needs visibility into which sessions exist. The gap turned out narrower
+than it sounded: character state, the event/audit log, and campaign
+settings (PvP/maturity policy) already persisted to SQLite continuously
+— every mutation wrote through immediately, nothing was lost there.
+The real gap was exactly two things, both explicitly flagged in their
+own doc comments as "lost on Master restart": active combat's turn
+order/initiative (`Server.turnOrders`) and the combat map/fog-of-war
+state (`Server.combatMaps`), both in-memory-only. Both now write
+through to a new `combat_state` table on every mutation (start_combat,
+advance_turn, generate_combat_map, a token move, mirroring how character
+saves already work — real-time, not periodic), and a new
+`WarmUpCombatState` startup pass rehydrates every campaign's persisted
+snapshot back into memory before Master starts accepting connections —
+every existing in-memory-map read site needed no changes at all as a
+result, since the maps are already warm by the time any request touches
+them.
+
+For the admin-visibility half, you picked "admin visibility only" over
+a session start/stop model: Master keeps serving every campaign
+simultaneously exactly as it always has (a campaign_id is always
+available the instant anything references it — no start/stop concept
+exists or was added). `GET /api/campaigns` used to return just a flat
+list of IDs for a bare settings dropdown; it now returns real party
+size, last-played timestamp, and archived status per campaign, backed
+by a new `campaign_meta` table (kept deliberately separate from
+`campaign_settings`, whose own save is a full-replace — coupling new
+fields into that struct risked silently clearing them on every ordinary
+policy save). You also asked for the host to be able to name a campaign
+when they create it, with that name persisted and shown back so they
+can actually recognize it later, rather than hunting through bare
+campaign_id slugs — a new `POST /api/campaigns` action does exactly
+that (upserting a display name against a campaign_id without touching
+how it's joined, played, or governed), and a new
+`PUT /api/campaigns/{id}/archive` action lets the host get old sessions
+out of the admin panel's way — archiving is purely a display filter,
+verified live: a real player connection successfully joined a real
+archived campaign over `/ws`, exactly as designed. Permanent deletion
+(purging a campaign's character/event rows) is a deliberately deferred,
+separate follow-on — a materially more dangerous, irreversible
+operation than anything asked for this pass; archive (soft, reversible)
+covers everything this pass needed.
+
+**Verified live**: the admin API round-trip above (create a named
+campaign, list it back with real defaults, archive it, confirm a player
+can still join) ran against a real Master process with a real
+file-backed SQLite database, not a mock. The turn-order/combat-map
+"survives a restart" proof runs as a real Go test
+(`TestCombatState_SecondServerSharingStore_RehydratesAndCanAdvanceTurn`)
+rather than a full production restart: a second `*server.Server`,
+sharing the same real `SQLiteEventStore` as the first but with its own
+fresh, empty in-memory maps — exactly what a freshly-started Master
+process would have — calls `WarmUpCombatState` and is then able to
+advance the turn the first server left in progress, the same real
+SQLite reads/writes a file-backed restart would exercise (`:memory:`
+only changes connection pooling, not read/write correctness). Both new
+store tables and every new admin API endpoint have their own
+deterministic test coverage in `internal/store` and `internal/admin`.
+
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
 knowledge scoping) is still to come — see
 [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.

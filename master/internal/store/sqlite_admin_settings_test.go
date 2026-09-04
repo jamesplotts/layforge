@@ -129,6 +129,215 @@ func TestSQLiteEventStore_ListCampaignIDs_UnionsEventsCharactersAndSettings(t *t
 	}
 }
 
+func TestSQLiteEventStore_ListCampaignSummaries_PartyCountAndLastActiveAt(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SaveCharacter(ctx, testCharacter("char-1", "campaign-active")); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	if err := s.SaveCharacter(ctx, testCharacter("char-2", "campaign-active")); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	if err := s.AppendEvent(ctx, testEvent("campaign-active", "msg-1")); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	summaries, err := s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	var got *store.CampaignSummary
+	for i := range summaries {
+		if summaries[i].CampaignID == "campaign-active" {
+			got = &summaries[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("ListCampaignSummaries() did not include campaign-active")
+	}
+	if got.PartyCount != 2 {
+		t.Errorf("PartyCount = %d, want 2", got.PartyCount)
+	}
+	if got.LastActiveAt.IsZero() {
+		t.Error("LastActiveAt is zero, want a real timestamp from the appended event")
+	}
+	if got.DisplayName != "" {
+		t.Errorf("DisplayName = %q, want empty (never named)", got.DisplayName)
+	}
+	if got.Archived {
+		t.Error("Archived = true, want false (default)")
+	}
+}
+
+func TestSQLiteEventStore_ListCampaignSummaries_CharactersOnlyNoEvents_UsesCharacterUpdatedAt(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SaveCharacter(ctx, testCharacter("char-1", "campaign-uploaded-only")); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+
+	summaries, err := s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	var got *store.CampaignSummary
+	for i := range summaries {
+		if summaries[i].CampaignID == "campaign-uploaded-only" {
+			got = &summaries[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("ListCampaignSummaries() did not include campaign-uploaded-only")
+	}
+	if got.LastActiveAt.IsZero() {
+		t.Error("LastActiveAt is zero, want the character's own updated_at as a fallback")
+	}
+}
+
+func TestSQLiteEventStore_SaveCampaignMeta_NewCampaign_ZeroPartyCountAndNoActivity(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SaveCampaignMeta(ctx, "campaign-fresh", "Friday Night Crew"); err != nil {
+		t.Fatalf("SaveCampaignMeta() error = %v", err)
+	}
+
+	summaries, err := s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d, want 1", len(summaries))
+	}
+	got := summaries[0]
+	if got.CampaignID != "campaign-fresh" {
+		t.Errorf("CampaignID = %q, want %q", got.CampaignID, "campaign-fresh")
+	}
+	if got.DisplayName != "Friday Night Crew" {
+		t.Errorf("DisplayName = %q, want %q", got.DisplayName, "Friday Night Crew")
+	}
+	if got.PartyCount != 0 {
+		t.Errorf("PartyCount = %d, want 0 (nobody has joined yet)", got.PartyCount)
+	}
+	if !got.LastActiveAt.IsZero() {
+		t.Errorf("LastActiveAt = %v, want zero (nobody has joined yet)", got.LastActiveAt)
+	}
+}
+
+func TestSQLiteEventStore_SaveCampaignMeta_AlreadyActiveCampaign_PreservesActivity(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SaveCharacter(ctx, testCharacter("char-1", "campaign-already-active")); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	if err := s.AppendEvent(ctx, testEvent("campaign-already-active", "msg-1")); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	if err := s.SaveCampaignMeta(ctx, "campaign-already-active", "The Iron Crown"); err != nil {
+		t.Fatalf("SaveCampaignMeta() error = %v", err)
+	}
+
+	summaries, err := s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	var got *store.CampaignSummary
+	for i := range summaries {
+		if summaries[i].CampaignID == "campaign-already-active" {
+			got = &summaries[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("ListCampaignSummaries() did not include campaign-already-active")
+	}
+	if got.DisplayName != "The Iron Crown" {
+		t.Errorf("DisplayName = %q, want %q", got.DisplayName, "The Iron Crown")
+	}
+	if got.PartyCount != 1 {
+		t.Errorf("PartyCount = %d, want 1 (naming shouldn't touch real activity)", got.PartyCount)
+	}
+	if got.LastActiveAt.IsZero() {
+		t.Error("LastActiveAt is zero, want the real event timestamp to survive naming")
+	}
+}
+
+func TestSQLiteEventStore_SaveCampaignMeta_Rename_DoesNotUnarchive(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SetCampaignArchived(ctx, "campaign-1", true); err != nil {
+		t.Fatalf("SetCampaignArchived() error = %v", err)
+	}
+	if err := s.SaveCampaignMeta(ctx, "campaign-1", "Renamed Campaign"); err != nil {
+		t.Fatalf("SaveCampaignMeta() error = %v", err)
+	}
+
+	summaries, err := s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d, want 1", len(summaries))
+	}
+	if !summaries[0].Archived {
+		t.Error("Archived = false, want true — naming an archived campaign should not silently unarchive it")
+	}
+	if summaries[0].DisplayName != "Renamed Campaign" {
+		t.Errorf("DisplayName = %q, want %q", summaries[0].DisplayName, "Renamed Campaign")
+	}
+}
+
+func TestSQLiteEventStore_SaveCampaignMeta_MissingCampaignID_ReturnsError(t *testing.T) {
+	s := newTestStore(t)
+	err := s.SaveCampaignMeta(context.Background(), "", "name")
+	if !errors.Is(err, store.ErrCampaignIDRequired) {
+		t.Errorf("SaveCampaignMeta() error = %v, want ErrCampaignIDRequired", err)
+	}
+}
+
+func TestSQLiteEventStore_SetCampaignArchived_TogglesAndPreservesDisplayName(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SaveCampaignMeta(ctx, "campaign-1", "Original Name"); err != nil {
+		t.Fatalf("SaveCampaignMeta() error = %v", err)
+	}
+	if err := s.SetCampaignArchived(ctx, "campaign-1", true); err != nil {
+		t.Fatalf("SetCampaignArchived(true) error = %v", err)
+	}
+
+	summaries, err := s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 || !summaries[0].Archived || summaries[0].DisplayName != "Original Name" {
+		t.Fatalf("after archiving: %+v, want Archived=true DisplayName=%q", summaries[0], "Original Name")
+	}
+
+	if err := s.SetCampaignArchived(ctx, "campaign-1", false); err != nil {
+		t.Fatalf("SetCampaignArchived(false) error = %v", err)
+	}
+	summaries, err = s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	if len(summaries) != 1 || summaries[0].Archived || summaries[0].DisplayName != "Original Name" {
+		t.Fatalf("after unarchiving: %+v, want Archived=false DisplayName=%q", summaries[0], "Original Name")
+	}
+}
+
+func TestSQLiteEventStore_SetCampaignArchived_MissingCampaignID_ReturnsError(t *testing.T) {
+	s := newTestStore(t)
+	err := s.SetCampaignArchived(context.Background(), "", true)
+	if !errors.Is(err, store.ErrCampaignIDRequired) {
+		t.Errorf("SetCampaignArchived() error = %v, want ErrCampaignIDRequired", err)
+	}
+}
+
 func TestSQLiteEventStore_GetSystemSettings_NoneSaved_ReturnsEmptyMap(t *testing.T) {
 	s := newTestStore(t)
 

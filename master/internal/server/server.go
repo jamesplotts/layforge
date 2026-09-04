@@ -167,6 +167,13 @@ type Server struct {
 	// for why it's a separate opt-in DM tool rather than automatic).
 	combatMaps   map[string]*combatMapMeta
 	combatMapsMu sync.Mutex
+
+	// combatState persists turnOrders/combatMaps so they survive a
+	// Master restart (combat_state.go) — nil runs exactly as before this
+	// existed (in-memory only, lost on restart), the same "nil disables
+	// the feature" pattern every other optional dependency on this
+	// struct already uses.
+	combatState store.CombatStateStore
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -190,8 +197,13 @@ type Server struct {
 // may be nil to apply policy.Default() to every campaign (design doc §9
 // — see package policy and campaignPolicy). imageGenProvider may be nil
 // to run without image generation at all (design doc §6.3) — the
-// generate_scene_image DM tool is then simply not offered.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider) *Server {
+// generate_scene_image DM tool is then simply not offered. combatStateStore
+// may be nil to run with turn-order/combat-map state in-memory only, the
+// same "lost on Master restart" limitation this codebase had before
+// combat_state.go existed — a caller that sets it should also call
+// WarmUpCombatState once at startup, before Handler() starts accepting
+// connections, to rehydrate whatever was persisted from a prior run.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
@@ -205,6 +217,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		imageGen:       imageGenProvider,
 		turnOrders:     make(map[string]*turnOrder),
 		combatMaps:     make(map[string]*combatMapMeta),
+		combatState:    combatStateStore,
 	}
 }
 
