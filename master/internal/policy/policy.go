@@ -86,6 +86,27 @@ type CampaignPolicy struct {
 	// constraint for images as for text unless they explicitly set a
 	// stricter one — never a silently more permissive one.
 	ImageMaturityTierPrompt string
+
+	// PriceMultiplier is a host-set per-campaign economic adjustment
+	// (design doc §9's campaign-pack-scoped governance shape) applied
+	// multiplicatively on top of the system engine's authoritative base
+	// item price (see package server's vendor tools) — real, operator-set
+	// "world information" data, never invented by the DM model. The zero
+	// value means "not configured"; see EffectivePriceMultiplier, which
+	// resolves that to 1.0 (engine-listed prices, unadjusted) rather than
+	// letting an unconfigured campaign silently become a free-item
+	// economy.
+	PriceMultiplier float64
+}
+
+// EffectivePriceMultiplier returns p.PriceMultiplier, or 1.0 when it's
+// unset (the zero value) — see PriceMultiplier's own doc comment for why
+// zero must not mean "everything costs nothing."
+func (p CampaignPolicy) EffectivePriceMultiplier() float64 {
+	if p.PriceMultiplier == 0 {
+		return 1.0
+	}
+	return p.PriceMultiplier
 }
 
 // EffectiveImageMaturityTierPrompt returns the constraint text to pass

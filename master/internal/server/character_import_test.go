@@ -186,6 +186,19 @@ type fakeSystemEngineClient struct {
 	// TransferCurrency() call's request, for asserting on what Server
 	// actually sent the engine.
 	lastTransferCurrencyRequest *systemenginepb.TransferCurrencyRequest
+
+	getItemInfoResp *systemenginepb.GetItemInfoResponse
+	getItemInfoErr  error
+	// lastGetItemInfoRequest captures the most recent GetItemInfo() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastGetItemInfoRequest *systemenginepb.GetItemInfoRequest
+
+	listInventoryResp *systemenginepb.ListInventoryResponse
+	listInventoryErr  error
+	// lastListInventoryRequest captures the most recent ListInventory()
+	// call's request, for asserting on what Server actually sent the
+	// engine.
+	lastListInventoryRequest *systemenginepb.ListInventoryRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -316,6 +329,22 @@ func (f *fakeSystemEngineClient) TransferCurrency(_ context.Context, in *systeme
 		return nil, f.transferCurrencyErr
 	}
 	return f.transferCurrencyResp, nil
+}
+
+func (f *fakeSystemEngineClient) GetItemInfo(_ context.Context, in *systemenginepb.GetItemInfoRequest, _ ...grpc.CallOption) (*systemenginepb.GetItemInfoResponse, error) {
+	f.lastGetItemInfoRequest = in
+	if f.getItemInfoErr != nil {
+		return nil, f.getItemInfoErr
+	}
+	return f.getItemInfoResp, nil
+}
+
+func (f *fakeSystemEngineClient) ListInventory(_ context.Context, in *systemenginepb.ListInventoryRequest, _ ...grpc.CallOption) (*systemenginepb.ListInventoryResponse, error) {
+	f.lastListInventoryRequest = in
+	if f.listInventoryErr != nil {
+		return nil, f.listInventoryErr
+	}
+	return f.listInventoryResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetAvailableActions(_ context.Context, in *systemenginepb.GetAvailableActionsRequest, _ ...grpc.CallOption) (*systemenginepb.GetAvailableActionsResponse, error) {

@@ -93,6 +93,10 @@
         Image Maturity Tier Prompt (overrides the above for generate_scene_image calls only; leave blank to reuse it)
         <textarea id="image-maturity-tier-prompt" rows="3" placeholder="e.g. No graphic violence in illustrations."></textarea>
       </label>
+      <label>
+        Price Multiplier (applied to every vendor price on top of the engine-listed base cost; 1.0 = unadjusted)
+        <input id="price-multiplier" type="text" inputmode="decimal" placeholder="1.0" />
+      </label>
       <button id="campaign-save" type="button">Save</button>
       <span id="campaign-save-status" class="save-status"></span>
     </section>

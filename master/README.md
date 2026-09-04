@@ -780,11 +780,11 @@ under `pve_only`) cover this in both `inventory_test.go` and
 `loot_test.go`, alongside the existing living-source-still-blocked cases
 proving the gate otherwise holds exactly as before.
 
-Off-site possessions (mounts, stashes), land holdings, and a buy/sell/
-vendor economy remain real, named, deliberately deferred follow-ons —
-see [`docs/design.md`](../docs/design.md) for where a future pass should
-pick this up; `IItem.Value` still has no reader anywhere, and no
-location/world-state concept exists outside an active combat grid.
+Off-site possessions (mounts, stashes) and land holdings remain real,
+named, deliberately deferred follow-ons — see
+[`docs/design.md`](../docs/design.md) for where a future pass should
+pick this up; no location/world-state concept exists outside an active
+combat grid. The buy/sell/vendor economy piece is closed below.
 
 **New**: session persistence and a real admin campaign list. You raised
 this after noting a campaign is "a live, mutable session" — players
@@ -857,6 +857,80 @@ by opening the same database file directly, not by trusting the API's
 own say-so) — a second, untouched campaign's own rows in the same
 tables were left alone by every test covering this, proving the
 deletes are scoped by `campaign_id`, not a wholesale wipe.
+
+**New**: a vendor buy/sell economy — the last of the three deferred
+follow-ons named above. Earlier attempts to source item-price data
+externally (a dndbeyond forum post, toolsandtaverns.com, a
+thievesguild.cc price list, a "SRD" dandwiki page that turned out to be
+3.5e OGL content) were all declined on copyright/non-SRD grounds. The
+real fix needed no external source at all: OpenCombatEngine's
+`IItem.Value` (its Open5e-backed item library already carries real SRD
+price data) was simply never exposed over the gRPC contract — and, a
+genuine bug found while adding a real reader for it,
+`Open5eItemMapper.ParseCost` truncated anything under 1 gp to **0**
+(`(int)(1 * 0.01)` for "1 cp" → `0`) via its own `// Let's assume Gold
+for now` comment. Fixed alongside the new RPCs (companion PR in that
+repo): `Value` is now denominated in copper pieces, losslessly.
+
+Two new, narrowly-scoped, read-only RPCs close the actual gap:
+`GetItemInfo(item_name)` (the item library's real price, minimal-coin
+decomposed) and `ListInventory(actor)` (an actor's real held item
+names — needed because `character_data` is opaque to Master by design;
+parsing "inventory" out of it directly here would be exactly the kind
+of D&D-specific shortcut CLAUDE.md's system-engine boundary rule
+forbids). Both are pure data lookups, no rules judgment, so they're a
+low-risk contract addition.
+
+**Vendor = an ordinary NPC character**, stocked with the tools that
+already existed — `receive_item`/`add_currency` — no new "create a
+vendor" tool needed. Four new DM tools: `check_item_price` and
+`list_vendor_inventory` (read-only, real price/stock, never an abstract
+"yes they have goods" summary — the same "full enumeration, not a
+summary" principle you established for `get_available_actions`), and
+`vendor_sell_item`/`vendor_buy_item`, each a real `TransferItem` leg
+followed by a real `TransferCurrency` leg (price from `GetItemInfo`
+times a new per-campaign `price_multiplier` — a host-set "world
+information" economic knob, admin-panel-editable, applied on top of the
+engine's authoritative base price, resolved to 1.0 when unset). Turned
+out simpler than planned: since every system-engine RPC is stateless
+(no creature state held between calls) and Master only commits via an
+explicit `SaveCharacter`, nothing is actually persisted until *both*
+legs of a sale succeed — a second-leg failure (the buyer can't afford
+it) needs no compensating reverse RPC, since the store still holds each
+character's untouched original state. The item-source leg of each tool
+(`vendor_sell_item`'s vendor, `vendor_buy_item`'s seller) reuses the
+same PvP gate `give_item`/`transfer_currency` already had — extracted
+into one shared `pvpGateBlocked` helper rather than a fourth copy of
+the same ~15-line block.
+
+Inherited, not introduced by this pass: `TransferCurrency` still makes
+no change across denominations, so a buyer holding the right *total*
+value in the wrong coins can still be rejected — the live test below
+hit this for real.
+
+**Verified live**: a real `OpenCombatEngine.GrpcSidecar` process (its
+Open5e item-fetch has no network access in this environment, so it was
+pointed at a hand-seeded local item cache holding two real SRD
+weapons — Longsword 15 gp, Dagger 2 gp — via `OPEN5E_ITEM_CACHE_PATH`,
+the same on-disk cache format the sidecar already uses to avoid
+re-fetching from Open5e on every real startup) and a real Master
+process talking to it over actual gRPC, narrated by the real
+qwen3.8:27b model on the LAN Ollama server, driven over a real
+WebSocket connection: a shopkeeper NPC was stocked with a real
+Longsword via a real `AddItemToInventory` call; a buyer with 20 gold
+and no platinum asked to buy it in natural language — the model
+correctly called `check_item_price`, priced it at 1500 copper (1
+platinum + 5 gold, the real decomposition of the real 15 gp SRD price),
+called `vendor_sell_item`, and got a real `insufficient_funds`
+rejection — the buyer's gold-only purse couldn't cover the platinum
+piece the price required, exactly the inherited denomination limitation
+above, not a bug. The database was confirmed unchanged for both
+characters afterward. The buyer was then funded with one real platinum
+piece (`AddCurrency`); the same request succeeded end to end —
+`vendor_sell_item` returned success, and the underlying SQLite rows
+confirmed the real result: the shopkeeper's Longsword gone and 1
+platinum + 5 gold richer, the buyer holding the Longsword with exactly
+15 gold left.
 
 **Verified live**: the admin API round-trip above (create a named
 campaign, list it back with real defaults, archive it, confirm a player

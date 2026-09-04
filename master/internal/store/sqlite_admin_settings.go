@@ -17,7 +17,7 @@ var _ AdminSettingsStore = (*SQLiteEventStore)(nil)
 // GetCampaignSettings implements AdminSettingsStore.
 func (s *SQLiteEventStore) GetCampaignSettings(ctx context.Context, campaignID string) (CampaignSettings, bool, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password
+		`SELECT pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier
 		 FROM campaign_settings
 		 WHERE campaign_id = ?`,
 		campaignID,
@@ -25,7 +25,7 @@ func (s *SQLiteEventStore) GetCampaignSettings(ctx context.Context, campaignID s
 
 	var settings CampaignSettings
 	var pvpConsent string
-	err := row.Scan(&settings.PvPPolicy, &pvpConsent, &settings.MaturityTierPrompt, &settings.ImageMaturityTierPrompt, &settings.RoomPassword)
+	err := row.Scan(&settings.PvPPolicy, &pvpConsent, &settings.MaturityTierPrompt, &settings.ImageMaturityTierPrompt, &settings.RoomPassword, &settings.PriceMultiplier)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CampaignSettings{}, false, nil
 	}
@@ -50,16 +50,17 @@ func (s *SQLiteEventStore) SaveCampaignSettings(ctx context.Context, campaignID 
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO campaign_settings (campaign_id, pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO campaign_settings (campaign_id, pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (campaign_id) DO UPDATE SET
 			pvp_policy = excluded.pvp_policy,
 			pvp_consent = excluded.pvp_consent,
 			maturity_tier_prompt = excluded.maturity_tier_prompt,
 			image_maturity_tier_prompt = excluded.image_maturity_tier_prompt,
 			room_password = excluded.room_password,
+			price_multiplier = excluded.price_multiplier,
 			updated_at = excluded.updated_at`,
-		campaignID, settings.PvPPolicy, string(pvpConsent), settings.MaturityTierPrompt, settings.ImageMaturityTierPrompt, settings.RoomPassword,
+		campaignID, settings.PvPPolicy, string(pvpConsent), settings.MaturityTierPrompt, settings.ImageMaturityTierPrompt, settings.RoomPassword, settings.PriceMultiplier,
 		time.Now().UTC().Format(occurredAtLayout),
 	)
 	if err != nil {

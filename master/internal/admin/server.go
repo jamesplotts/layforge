@@ -145,6 +145,10 @@ type campaignPolicyDTO struct {
 	PvPConsent              []string `json:"pvp_consent"`
 	MaturityTierPrompt      string   `json:"maturity_tier_prompt"`
 	ImageMaturityTierPrompt string   `json:"image_maturity_tier_prompt"`
+	// PriceMultiplier mirrors store.CampaignSettings.PriceMultiplier — 0
+	// means "not set", resolved to 1.0 by
+	// policy.CampaignPolicy.EffectivePriceMultiplier.
+	PriceMultiplier float64 `json:"price_multiplier"`
 }
 
 // campaignSecurityDTO is the Security tab's wire shape. An empty
@@ -312,6 +316,7 @@ func (s *Server) handleGetCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		PvPConsent:              settings.PvPConsent,
 		MaturityTierPrompt:      settings.MaturityTierPrompt,
 		ImageMaturityTierPrompt: settings.ImageMaturityTierPrompt,
+		PriceMultiplier:         settings.PriceMultiplier,
 	})
 }
 
@@ -330,6 +335,10 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		s.writeErrorMsg(w, http.StatusBadRequest, "invalid pvp_policy (want pve_only, pvp_allowed, or pvp_with_consent)")
 		return
 	}
+	if dto.PriceMultiplier < 0 {
+		s.writeErrorMsg(w, http.StatusBadRequest, "price_multiplier must not be negative")
+		return
+	}
 
 	current, _, err := s.store.GetCampaignSettings(r.Context(), id)
 	if err != nil {
@@ -340,6 +349,7 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 	current.PvPConsent = dto.PvPConsent
 	current.MaturityTierPrompt = dto.MaturityTierPrompt
 	current.ImageMaturityTierPrompt = dto.ImageMaturityTierPrompt
+	current.PriceMultiplier = dto.PriceMultiplier
 	if err := s.store.SaveCampaignSettings(r.Context(), id, current); err != nil {
 		s.writeError(w, err)
 		return

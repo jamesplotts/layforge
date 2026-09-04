@@ -253,6 +253,7 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 		"pvp_consent":                []string{"player-a"},
 		"maturity_tier_prompt":       "Keep it clean.",
 		"image_maturity_tier_prompt": "No gore.",
+		"price_multiplier":           1.5,
 	}, "")
 	if putResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(putResp.Body)
@@ -264,6 +265,7 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 		PvPPolicy          string   `json:"pvp_policy"`
 		PvPConsent         []string `json:"pvp_consent"`
 		MaturityTierPrompt string   `json:"maturity_tier_prompt"`
+		PriceMultiplier    float64  `json:"price_multiplier"`
 	}
 	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding response: %v", err)
@@ -276,6 +278,20 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 	}
 	if got.MaturityTierPrompt != "Keep it clean." {
 		t.Errorf("MaturityTierPrompt = %q, want %q", got.MaturityTierPrompt, "Keep it clean.")
+	}
+	if got.PriceMultiplier != 1.5 {
+		t.Errorf("PriceMultiplier = %v, want 1.5", got.PriceMultiplier)
+	}
+}
+
+func TestServer_PutCampaignPolicy_NegativePriceMultiplier_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/policy", map[string]any{
+		"price_multiplier": -1.0,
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
 

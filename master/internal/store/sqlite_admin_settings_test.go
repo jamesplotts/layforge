@@ -36,6 +36,7 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 		MaturityTierPrompt:      "Keep content suitable for all ages.",
 		ImageMaturityTierPrompt: "No graphic violence in illustrations.",
 		RoomPassword:            "hunter2",
+		PriceMultiplier:         1.5,
 	}
 
 	if err := s.SaveCampaignSettings(ctx, "campaign-1", want); err != nil {
@@ -50,7 +51,8 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 		t.Fatal("GetCampaignSettings() ok = false, want true")
 	}
 	if got.PvPPolicy != want.PvPPolicy || got.MaturityTierPrompt != want.MaturityTierPrompt ||
-		got.ImageMaturityTierPrompt != want.ImageMaturityTierPrompt || got.RoomPassword != want.RoomPassword {
+		got.ImageMaturityTierPrompt != want.ImageMaturityTierPrompt || got.RoomPassword != want.RoomPassword ||
+		got.PriceMultiplier != want.PriceMultiplier {
 		t.Errorf("GetCampaignSettings() = %+v, want %+v", got, want)
 	}
 	if len(got.PvPConsent) != len(want.PvPConsent) {

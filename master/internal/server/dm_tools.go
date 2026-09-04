@@ -311,6 +311,54 @@ func dmTools() []llm.Tool {
 				}
 			}`),
 		},
+		{
+			Name:        "check_item_price",
+			Description: "Look up an item's real price — this campaign's price_multiplier applied on top of the item's actual base value in the real item catalog. Never guess or invent a price; call this before narrating what something costs, and before vendor_sell_item/vendor_buy_item.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["item_name"],
+				"properties": {
+					"item_name": {"type": "string", "description": "A real item name from the catalog — do not invent one."}
+				}
+			}`),
+		},
+		{
+			Name:        "list_vendor_inventory",
+			Description: "Get the full, real list of items a vendor (or any character) actually has in inventory right now, each with its real price under this campaign's price_multiplier — the actual stock, not an abstract \"yes they have goods for sale\" summary. Call this before narrating what a shop has available, so you're describing what's mechanically real, not inventing a menu.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The vendor (or any character) whose inventory to list."}
+				}
+			}`),
+		},
+		{
+			Name:        "vendor_sell_item",
+			Description: "A vendor sells a real item from its own inventory to a buyer — the buyer pays the item's real price (this campaign's price_multiplier applied to the catalog value), the vendor receives the payment. Fails cleanly, with nothing moved, if the vendor doesn't actually stock the item or the buyer can't afford it. Taking the item FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["vendor_character_id", "buyer_character_id", "item_name"],
+				"properties": {
+					"vendor_character_id": {"type": "string", "description": "The character selling the item — must already have it in inventory."},
+					"buyer_character_id": {"type": "string", "description": "The character paying for and receiving the item."},
+					"item_name": {"type": "string", "description": "Must already be a real member of the vendor's inventory."}
+				}
+			}`),
+		},
+		{
+			Name:        "vendor_buy_item",
+			Description: "A vendor buys a real item from a seller's inventory — the vendor pays the item's real price (this campaign's price_multiplier applied to the catalog value) from its own funds, the seller receives the payment. Fails cleanly, with nothing moved, if the seller doesn't actually have the item or the vendor can't afford it (a vendor's own cash reserves are a real, finite constraint). Taking the item FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["vendor_character_id", "seller_character_id", "item_name"],
+				"properties": {
+					"vendor_character_id": {"type": "string", "description": "The character buying the item and paying for it."},
+					"seller_character_id": {"type": "string", "description": "The character selling the item — must already have it in inventory."},
+					"item_name": {"type": "string", "description": "Must already be a real member of the seller's inventory."}
+				}
+			}`),
+		},
 	}
 }
 
@@ -416,6 +464,14 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmCreateNPC(ctx, campaignID, call.Arguments)
 	case "generate_scene_image":
 		return s.dmGenerateSceneImage(ctx, campaignID, call.Arguments)
+	case "check_item_price":
+		return s.dmCheckItemPrice(ctx, campaignID, call.Arguments)
+	case "list_vendor_inventory":
+		return s.dmListVendorInventory(ctx, campaignID, call.Arguments)
+	case "vendor_sell_item":
+		return s.dmVendorSellItem(ctx, campaignID, actingSenderID, call.Arguments)
+	case "vendor_buy_item":
+		return s.dmVendorBuyItem(ctx, campaignID, actingSenderID, call.Arguments)
 	default:
 		return fmt.Sprintf("unknown tool %q", call.Name), false, "unknown_tool"
 	}
@@ -1381,24 +1437,10 @@ func (s *Server) dmGiveItem(ctx context.Context, campaignID, actingSenderID stri
 	// same-different-owner branch, same as before this exemption existed
 	// — a self-owned or NPC-owned source never needed the extra engine
 	// round trip and still doesn't.
-	if source.OwnerID != "" && source.OwnerID != masterSenderID && source.OwnerID != actingSenderID {
-		sourceDead, err := s.characterIsDead(ctx, source)
-		if err != nil {
-			return fmt.Sprintf("checking character status: %v", err), false, "engine_error"
-		}
-		if !sourceDead {
-			pol := s.campaignPolicy(ctx, campaignID)
-			switch pol.PvPPolicy {
-			case policy.PvPPolicyAllowed:
-				// proceed
-			case policy.PvPPolicyWithConsent:
-				if !slices.Contains(pol.PvPConsent, source.OwnerID) {
-					return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
-				}
-			default:
-				return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take an item from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
-			}
-		}
+	if reason, code, err := s.pvpGateBlocked(ctx, campaignID, actingSenderID, "an item", source); err != nil {
+		return fmt.Sprintf("checking character status: %v", err), false, "engine_error"
+	} else if reason != "" {
+		return reason, false, code
 	}
 
 	resp, err := s.systemEngine.TransferItem(ctx, &systemenginepb.TransferItemRequest{
@@ -1600,24 +1642,10 @@ func (s *Server) dmTransferCurrency(ctx context.Context, campaignID, actingSende
 	// exempt. Only checked inside this same-different-owner branch, same
 	// as before this exemption existed — a self-owned or NPC-owned
 	// source never needed the extra engine round trip and still doesn't.
-	if source.OwnerID != "" && source.OwnerID != masterSenderID && source.OwnerID != actingSenderID {
-		sourceDead, err := s.characterIsDead(ctx, source)
-		if err != nil {
-			return fmt.Sprintf("checking character status: %v", err), false, "engine_error"
-		}
-		if !sourceDead {
-			pol := s.campaignPolicy(ctx, campaignID)
-			switch pol.PvPPolicy {
-			case policy.PvPPolicyAllowed:
-				// proceed
-			case policy.PvPPolicyWithConsent:
-				if !slices.Contains(pol.PvPConsent, source.OwnerID) {
-					return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
-				}
-			default:
-				return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take currency from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
-			}
-		}
+	if reason, code, err := s.pvpGateBlocked(ctx, campaignID, actingSenderID, "currency", source); err != nil {
+		return fmt.Sprintf("checking character status: %v", err), false, "engine_error"
+	} else if reason != "" {
+		return reason, false, code
 	}
 
 	resp, err := s.systemEngine.TransferCurrency(ctx, &systemenginepb.TransferCurrencyRequest{

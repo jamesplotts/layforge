@@ -65,6 +65,7 @@ var initStatements = []string{
 		maturity_tier_prompt       TEXT NOT NULL DEFAULT '',
 		image_maturity_tier_prompt TEXT NOT NULL DEFAULT '',
 		room_password              TEXT NOT NULL DEFAULT '',
+		price_multiplier           REAL NOT NULL DEFAULT 0,
 		updated_at                 TEXT NOT NULL
 	);`,
 	`CREATE TABLE IF NOT EXISTS system_settings (

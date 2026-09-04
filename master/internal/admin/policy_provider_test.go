@@ -72,6 +72,7 @@ func TestPolicyProvider_Policy_StoredSettings_ReturnsThemOverFallback(t *testing
 		PvPConsent:              []string{"player-a"},
 		MaturityTierPrompt:      "Keep it family friendly.",
 		ImageMaturityTierPrompt: "No graphic violence.",
+		PriceMultiplier:         1.5,
 	}
 	if err := s.SaveCampaignSettings(context.Background(), "campaign-1", stored); err != nil {
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
@@ -89,6 +90,9 @@ func TestPolicyProvider_Policy_StoredSettings_ReturnsThemOverFallback(t *testing
 	}
 	if got.MaturityTierPrompt != stored.MaturityTierPrompt {
 		t.Errorf("MaturityTierPrompt = %q, want %q", got.MaturityTierPrompt, stored.MaturityTierPrompt)
+	}
+	if got.PriceMultiplier != stored.PriceMultiplier {
+		t.Errorf("PriceMultiplier = %v, want %v", got.PriceMultiplier, stored.PriceMultiplier)
 	}
 }
 

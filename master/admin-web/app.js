@@ -41,6 +41,7 @@ const el = {
   pvpConsent: document.getElementById("pvp-consent"),
   maturityTierPrompt: document.getElementById("maturity-tier-prompt"),
   imageMaturityTierPrompt: document.getElementById("image-maturity-tier-prompt"),
+  priceMultiplier: document.getElementById("price-multiplier"),
   campaignSave: document.getElementById("campaign-save"),
   campaignSaveStatus: document.getElementById("campaign-save-status"),
   roomPassword: document.getElementById("room-password"),
@@ -276,16 +277,23 @@ async function loadCampaignPolicy(id) {
   el.pvpConsent.value = (data.pvp_consent || []).join(", ");
   el.maturityTierPrompt.value = data.maturity_tier_prompt || "";
   el.imageMaturityTierPrompt.value = data.image_maturity_tier_prompt || "";
+  el.priceMultiplier.value = data.price_multiplier ? String(data.price_multiplier) : "1.0";
 }
 
 el.campaignSave.addEventListener("click", async () => {
   if (!state.campaignId) return;
   setStatus(el.campaignSaveStatus, "Saving…");
+  const priceMultiplier = parseFloat(el.priceMultiplier.value);
+  if (el.priceMultiplier.value.trim() !== "" && (Number.isNaN(priceMultiplier) || priceMultiplier < 0)) {
+    setStatus(el.campaignSaveStatus, "Price Multiplier must be a non-negative number.", true);
+    return;
+  }
   const body = {
     pvp_policy: el.pvpPolicy.value,
     pvp_consent: el.pvpConsent.value.split(",").map((s) => s.trim()).filter(Boolean),
     maturity_tier_prompt: el.maturityTierPrompt.value,
     image_maturity_tier_prompt: el.imageMaturityTierPrompt.value,
+    price_multiplier: Number.isNaN(priceMultiplier) ? 0 : priceMultiplier,
   };
   const resp = await fetch(`/api/campaigns/${encodeURIComponent(state.campaignId)}/policy`, {
     method: "PUT",

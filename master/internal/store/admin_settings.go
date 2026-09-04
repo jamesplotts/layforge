@@ -39,6 +39,11 @@ type CampaignSettings struct {
 	// (open to anyone), matching auth.RoomPasswordProvider's existing
 	// "not configured == open" semantics.
 	RoomPassword string
+	// PriceMultiplier mirrors policy.CampaignPolicy's own field of the
+	// same name (design doc §9) — 0 means "not set by the admin panel",
+	// resolved to 1.0 by policy.CampaignPolicy.EffectivePriceMultiplier,
+	// not by this store.
+	PriceMultiplier float64
 }
 
 // CampaignSummary is one row of the admin panel's real campaign list
