@@ -526,6 +526,27 @@ button.secondary {
   outline-offset: -1px;
 }
 
+.mic-button {
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  /* Prevents the browser's own press-and-hold text-selection/callout
+     gesture from fighting the pointerdown/pointerup push-to-talk
+     handlers below on touch devices. */
+  user-select: none;
+  touch-action: none;
+}
+
+.mic-button.recording {
+  background: var(--danger);
+  color: var(--danger-bg);
+  border-color: transparent;
+}
+
 button {
   padding: 9px 16px;
   border-radius: 8px;

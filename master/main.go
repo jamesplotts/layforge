@@ -84,6 +84,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemengine"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
+	"github.com/jamesplotts/layforge/master/internal/transcription"
 )
 
 func main() {
@@ -100,10 +101,12 @@ func main() {
 	adminAddr := flag.String("admin-addr", "127.0.0.1:8090", "address for the local-only admin/operator settings panel (design doc §3.3) — deliberately not 0.0.0.0: this listener has no login of its own, only the bind address stands between it and anyone who can reach it, so it must never be reverse-proxied or otherwise exposed off the host. Leave empty to disable the admin panel entirely.")
 	adminWebDir := flag.String("admin-web-dir", defaultAdminWebDir(), "directory to serve the admin panel's web UI from, mirroring -web-dir's own reasoning; empty disables serving it (the JSON API under /api/ on -admin-addr still works, useful for headless/scripted admin access).")
 	maturityTiersDir := flag.String("maturity-tiers-dir", "", "path to a directory of maturity-tier definitions (design doc §6.5), e.g. maturity-tiers/ at the repo root — one *.md file per tier (id/display_name/rank front matter, prompt-constraint text as the body). Host-authored and trusted like any other host config; Master does not police tier content. Leave empty (today's default) to resolve maturity_tier_prompt only from -campaign-policies/the admin panel, never from a campaign pack's own maturity_tier reference.")
+	whisperURL := flag.String("whisper-url", "", "base URL of a self-hosted Whisper-family transcription server speaking the OpenAI /v1/audio/transcriptions contract (design doc §4), e.g. http://localhost:9000 (faster-whisper-server, openai-whisper-asr-webservice, LocalAI, and similar self-hosted servers all implement this). Leave empty to run without push-to-talk transcription (today's default) — the audio.chunk message then gets a system.error explaining it's unavailable, and the web client's mic button simply has nothing to talk to. Requires -whisper-model.")
+	whisperModel := flag.String("whisper-model", "base", "model name to request from the whisper server (its own \"model\" form field — whichever model size/variant it has loaded); ignored if -whisper-url is empty.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -202,7 +205,7 @@ func defaultAdminWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel string, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -374,7 +377,18 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		}
 	}
 
-	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events)
+	// transcriptionProvider stays nil (no push-to-talk transcription, the
+	// audio.chunk message simply gets a system.error) unless -whisper-url
+	// is set — same opt-in reasoning as every other optional dependency
+	// above; see package transcription's doc comment for why this is an
+	// external HTTP call, never an embedded model.
+	var transcriptionProvider transcription.Provider
+	if whisperURL != "" {
+		transcriptionProvider = transcription.NewWhisperProvider(whisperURL, whisperModel)
+		logger.Info("push-to-talk transcription enabled", "whisper_url", whisperURL, "model", whisperModel)
+	}
+
+	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events, transcriptionProvider)
 	if err := srv.WarmUpCombatState(context.Background()); err != nil {
 		logger.Warn("failed to rehydrate persisted combat state", "error", err)
 	}

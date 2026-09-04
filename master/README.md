@@ -1226,6 +1226,86 @@ deterministic test coverage in `internal/store` and `internal/admin`.
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance) is still to
 come — see [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
 
+Push-to-talk voice input (design doc §4) now works too: `audio.chunk`
+(the streamed, base64-encoded recording a held mic button uploads) and
+`audio.transcription` (Master's reply) were already specified in
+`protocol/asyncapi.yaml` from an earlier pass but had no Go types or
+handler at all — this pass adds both, plus a new `internal/transcription`
+package with a pluggable `Provider` interface (the same shape as package
+`llm`/`imagegen`'s own Provider contracts) and a `WhisperProvider`
+reference implementation that speaks the OpenAI `/v1/audio/transcriptions`
+contract most self-hosted Whisper servers already implement
+(faster-whisper-server, openai-whisper-asr-webservice, LocalAI). Master
+never embeds a transcription model or a cgo/C dependency itself — see
+that package's own doc comment for why an external HTTP call, not
+embedded whisper.cpp, is the right shape here, matching how narrative
+rendering (Ollama) and image generation (ComfyUI) already work. New
+`-whisper-url`/`-whisper-model` flags wire it in; left unset (today's
+default), `audio.chunk` gets a real "not configured" `system.error`.
+
+What was actually asked for, and what got built, is narrower than design
+doc §4's full description: a *finished* transcript populated into the
+player's own chat box for them to edit before sending, not a live-
+updating partial preview while they talk. `internal/server/audio.go`
+buffers a stream's chunks (keyed by `stream_id`, guarded by a mutex since
+multiple connections can be mid-recording at once) until the client's
+`Final` chunk arrives, then transcribes the complete recording exactly
+once and replies with a single `audio.transcription` (`is_final: true`)
+on that same connection only — never broadcast, since a still-recording
+or freshly finalized push-to-talk isn't anyone else's business. It
+likewise doesn't run its own Voice Activity Detection: the held-button
+window is already the speech boundary a human chose, and a self-hosted
+backend is free to do its own VAD internally. `AudioTranscriptionPayload.
+IsFinal` still carries the field a future incremental-partial
+implementation would need, so adding that later is additive, not a
+protocol change. Per design doc §10, none of this — the raw audio, nor
+its transcription — is written to the durable event log; only once the
+player edits/confirms the text and it goes out as a real
+`narrative.player_input` does it join the log, the same as anything
+typed by hand. `protocol/asyncapi.yaml`'s `AudioChunk` schema gained a
+`mime_type` field it didn't have yet (the wire format wasn't specified) —
+needed so Master can forward the browser's actual codec choice to the
+transcription backend rather than assuming one.
+
+The web client (`web/`) gained a hold-to-talk mic button next to the
+chat input, feature-detected (hidden entirely if the browser has no
+`MediaRecorder`/`getUserMedia`, shown otherwise regardless of whether
+*Master* has a whisper server configured — a recording sent to an
+unconfigured Master just surfaces the same real `system.error` any other
+unavailable feature would). Held, it records via `MediaRecorder`,
+streaming `audio.chunk` messages in 250ms timeslices; released, it stops
+and the final chunk triggers transcription. The reply lands in
+`input-text` via `onAudioTranscription` — never auto-sent. Whether the
+eventual `narrative.player_input`'s `source` is `"voice"` or `"typed"`
+is tracked per-keystroke: it starts as `"voice"` the instant a
+transcription populates the box, and reverts to `"typed"` the moment the
+player actually types anything (setting `.value` programmatically does
+not fire the `input` event that flips it back) — so an unedited
+transcript keeps its real provenance and a fully retyped message does
+not.
+
+**Verified live**: a real self-hosted whisper server (`faster-whisper`,
+model `base`, wrapped in a small local FastAPI shim exposing the OpenAI
+contract) plus a real Master process with `-whisper-url` configured.
+Direct check first — a synthesized speech WAV (`espeak-ng`) posted
+straight to the whisper server's own endpoint returned a real (if
+TTS-garbled, as expected from a synthetic voice) transcription. Then the
+full protocol path: a scratch WS client split that same WAV into 22
+chunks and streamed them as real `audio.chunk` messages exactly like the
+browser's timesliced `MediaRecorder` would, confirming Master correctly
+buffers and reassembles a multi-chunk stream (not just a single-shot
+upload) before transcribing — the `audio.transcription` reply that came
+back matched the whisper server's own direct-call output exactly,
+confirming the buffering/reassembly introduced no corruption. A second
+Go test (`TestServe_AudioChunk_TwoDistinctStreams_DoNotCrossContaminate`)
+proves two concurrent recordings on different connections don't bleed
+into each other's buffers. Separately, the real web client was loaded in
+an actual browser against a running Master with transcription
+configured, confirming the mic button renders in the right place with no
+console errors — actually holding it and speaking into a real microphone
+still needs a human check with real hardware, since this environment has
+no audio input device to automate that half of the flow.
+
 ## Layout
 
 ```

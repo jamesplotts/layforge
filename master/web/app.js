@@ -16,8 +16,10 @@
 // character-sheet.js — not hardcoded to D&D's shape, design doc §4), and
 // a combat-map sidebar thumbnail + lightbox (map.token_state, design doc
 // §6.2) — a current-state widget, not appended to the scrolling log; see
-// onMapTokenState. Still no push-to-talk — Master has no audio pipeline
-// yet.
+// onMapTokenState. Push-to-talk (audio.chunk -> audio.transcription,
+// design doc §4) is wired too — see the "Push-to-talk" section below —
+// but only transcribes into input-text for the player to edit before
+// sending; it does not stream a live partial preview while recording.
 //
 // The dice tray (and now the sheet) needs a character Master's store
 // actually recognizes (roll.check_request/character.get are gated on
@@ -66,6 +68,23 @@ const state = {
   // both are present, whichever order they happen to arrive in.
   characterSchema: null,
   characterData: null,
+  // --- Push-to-talk (design doc §4) ---
+  // audioRecorder/audioStream are only non-null while actively
+  // recording. audioStreamId groups this recording's audio.chunk
+  // messages; audioSequence is the next chunk's sequence number.
+  audioRecorder: null,
+  audioStream: null,
+  audioStreamId: null,
+  audioSequence: 0,
+  // pendingInputSource records whether input-text's current content
+  // came from an unedited voice transcription ("voice") or was typed/
+  // edited by the player ("typed") — set to "voice" only by
+  // onAudioTranscription, and reset to "typed" the instant the player
+  // actually types anything afterward (see the input-text "input"
+  // listener below), so a corrected transcript the player never touched
+  // still records its real provenance, and a fully retyped message does
+  // not.
+  pendingInputSource: "typed",
 };
 
 const el = {
@@ -88,6 +107,7 @@ const el = {
   inputForm: document.getElementById("input-form"),
   inputText: document.getElementById("input-text"),
   inputSend: document.getElementById("input-send"),
+  micButton: document.getElementById("mic-button"),
   diceStage: document.getElementById("dice-stage"),
   rollAbility: document.getElementById("roll-ability"),
   rollCheckButton: document.getElementById("roll-check-button"),
@@ -113,6 +133,14 @@ el.safetyFlagButton.addEventListener("click", openSafetyFlagPanel);
 el.safetyFlagCancel.addEventListener("click", closeSafetyFlagPanel);
 el.safetyFlagSend.addEventListener("click", onSafetyFlagSend);
 el.inputForm.addEventListener("submit", onInputSubmit);
+el.inputText.addEventListener("input", () => {
+  // Only a real keystroke fires "input" — setting .value
+  // programmatically (onAudioTranscription) does not, so this only
+  // ever reverts an unedited transcription's provenance, never
+  // overwrites voice provenance the moment it's set.
+  state.pendingInputSource = "typed";
+});
+initMicButton();
 el.loadEarlierButton.addEventListener("click", onLoadEarlierClick);
 el.rollCheckButton.addEventListener("click", onRollCheckClick);
 el.effectDamageButton.addEventListener("click", () => onApplyEffectClick("damage"));
@@ -328,6 +356,9 @@ function handleMessage(msg) {
     case "map.token_state":
       onMapTokenState(msg.payload || {});
       break;
+    case "audio.transcription":
+      onAudioTranscription(msg);
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -488,11 +519,176 @@ function onInputSubmit(event) {
   state.pendingInputMessageId = envelope.message_id;
   send({
     ...envelope,
-    payload: { character_id: state.rollCharacterId, text, source: "typed" },
+    payload: { character_id: state.rollCharacterId, text, source: state.pendingInputSource },
   });
 
   el.inputText.value = "";
+  state.pendingInputSource = "typed";
   showPendingBubble();
+}
+
+// --- Push-to-talk (design doc §4) ---
+//
+// Hold mic-button to record, release to stop; Master transcribes the
+// complete recording once (no live partial preview — see
+// internal/server/audio.go's own doc comment for why that's a
+// deliberate scope decision, not a gap) and the result lands in
+// input-text via onAudioTranscription for the player to edit before
+// actually sending, same as anything typed by hand.
+
+// PREFERRED_MIME_TYPES is checked in order; MediaRecorder.isTypeSupported
+// varies by browser (Chrome/Firefox default to webm/opus, Safari to
+// mp4/aac) — Master doesn't care which, it forwards mime_type to the
+// transcription provider as-is (see AudioChunkPayload's own doc
+// comment), so this just picks whatever the browser can actually
+// record.
+const PREFERRED_MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+
+function pickRecorderMimeType() {
+  if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) return "";
+  for (const type of PREFERRED_MIME_TYPES) {
+    if (MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
+
+// initMicButton reveals mic-button only when the browser actually
+// supports the APIs push-to-talk needs — a browser without them leaves
+// it hidden (its default state in index.html) rather than shown-but-
+// broken. Whether *Master* has transcription configured at all is a
+// separate, server-side question this function has no way to check in
+// advance; a recording sent to an unconfigured Master just gets a real
+// system.error, same as any other unavailable-on-this-deployment
+// feature (see onSystemError).
+function initMicButton() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+    return;
+  }
+  el.micButton.hidden = false;
+  el.micButton.addEventListener("pointerdown", onMicPointerDown);
+  el.micButton.addEventListener("pointerup", onMicPointerUp);
+  el.micButton.addEventListener("pointercancel", onMicPointerUp);
+  el.micButton.addEventListener("pointerleave", onMicPointerUp);
+}
+
+function onMicPointerDown(event) {
+  event.preventDefault();
+  if (state.audioRecorder) return; // already recording
+
+  navigator.mediaDevices
+    .getUserMedia({ audio: true })
+    .then((stream) => {
+      // The button may already have been released (a very quick tap)
+      // by the time the permission prompt resolves — don't start a
+      // recording nobody is holding down for anymore.
+      if (!el.micButton.classList.contains("armed")) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      startRecording(stream);
+    })
+    .catch((err) => {
+      el.micButton.classList.remove("armed");
+      appendErrorNote("Could not access microphone: " + err.message);
+    });
+  el.micButton.classList.add("armed");
+}
+
+function startRecording(stream) {
+  const mimeType = pickRecorderMimeType();
+  let recorder;
+  try {
+    recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  } catch (err) {
+    stream.getTracks().forEach((track) => track.stop());
+    appendErrorNote("Could not start recording: " + err.message);
+    return;
+  }
+
+  state.audioRecorder = recorder;
+  state.audioStream = stream;
+  state.audioStreamId = randomId();
+  state.audioSequence = 0;
+  el.micButton.classList.add("recording");
+
+  recorder.addEventListener("dataavailable", (event) => {
+    const isFinal = recorder.state === "inactive";
+    if (event.data.size === 0 && !isFinal) return;
+    sendAudioChunk(event.data, isFinal, recorder.mimeType || mimeType);
+  });
+  recorder.addEventListener("stop", () => {
+    stream.getTracks().forEach((track) => track.stop());
+    state.audioRecorder = null;
+    state.audioStream = null;
+  });
+  recorder.addEventListener("error", (event) => {
+    appendErrorNote("Recording error: " + (event.error ? event.error.message : "unknown"));
+  });
+
+  // timeslice (250ms) streams chunks while held, matching design doc
+  // §4's "chunked" description; the current server-side implementation
+  // buffers them all and transcribes once on the final chunk regardless
+  // (see internal/server/audio.go), but the client streams incrementally
+  // either way so a future incremental-transcription Master doesn't need
+  // a client change too.
+  recorder.start(250);
+}
+
+function sendAudioChunk(blob, isFinal, mimeType) {
+  blob
+    .arrayBuffer()
+    .then((buffer) => {
+      send({
+        ...newEnvelope("audio.chunk"),
+        payload: {
+          stream_id: state.audioStreamId,
+          sequence: state.audioSequence++,
+          audio_base64: arrayBufferToBase64(buffer),
+          final: isFinal,
+          mime_type: mimeType || "application/octet-stream",
+        },
+      });
+    })
+    .catch((err) => {
+      appendErrorNote("Could not read recorded audio: " + err.message);
+    });
+}
+
+// arrayBufferToBase64 chunks the conversion (rather than a single
+// String.fromCharCode.apply(null, bytes)) so a longer recording doesn't
+// blow the JS engine's call-stack argument limit.
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function onMicPointerUp(event) {
+  event.preventDefault();
+  el.micButton.classList.remove("armed");
+  el.micButton.classList.remove("recording");
+  if (state.audioRecorder && state.audioRecorder.state !== "inactive") {
+    state.audioRecorder.stop();
+  }
+}
+
+// onAudioTranscription populates input-text with the finished
+// transcription so the player can edit it before sending — never sent
+// automatically (design doc §4's own stated goal for this feature).
+// stream_id isn't checked against state.audioStreamId: only one
+// recording can be in flight from this client at a time (mic-button is
+// a single hold-to-record control), so whatever transcription arrives
+// is necessarily the one just requested.
+function onAudioTranscription(msg) {
+  const text = msg.payload && msg.payload.text;
+  if (!text) return;
+  el.inputText.value = text;
+  state.pendingInputSource = "voice";
+  el.inputText.focus();
 }
 
 function openSafetyFlagPanel() {

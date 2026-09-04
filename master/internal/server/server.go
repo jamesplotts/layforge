@@ -115,6 +115,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
+	"github.com/jamesplotts/layforge/master/internal/transcription"
 )
 
 // masterSenderID is the sender_id Master uses on messages it originates
@@ -191,6 +192,22 @@ type Server struct {
 	// with a real "not configured" error, the same nil-disables-the-
 	// feature pattern as campaignPack.
 	vehicles store.VehicleStore
+
+	// transcription turns a finished push-to-talk recording into text
+	// (audio.go, design doc §4). nil means audio.chunk always gets a
+	// real "voice transcription is not configured on this Master" error,
+	// the same nil-disables-the-feature pattern as imageGen/vehicles.
+	transcription transcription.Provider
+
+	// audioStreams buffers each in-progress push-to-talk recording's
+	// chunks, keyed by its stream_id, until the client-sent Final chunk
+	// arrives (audio.go) — in-memory only, guarded by audioStreamsMu
+	// since a self-hoster can have many connections recording
+	// concurrently; the same "ephemeral, lost on restart" posture as
+	// turnOrders/combatMaps, and correctly so — an in-progress recording
+	// abandoned mid-restart was never going to be transcribed anyway.
+	audioStreams   map[string]*audioStreamBuffer
+	audioStreamsMu sync.Mutex
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -223,8 +240,11 @@ type Server struct {
 // campaignPackStore/vehicleStore may independently be nil to run without
 // campaign-pack loading / vehicle tracking at all — the location_*/
 // stash_*/vehicle_* DM tools then simply aren't offered (see
-// dm_slow_pass.go's tool-assembly gate).
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore) *Server {
+// dm_slow_pass.go's tool-assembly gate). transcriptionProvider may be
+// nil to run without push-to-talk transcription at all (design doc §4)
+// — audio.chunk then gets a real "not configured" system.error, the
+// same pattern as every other optional dependency above.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider) *Server {
 	return &Server{
 		logger:         logger,
 		events:         events,
@@ -241,6 +261,8 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		combatState:    combatStateStore,
 		campaignPack:   campaignPackStore,
 		vehicles:       vehicleStore,
+		transcription:  transcriptionProvider,
+		audioStreams:   make(map[string]*audioStreamBuffer),
 	}
 }
 
@@ -524,6 +546,16 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		}
 		recordEvent(ctx, s, req)
 		return s.importVehicle(ctx, conn, campaignID, req)
+	case protocol.MessageTypeAudioChunk:
+		var req protocol.AudioChunkMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed audio.chunk payload: %w", err))
+		}
+		// Not recorded: per design doc §10, live/raw audio and its
+		// transcription are explicitly ephemeral — only a finalized,
+		// possibly player-edited narrative.player_input becomes part of
+		// the durable log, the same as typed input already does.
+		return s.handleAudioChunk(ctx, conn, campaignID, envelope.MessageID, req.Payload)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}

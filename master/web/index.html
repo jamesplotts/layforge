@@ -33,9 +33,8 @@
   </section>
 
   <!-- Chat screen: narrative scrollback (design doc §4's V1 client),
-       history paging, and a safety-flag control (§9.2). No stat panel,
-       dice tray, or push-to-talk yet — Master doesn't implement the
-       system-engine or audio paths those need. -->
+       history paging, a safety-flag control (§9.2), the dice tray and
+       character sidebar below, and push-to-talk (mic-button, §4). -->
   <section id="chat-screen" class="screen" hidden>
     <header class="chat-header">
       <div>
@@ -107,6 +106,17 @@
         </div>
 
         <form id="input-form" class="input-form">
+          <!-- Push-to-talk: hold to record, release to transcribe.
+               Transcribed text lands in input-text for the player to
+               edit before sending — it is never sent automatically (see
+               onMicPointerUp/onAudioTranscription in app.js, design doc
+               §4). Hidden when the browser itself has no
+               MediaRecorder/getUserMedia support; if Master has no
+               whisper server configured, the button still appears but a
+               recording gets a real error note back, same as any other
+               unavailable-on-this-deployment feature (see
+               onSystemError). -->
+          <button id="mic-button" type="button" class="mic-button" title="Hold to talk" hidden>🎤</button>
           <input id="input-text" type="text" placeholder="What do you do?" autocomplete="off" />
           <button id="input-send" type="submit">Send</button>
         </form>

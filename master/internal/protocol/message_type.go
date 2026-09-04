@@ -47,6 +47,8 @@ const (
 	MessageTypeMapTokenMoveRequest       MessageType = "map.token_move_request"
 	MessageTypeVehicleImport             MessageType = "vehicle.import"
 	MessageTypeVehicleImported           MessageType = "vehicle.imported"
+	MessageTypeAudioChunk                MessageType = "audio.chunk"
+	MessageTypeAudioTranscription        MessageType = "audio.transcription"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -66,7 +68,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeNarrativeDmProse, MessageTypeToolResult, MessageTypeTurnState,
 		MessageTypeNarrativeSceneImage,
 		MessageTypeMapTokenState, MessageTypeMapTokenMoveRequest,
-		MessageTypeVehicleImport, MessageTypeVehicleImported:
+		MessageTypeVehicleImport, MessageTypeVehicleImported,
+		MessageTypeAudioChunk, MessageTypeAudioTranscription:
 		return true
 	default:
 		return false

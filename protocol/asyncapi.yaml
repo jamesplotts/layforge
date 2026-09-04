@@ -460,7 +460,7 @@ components:
                 const: audio.chunk
               payload:
                 type: object
-                required: [stream_id, sequence, audio_base64, final]
+                required: [stream_id, sequence, audio_base64, final, mime_type]
                 properties:
                   stream_id:
                     type: string
@@ -473,6 +473,9 @@ components:
                   final:
                     type: boolean
                     description: True on the chunk sent when the button is released.
+                  mime_type:
+                    type: string
+                    description: Container/codec of the concatenated chunks, e.g. "audio/webm;codecs=opus" (a browser MediaRecorder's typical default) — forwarded to the transcription provider as-is, never assumed by Master.
 
     AudioTranscription:
       name: audio.transcription

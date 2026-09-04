@@ -174,6 +174,57 @@ type NarrativePlayerInputPayload struct {
 // NarrativePlayerInputMessage is a narrative.player_input Message.
 type NarrativePlayerInputMessage = Message[NarrativePlayerInputPayload]
 
+// AudioChunkPayload is the payload of an audio.chunk message: one piece
+// of a push-to-talk recording streamed while the button is held (design
+// doc §4). StreamID groups every chunk belonging to one held-button
+// session; Sequence orders them (chunks are expected to arrive in order
+// over a single connection, but Sequence lets a future implementation
+// tolerate reordering without a protocol change). Final is true on
+// exactly the chunk sent when the button is released — that's the
+// signal Master uses to stop buffering and actually transcribe, not a
+// separate control message, so a partial recording never gets
+// transcribed by accident. MimeType names the container/codec the
+// concatenated chunks decode as (e.g. "audio/webm;codecs=opus", a
+// browser MediaRecorder's typical default) — Master forwards it
+// unmodified to the transcription provider rather than assuming a
+// single fixed format, since that's a client/browser choice, not
+// Master's to make. See protocol/asyncapi.yaml
+// components.messages.AudioChunk.
+type AudioChunkPayload struct {
+	StreamID    string `json:"stream_id"`
+	Sequence    int    `json:"sequence"`
+	AudioBase64 string `json:"audio_base64"`
+	Final       bool   `json:"final"`
+	MimeType    string `json:"mime_type"`
+}
+
+// AudioChunkMessage is an audio.chunk Message.
+type AudioChunkMessage = Message[AudioChunkPayload]
+
+// AudioTranscriptionPayload is the payload of an audio.transcription
+// message: Master's transcription of one audio.chunk stream, sent back
+// to the speaking player's own connection only — never broadcast, since
+// a still-in-progress or freshly finalized recording is nobody else's
+// business (design doc §4). IsFinal is always true in this
+// implementation: Master transcribes once, after the stream's Final
+// chunk arrives, not incrementally per chunk — see
+// internal/server/audio.go's own doc comment for why live partial
+// transcription (design doc §4's other stated goal) is a deliberately
+// deferred enhancement, not implemented by this message alone. Per
+// design doc §10, this text is never written to the durable event log
+// as audio.transcription itself — only once the player edits/confirms
+// it and sends it as a real narrative.player_input does it become part
+// of the durable log, the same as any typed input. See protocol/
+// asyncapi.yaml components.messages.AudioTranscription.
+type AudioTranscriptionPayload struct {
+	StreamID string `json:"stream_id"`
+	Text     string `json:"text"`
+	IsFinal  bool   `json:"is_final"`
+}
+
+// AudioTranscriptionMessage is an audio.transcription Message.
+type AudioTranscriptionMessage = Message[AudioTranscriptionPayload]
+
 // NarrativePlayerBubblePayload is the payload of a narrative.player_bubble
 // message: the rendered, third-person, DM-voiced prose for a player's own
 // stated action/dialogue (design doc §7's fast pass). See protocol/

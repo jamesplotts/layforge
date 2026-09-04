@@ -109,8 +109,15 @@ Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's
 own* check result (a hit doesn't apply its own damage outside the DM
 slow pass — the tray's Roll Check and the sheet's Take Damage/Heal are
-two independent actions for a player), push-to-talk voice input (no
-audio pipeline).
+two independent actions for a player).
+
+Push-to-talk (design doc §4) is now wired: a hold-to-talk mic button
+next to the chat input, feature-detected (hidden if the browser has no
+`MediaRecorder`/`getUserMedia`), streams `audio.chunk` while held and
+populates `input-text` with Master's `audio.transcription` reply on
+release — for the player to edit before sending, never auto-sent. See
+`../README.md`'s Status section for the full design rationale and live
+verification; this file just notes it exists.
 
 ## Running
 

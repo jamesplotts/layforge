@@ -39,6 +39,8 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "MapTokenMoveRequest_ReturnsTrue", t: MessageTypeMapTokenMoveRequest, want: true},
 		{name: "VehicleImport_ReturnsTrue", t: MessageTypeVehicleImport, want: true},
 		{name: "VehicleImported_ReturnsTrue", t: MessageTypeVehicleImported, want: true},
+		{name: "AudioChunk_ReturnsTrue", t: MessageTypeAudioChunk, want: true},
+		{name: "AudioTranscription_ReturnsTrue", t: MessageTypeAudioTranscription, want: true},
 		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("map.room_adjacency"), want: false},
 		{name: "CharacterReviewStatus_ReturnsFalse_NotImplementedYet", t: MessageType("character.review_status"), want: false},
 		{name: "RollAcknowledge_ReturnsFalse_NotImplementedYet", t: MessageType("roll.acknowledge"), want: false},
