@@ -97,6 +97,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/campaigns", s.handleListCampaigns)
 	mux.HandleFunc("POST /api/campaigns", s.requireSameOrigin(s.handleCreateCampaign))
 	mux.HandleFunc("PUT /api/campaigns/{id}/archive", s.requireSameOrigin(s.handlePutCampaignArchived))
+	mux.HandleFunc("DELETE /api/campaigns/{id}", s.requireSameOrigin(s.handleDeleteCampaign))
 	mux.HandleFunc("GET /api/campaigns/{id}/policy", s.handleGetCampaignPolicy)
 	mux.HandleFunc("PUT /api/campaigns/{id}/policy", s.requireSameOrigin(s.handlePutCampaignPolicy))
 	mux.HandleFunc("GET /api/campaigns/{id}/security", s.handleGetCampaignSecurity)
@@ -273,6 +274,31 @@ func (s *Server) handlePutCampaignArchived(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.writeJSON(w, http.StatusOK, dto)
+}
+
+// handleDeleteCampaign permanently removes campaignID and everything
+// referencing it — see store.AdminSettingsStore.DeleteCampaign's own doc
+// comment for exactly what's deleted and why archiving first is a real,
+// store-enforced precondition, not just something this handler checks.
+// ErrCampaignNotArchived is surfaced as 400 (a real, expected rejection
+// this handler anticipates), not the generic 500 writeError otherwise
+// returns for an unexpected store failure.
+func (s *Server) handleDeleteCampaign(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign id is required")
+		return
+	}
+	err := s.store.DeleteCampaign(r.Context(), id)
+	if errors.Is(err, store.ErrCampaignNotArchived) {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign must be archived before it can be deleted")
+		return
+	}
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (s *Server) handleGetCampaignPolicy(w http.ResponseWriter, r *http.Request) {

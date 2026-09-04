@@ -196,6 +196,42 @@ func (s *SQLiteEventStore) SetCampaignArchived(ctx context.Context, campaignID s
 	return nil
 }
 
+// DeleteCampaign implements AdminSettingsStore. The archived check and
+// every DELETE run inside one transaction — either the whole campaign is
+// gone afterward or none of it is, and a campaign that isn't confirmed
+// archived is rejected before any DELETE runs at all.
+func (s *SQLiteEventStore) DeleteCampaign(ctx context.Context, campaignID string) error {
+	if campaignID == "" {
+		return ErrCampaignIDRequired
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: deleting campaign: %w", err)
+	}
+	defer tx.Rollback()
+
+	var archived int
+	err = tx.QueryRowContext(ctx, `SELECT archived FROM campaign_meta WHERE campaign_id = ?`, campaignID).Scan(&archived)
+	if errors.Is(err, sql.ErrNoRows) || archived == 0 {
+		return ErrCampaignNotArchived
+	}
+	if err != nil {
+		return fmt.Errorf("store: checking campaign archived status: %w", err)
+	}
+
+	for _, table := range []string{"characters", "events", "campaign_settings", "campaign_meta", "combat_state"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE campaign_id = ?`, campaignID); err != nil {
+			return fmt.Errorf("store: deleting campaign rows from %s: %w", table, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: deleting campaign: %w", err)
+	}
+	return nil
+}
+
 // GetSystemSettings implements AdminSettingsStore.
 func (s *SQLiteEventStore) GetSystemSettings(ctx context.Context) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM system_settings`)

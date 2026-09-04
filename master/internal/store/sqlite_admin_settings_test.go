@@ -338,6 +338,125 @@ func TestSQLiteEventStore_SetCampaignArchived_MissingCampaignID_ReturnsError(t *
 	}
 }
 
+func TestSQLiteEventStore_DeleteCampaign_NotArchived_ReturnsErrorAndDeletesNothing(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SaveCharacter(ctx, testCharacter("char-1", "campaign-live")); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	if err := s.AppendEvent(ctx, testEvent("campaign-live", "msg-1")); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	err := s.DeleteCampaign(ctx, "campaign-live")
+	if !errors.Is(err, store.ErrCampaignNotArchived) {
+		t.Errorf("DeleteCampaign() error = %v, want ErrCampaignNotArchived", err)
+	}
+
+	if _, err := s.GetCharacter(ctx, "char-1"); err != nil {
+		t.Errorf("GetCharacter() error = %v, want the character to still exist", err)
+	}
+	events, _, err := s.ListEvents(ctx, "campaign-live", store.ListEventsOptions{})
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("len(events) = %d, want 1 (nothing should have been deleted)", len(events))
+	}
+}
+
+func TestSQLiteEventStore_DeleteCampaign_NeverArchived_ReturnsError(t *testing.T) {
+	s := newTestStore(t)
+	err := s.DeleteCampaign(context.Background(), "campaign-never-touched")
+	if !errors.Is(err, store.ErrCampaignNotArchived) {
+		t.Errorf("DeleteCampaign() error = %v, want ErrCampaignNotArchived", err)
+	}
+}
+
+func TestSQLiteEventStore_DeleteCampaign_Archived_RemovesEveryTableAndLeavesOtherCampaignsAlone(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// The campaign being deleted: a real row in every table that
+	// references campaign_id.
+	if err := s.SaveCharacter(ctx, testCharacter("char-1", "campaign-doomed")); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	if err := s.AppendEvent(ctx, testEvent("campaign-doomed", "msg-1")); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	if err := s.SaveCampaignSettings(ctx, "campaign-doomed", store.CampaignSettings{PvPPolicy: "pve_only"}); err != nil {
+		t.Fatalf("SaveCampaignSettings() error = %v", err)
+	}
+	if err := s.SaveCombatState(ctx, "campaign-doomed", []byte(`{"turn_order":{"active":true}}`)); err != nil {
+		t.Fatalf("SaveCombatState() error = %v", err)
+	}
+	if err := s.SaveCampaignMeta(ctx, "campaign-doomed", "Doomed Campaign"); err != nil {
+		t.Fatalf("SaveCampaignMeta() error = %v", err)
+	}
+	if err := s.SetCampaignArchived(ctx, "campaign-doomed", true); err != nil {
+		t.Fatalf("SetCampaignArchived() error = %v", err)
+	}
+
+	// A second, untouched campaign with rows in the same tables — proves
+	// the DELETEs are scoped by campaign_id, not a wholesale wipe.
+	if err := s.SaveCharacter(ctx, testCharacter("char-2", "campaign-survivor")); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	if err := s.AppendEvent(ctx, testEvent("campaign-survivor", "msg-2")); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	if err := s.SaveCampaignSettings(ctx, "campaign-survivor", store.CampaignSettings{PvPPolicy: "pvp_allowed"}); err != nil {
+		t.Fatalf("SaveCampaignSettings() error = %v", err)
+	}
+
+	if err := s.DeleteCampaign(ctx, "campaign-doomed"); err != nil {
+		t.Fatalf("DeleteCampaign() error = %v", err)
+	}
+
+	if _, err := s.GetCharacter(ctx, "char-1"); !errors.Is(err, store.ErrCharacterNotFound) {
+		t.Errorf("GetCharacter(char-1) error = %v, want ErrCharacterNotFound", err)
+	}
+	if events, _, err := s.ListEvents(ctx, "campaign-doomed", store.ListEventsOptions{}); err != nil || len(events) != 0 {
+		t.Errorf("ListEvents(campaign-doomed) = %v, %v, want empty", events, err)
+	}
+	if _, ok, err := s.GetCampaignSettings(ctx, "campaign-doomed"); err != nil || ok {
+		t.Errorf("GetCampaignSettings(campaign-doomed) ok = %v, err = %v, want ok=false", ok, err)
+	}
+	if _, ok, err := s.LoadCombatState(ctx, "campaign-doomed"); err != nil || ok {
+		t.Errorf("LoadCombatState(campaign-doomed) ok = %v, err = %v, want ok=false", ok, err)
+	}
+	summaries, err := s.ListCampaignSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListCampaignSummaries() error = %v", err)
+	}
+	for _, summary := range summaries {
+		if summary.CampaignID == "campaign-doomed" {
+			t.Errorf("ListCampaignSummaries() still includes campaign-doomed: %+v", summary)
+		}
+	}
+
+	// The survivor campaign's own rows must all still be there.
+	if _, err := s.GetCharacter(ctx, "char-2"); err != nil {
+		t.Errorf("GetCharacter(char-2) error = %v, want the survivor's character to still exist", err)
+	}
+	if events, _, err := s.ListEvents(ctx, "campaign-survivor", store.ListEventsOptions{}); err != nil || len(events) != 1 {
+		t.Errorf("ListEvents(campaign-survivor) = %v, %v, want 1 event untouched", events, err)
+	}
+	if _, ok, err := s.GetCampaignSettings(ctx, "campaign-survivor"); err != nil || !ok {
+		t.Errorf("GetCampaignSettings(campaign-survivor) ok = %v, err = %v, want ok=true", ok, err)
+	}
+}
+
+func TestSQLiteEventStore_DeleteCampaign_MissingCampaignID_ReturnsError(t *testing.T) {
+	s := newTestStore(t)
+	err := s.DeleteCampaign(context.Background(), "")
+	if !errors.Is(err, store.ErrCampaignIDRequired) {
+		t.Errorf("DeleteCampaign() error = %v, want ErrCampaignIDRequired", err)
+	}
+}
+
 func TestSQLiteEventStore_GetSystemSettings_NoneSaved_ReturnsEmptyMap(t *testing.T) {
 	s := newTestStore(t)
 

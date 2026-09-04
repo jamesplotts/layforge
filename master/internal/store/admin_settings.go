@@ -120,6 +120,17 @@ type AdminSettingsStore interface {
 	// campaignID didn't already have one, the same as SaveCampaignMeta.
 	SetCampaignArchived(ctx context.Context, campaignID string, archived bool) error
 
+	// DeleteCampaign permanently removes every row for campaignID across
+	// every table that references it — characters, events,
+	// campaign_settings, campaign_meta, and combat_state — in one
+	// transaction (all gone or none are). Fails with
+	// ErrCampaignNotArchived, and deletes nothing, unless campaignID
+	// already has a campaign_meta row with Archived = true: a real,
+	// store-level precondition against permanently destroying a live
+	// campaign's data, not something a caller can bypass by skipping the
+	// admin UI's own archive-first flow.
+	DeleteCampaign(ctx context.Context, campaignID string) error
+
 	// GetSystemSettings returns every stored System-tab key/value pair.
 	// A key never saved via the admin panel is simply absent from the
 	// returned map — callers fall back to whatever seeded that key

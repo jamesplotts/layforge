@@ -825,11 +825,38 @@ how it's joined, played, or governed), and a new
 `PUT /api/campaigns/{id}/archive` action lets the host get old sessions
 out of the admin panel's way — archiving is purely a display filter,
 verified live: a real player connection successfully joined a real
-archived campaign over `/ws`, exactly as designed. Permanent deletion
-(purging a campaign's character/event rows) is a deliberately deferred,
-separate follow-on — a materially more dangerous, irreversible
-operation than anything asked for this pass; archive (soft, reversible)
-covers everything this pass needed.
+archived campaign over `/ws`, exactly as designed.
+
+**Since closed**: permanent campaign deletion. Archive (soft,
+reversible) covered everything the prior pass asked for; this closes
+the "deliberately deferred, materially more dangerous" follow-on it
+named. Because this permanently destroys real data — a campaign's
+characters and its entire event/audit log — it gets a real gate, not
+just a confirmation dialog: a new `DELETE /api/campaigns/{id}` only
+succeeds when the campaign is already archived, checked inside the
+same transaction that does the deleting (`SQLiteEventStore.
+DeleteCampaign`, `store.ErrCampaignNotArchived` on rejection) — a
+caller bypassing the admin UI entirely still can't delete a live
+campaign out from under a table. One transaction removes every row for
+that `campaign_id` across every table that references it —
+`characters`, `events`, `campaign_settings`, `campaign_meta`,
+`combat_state` — all gone or none are. The admin UI's own "Delete"
+button only appears on an already-archived row (never a live one) and
+requires typing the campaign's own `campaign_id` into a confirmation
+field before it enables, a deliberately higher-friction step than a
+bare browser `confirm()` a habituated click can blow through.
+
+**Verified live**, same real Master process/real file-backed SQLite
+database as the archive feature above: `DELETE` on a freshly-created,
+unarchived campaign was rejected (400, `ErrCampaignNotArchived`,
+nothing removed); a real character and event were seeded for a second
+campaign, which was then archived and deleted through the real HTTP
+API, and both the campaign's admin-panel listing *and* its underlying
+character/event rows were confirmed genuinely gone afterward (checked
+by opening the same database file directly, not by trusting the API's
+own say-so) — a second, untouched campaign's own rows in the same
+tables were left alone by every test covering this, proving the
+deletes are scoped by `campaign_id`, not a wholesale wipe.
 
 **Verified live**: the admin API round-trip above (create a named
 campaign, list it back with real defaults, archive it, confirm a player

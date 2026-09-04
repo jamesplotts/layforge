@@ -85,6 +85,12 @@ var (
 	// both AfterSequence and BeforeSequence, which express opposite
 	// paging directions in a single call.
 	ErrConflictingPagination = errors.New("store: after_sequence and before_sequence are mutually exclusive")
+	// ErrCampaignNotArchived is returned by DeleteCampaign when
+	// campaignID has no campaign_meta row with archived = true — a real
+	// precondition, not just a UI nicety, so a caller can't permanently
+	// delete a campaign's data without first having deliberately
+	// archived it (see DeleteCampaign's own doc comment).
+	ErrCampaignNotArchived = errors.New("store: campaign must be archived before it can be deleted")
 )
 
 // EventStore is Master's durable, append-only campaign event log — the

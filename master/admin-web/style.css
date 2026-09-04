@@ -118,6 +118,21 @@ main {
   opacity: 0.55;
 }
 
+.campaign-delete-confirm-row td {
+  background: var(--danger-bg);
+}
+
+.campaign-delete-confirm-row .delete-confirm-input {
+  display: inline-block;
+  width: 180px;
+  margin: 0 8px;
+  padding: 5px 8px;
+}
+
+.campaign-delete-confirm-row button {
+  margin-right: 6px;
+}
+
 .campaign-id-hint {
   margin-left: 2px;
 }

@@ -176,6 +176,74 @@ func TestServer_PutCampaignArchived_CrossOriginRequest_Rejected(t *testing.T) {
 	}
 }
 
+func TestServer_DeleteCampaign_FullRoundTrip_RemovesFromList(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	createResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaigns", map[string]any{
+		"campaign_id": "campaign-1", "display_name": "Doomed Campaign",
+	}, "")
+	if createResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST status = %d", createResp.StatusCode)
+	}
+	archiveResp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/archive", map[string]any{"archived": true}, "")
+	if archiveResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT archive status = %d", archiveResp.StatusCode)
+	}
+
+	deleteResp := doJSON(t, http.MethodDelete, httpSrv.URL+"/api/campaigns/campaign-1", nil, "")
+	if deleteResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(deleteResp.Body)
+		t.Fatalf("DELETE status = %d, body = %s", deleteResp.StatusCode, body)
+	}
+
+	listResp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/campaigns", nil, "")
+	var got struct {
+		Campaigns []map[string]any `json:"campaigns"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Campaigns) != 0 {
+		t.Errorf("Campaigns = %v, want empty after delete", got.Campaigns)
+	}
+}
+
+func TestServer_DeleteCampaign_NotArchived_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	createResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaigns", map[string]any{
+		"campaign_id": "campaign-1", "display_name": "Still Live",
+	}, "")
+	if createResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST status = %d", createResp.StatusCode)
+	}
+
+	deleteResp := doJSON(t, http.MethodDelete, httpSrv.URL+"/api/campaigns/campaign-1", nil, "")
+	if deleteResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("DELETE status = %d, want 400 (campaign was never archived)", deleteResp.StatusCode)
+	}
+
+	listResp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/campaigns", nil, "")
+	var got struct {
+		Campaigns []map[string]any `json:"campaigns"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Campaigns) != 1 {
+		t.Errorf("Campaigns = %v, want the rejected delete to have left it in place", got.Campaigns)
+	}
+}
+
+func TestServer_DeleteCampaign_CrossOriginRequest_Rejected(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodDelete, httpSrv.URL+"/api/campaigns/campaign-1", nil, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a cross-origin request", resp.StatusCode)
+	}
+}
+
 func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 	_, httpSrv := newTestServer(t, nil)
 	url := httpSrv.URL + "/api/campaigns/campaign-1/policy"

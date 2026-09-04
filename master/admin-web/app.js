@@ -135,6 +135,20 @@ async function loadCampaignList() {
     archiveCell.appendChild(archiveButton);
     row.appendChild(archiveCell);
 
+    // Delete only ever appears once a campaign is already archived —
+    // archiving is the first real gate a host has to deliberately pass
+    // through before this destructive option is even reachable.
+    const deleteCell = document.createElement("td");
+    if (c.archived) {
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "danger";
+      deleteButton.textContent = "Delete";
+      deleteButton.addEventListener("click", () => showDeleteConfirmRow(row, c.campaign_id));
+      deleteCell.appendChild(deleteButton);
+    }
+    row.appendChild(deleteCell);
+
     el.campaignTableBody.appendChild(row);
   }
 
@@ -157,6 +171,69 @@ async function toggleArchived(id, archived) {
     body: JSON.stringify({ archived }),
   });
   loadCampaignList();
+}
+
+// showDeleteConfirmRow inserts a real "type the campaign_id to confirm"
+// row directly beneath campaignRow — a deliberately higher-friction
+// confirmation than a bare browser confirm() a habituated click can
+// blow through, matching the weight of an action that permanently
+// destroys a campaign's characters and entire event log. Only one
+// confirm row exists at a time; clicking Delete on another row (or
+// reloading the list) removes any previous one.
+function showDeleteConfirmRow(campaignRow, campaignId) {
+  const existing = document.querySelector(".campaign-delete-confirm-row");
+  if (existing) existing.remove();
+
+  const confirmRow = document.createElement("tr");
+  confirmRow.className = "campaign-delete-confirm-row";
+  const cell = document.createElement("td");
+  cell.colSpan = 6;
+
+  const label = document.createElement("span");
+  label.className = "note";
+  label.textContent = `Type "${campaignId}" to permanently delete it (this cannot be undone): `;
+  cell.appendChild(label);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "delete-confirm-input";
+  input.placeholder = campaignId;
+  cell.appendChild(input);
+
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "button";
+  confirmButton.className = "danger";
+  confirmButton.textContent = "Permanently Delete";
+  confirmButton.disabled = true;
+  cell.appendChild(confirmButton);
+
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.className = "secondary";
+  cancelButton.textContent = "Cancel";
+  cancelButton.addEventListener("click", () => confirmRow.remove());
+  cell.appendChild(cancelButton);
+
+  const status = document.createElement("span");
+  status.className = "save-status";
+  cell.appendChild(status);
+
+  input.addEventListener("input", () => {
+    confirmButton.disabled = input.value !== campaignId;
+  });
+  confirmButton.addEventListener("click", async () => {
+    setStatus(status, "Deleting…");
+    const resp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}`, { method: "DELETE" });
+    if (!resp.ok) {
+      setStatus(status, `Failed: ${await errorText(resp)}`, true);
+      return;
+    }
+    loadCampaignList();
+  });
+
+  confirmRow.appendChild(cell);
+  campaignRow.after(confirmRow);
+  input.focus();
 }
 
 el.createCampaignSubmit.addEventListener("click", async () => {
