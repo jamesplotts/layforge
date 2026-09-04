@@ -248,6 +248,48 @@ func dmTools() []llm.Tool {
 			}`),
 		},
 		{
+			Name:        "generate_loot",
+			Description: "Roll real CR-appropriate treasure for a roster of creatures — call this at encounter-prep time, right after create_npc-ing the monsters/NPCs you're about to throw at the party, NOT after the fight. Combining multiple creatures' challenge ratings into one group-appropriate roll is computed for real by the system engine. After it returns, place pieces of the result onto specific NPCs with add_currency/receive_item/equip_item — the wand goes on the wizard, not a random guard — so they can actually carry and use what they're holding during the fight. Every named character must have a real challenge_rating on its record (set it when you create_npc them) or the call is rejected.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_ids"],
+				"properties": {
+					"character_ids": {"type": "array", "items": {"type": "string"}, "description": "The encounter roster this roll is appropriate for — one or more character IDs, each with a real challenge_rating recorded."}
+				}
+			}`),
+		},
+		{
+			Name:        "add_currency",
+			Description: "Add copper/silver/gold/platinum to a character's inventory from nothing — place a generate_loot result onto a specific NPC at prep time, or directly reward a character narratively (e.g. \"you find a coin purse\"). No PvP gate — this only ever creates currency, never takes it from anyone.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id"],
+				"properties": {
+					"character_id": {"type": "string"},
+					"copper": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"silver": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"gold": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"platinum": {"type": "integer", "description": "Defaults to 0 if omitted."}
+				}
+			}`),
+		},
+		{
+			Name:        "transfer_currency",
+			Description: "Move copper/silver/gold/platinum from one character's inventory into another's — looting a corpse's coin after combat, or a trade between characters. Fails if the source doesn't carry enough of a requested denomination (this does not make change across denominations). Taking currency away FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy and may be rejected.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "target_character_id"],
+				"properties": {
+					"character_id": {"type": "string", "description": "The character the currency is coming from."},
+					"target_character_id": {"type": "string", "description": "The receiving character's ID."},
+					"copper": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"silver": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"gold": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"platinum": {"type": "integer", "description": "Defaults to 0 if omitted."}
+				}
+			}`),
+		},
+		{
 			Name:        "get_available_actions",
 			Description: "Get the real, engine-computed list of everything a character can legally do right now — every equipped-weapon attack option (melee, ranged, and an off-hand/secondary weapon), Grapple and Shove options, and every currently-castable prepared/known spell, each against every other character currently in this campaign's active combat. Call this before improvising what a character can do in combat, or before choosing melee_attack/ranged_attack/cast_spell when you're not certain what's actually legal — it tells you exactly which option is real, so you never have to guess or narrate around a mechanical limitation (a melee-only weapon fired at range, a spell with no slots left, no free hand to grapple). If the character cannot act at all this turn (e.g. Paralyzed), can_act will be false with a real reason — narrate that, don't invent an action for them.",
 			Parameters: json.RawMessage(`{
@@ -350,6 +392,12 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmDiscardItem(ctx, campaignID, call.Arguments)
 	case "give_item":
 		return s.dmGiveItem(ctx, campaignID, actingSenderID, call.Arguments)
+	case "generate_loot":
+		return s.dmGenerateLoot(ctx, campaignID, call.Arguments)
+	case "add_currency":
+		return s.dmAddCurrency(ctx, campaignID, call.Arguments)
+	case "transfer_currency":
+		return s.dmTransferCurrency(ctx, campaignID, actingSenderID, call.Arguments)
 	case "get_available_actions":
 		return s.dmGetAvailableActions(ctx, campaignID, call.Arguments)
 	case "get_character_status":
@@ -1372,6 +1420,218 @@ func (s *Server) dmGiveItem(ctx context.Context, campaignID, actingSenderID stri
 	}
 
 	payload, err := json.Marshal(map[string]any{"given": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmGenerateLoot rolls CR-appropriate treasure for a roster of
+// characters (design doc §8, §9: combining multiple creatures' CRs into
+// one group-appropriate roll is real system-engine math, never computed
+// here — see CLAUDE.md's system-engine boundary rule). Read-only: no
+// character is mutated or persisted by this call, since it only
+// produces a bundle for the DM to place via add_currency/receive_item/
+// equip_item afterward.
+func (s *Server) dmGenerateLoot(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterIDs []string `json:"character_ids"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if len(args.CharacterIDs) == 0 {
+		return "character_ids is required and must not be empty", false, "invalid_arguments"
+	}
+
+	participants := make([]*systemenginepb.Actor, 0, len(args.CharacterIDs))
+	for _, characterID := range args.CharacterIDs {
+		character, err := s.campaignCharacter(ctx, campaignID, characterID)
+		if err != nil {
+			return err.Error(), false, "character_not_found"
+		}
+		characterData := &structpb.Struct{}
+		if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+			return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+		}
+		participants = append(participants, &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion})
+	}
+
+	resp, err := s.systemEngine.GenerateLoot(ctx, &systemenginepb.GenerateLootRequest{
+		RequestId:    "dm-tool-" + participants[0].ActorId,
+		CampaignId:   campaignID,
+		Participants: participants,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "generate_loot_failed"
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"copper":   resp.Copper,
+		"silver":   resp.Silver,
+		"gold":     resp.Gold,
+		"platinum": resp.Platinum,
+		"item":     resp.ItemName,
+		"message":  resp.ResultMessage,
+	})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmAddCurrency places currency onto a character's inventory from
+// nothing (a generate_loot placement, or a direct narrative reward). No
+// PvP gate — same reasoning dmReceiveItem already has none.
+func (s *Server) dmAddCurrency(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+		Copper      int32  `json:"copper"`
+		Silver      int32  `json:"silver"`
+		Gold        int32  `json:"gold"`
+		Platinum    int32  `json:"platinum"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.AddCurrency(ctx, &systemenginepb.AddCurrencyRequest{
+		RequestId:  "dm-tool-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		Copper:     args.Copper,
+		Silver:     args.Silver,
+		Gold:       args.Gold,
+		Platinum:   args.Platinum,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "add_currency_failed"
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"added": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmTransferCurrency moves currency from one character's inventory into
+// another's — mirrors dmGiveItem's exact shape, including running the
+// PvP gate before calling the engine (a currency transfer has the same
+// "no meaningful half-state" reasoning an item transfer does).
+func (s *Server) dmTransferCurrency(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID       string `json:"character_id"`
+		TargetCharacterID string `json:"target_character_id"`
+		Copper            int32  `json:"copper"`
+		Silver            int32  `json:"silver"`
+		Gold              int32  `json:"gold"`
+		Platinum          int32  `json:"platinum"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+	if args.TargetCharacterID == "" {
+		return "target_character_id is required", false, "invalid_arguments"
+	}
+
+	source, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	sourceData := &structpb.Struct{}
+	if err := protojson.Unmarshal(source.CharacterData, sourceData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	target, err := s.campaignCharacter(ctx, campaignID, args.TargetCharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	targetData := &structpb.Struct{}
+	if err := protojson.Unmarshal(target.CharacterData, targetData); err != nil {
+		return fmt.Sprintf("parsing stored target data: %v", err), false, "internal_error"
+	}
+
+	// PvP gate (design doc §9.1) — see dmGiveItem's own doc comment for
+	// why this runs before calling the engine, not post-hoc.
+	if source.OwnerID != "" && source.OwnerID != masterSenderID && source.OwnerID != actingSenderID {
+		pol := s.campaignPolicy(ctx, campaignID)
+		switch pol.PvPPolicy {
+		case policy.PvPPolicyAllowed:
+			// proceed
+		case policy.PvPPolicyWithConsent:
+			if !slices.Contains(pol.PvPConsent, source.OwnerID) {
+				return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), false, "pvp_no_consent"
+			}
+		default:
+			return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take currency from another player's character (%s)", source.OwnerID), false, "pvp_blocked"
+		}
+	}
+
+	resp, err := s.systemEngine.TransferCurrency(ctx, &systemenginepb.TransferCurrencyRequest{
+		RequestId:  "dm-tool-" + source.ID,
+		CampaignId: campaignID,
+		Source:     &systemenginepb.Actor{ActorId: source.ID, CharacterData: sourceData, SchemaVersion: source.SchemaVersion},
+		Target:     &systemenginepb.Actor{ActorId: target.ID, CharacterData: targetData, SchemaVersion: target.SchemaVersion},
+		Copper:     args.Copper,
+		Silver:     args.Silver,
+		Gold:       args.Gold,
+		Platinum:   args.Platinum,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "transfer_currency_failed"
+	}
+
+	newSourceData, err := protojson.Marshal(resp.Source.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	source.CharacterData = newSourceData
+	source.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, source); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	newTargetData, err := protojson.Marshal(resp.Target.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated target data: %v", err), false, "internal_error"
+	}
+	target.CharacterData = newTargetData
+	target.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, target); err != nil {
+		return fmt.Sprintf("saving updated target: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"transferred": true, "message": resp.ResultMessage})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
 	}

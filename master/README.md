@@ -691,6 +691,81 @@ in `master/internal/server/inventory_test.go` (success/persistence,
 engine-rejection, invalid-slot rejection, and a 4-case `give_item`
 PvP-gate table mirroring `grapple`/`shove`'s own).
 
+**New**: three DM tools — `generate_loot`, `add_currency`,
+`transfer_currency` — close the next deferred piece from that same pass:
+combat loot. `ILootGenerator`/`StandardLootGenerator` existed
+engine-side but were fully unconnected to anything; this wires them up,
+plus real currency, for the first time. You corrected the intended
+timing directly: as a DM, you generate treasure *before* an encounter,
+not after — "it didn't make sense for a wizard enemy to not use the
+wand of magic missiles he had in a fight." So `generate_loot` runs at
+encounter-prep time against a not-yet-fought roster (typically right
+after `create_npc`-ing the monsters), and the DM places pieces of the
+result directly onto specific NPCs with `add_currency`/`receive_item`/
+`equip_item` — the wand goes on the wizard, not a random guard — so
+they can actually carry and use what they're holding when the fight
+starts. Post-combat looting is then just moving whatever's genuinely
+left in a dead NPC's own inventory: `give_item` (already built) for
+items, and the new `transfer_currency` for coin.
+
+You also asked specifically that combining multiple defeated creatures'
+challenge ratings into one group-appropriate loot roll (your example:
+an evil high priest, three acolytes, and ten guards) be computed by the
+*system engine*, not by Master — "if the game engine can calculate it
+from the enemies, I'd prefer that over anything outside the engine,
+because someone might want a Vampire: Masquerade engine." That's the
+same boundary CLAUDE.md already draws (§6.1): `generate_loot` sends
+Master's real `Actor` records straight through to the engine's new
+`GenerateLoot` RPC, and the CR→XP-budget math happens entirely on that
+side, in a new `IEncounterChallengeCalculator`/
+`StandardEncounterChallengeCalculator` — Master never computes or holds
+a raw CR number itself. Every named character needs a real
+`challenge_rating` on its record (authored at `create_npc` time, same
+as every other stat) or the call is rejected — never an invented
+default. `transfer_currency` gets `give_item`'s exact PvP-gate shape
+(checked before calling the engine, keyed on the giving character's
+owner, not the recipient's); `generate_loot`/`add_currency` get no
+extra gate, same latitude every other DM tool has.
+
+**Verified live** against a real sidecar, Master, and `qwen3.8:27b`,
+with two honest asterisks. First: Open5e's item catalog still failed
+to populate at sidecar startup even though Open5e itself was reachable
+again by this pass — a real, live-observed instance of the exact gap
+OpenCombatEngine's own README/RELEASE_NOTES already flag (no local
+cache for the larger, uncached weapons/armor/magic-item fetch yet, so
+it hit the sidecar's 15-second timeout) — so `generate_loot`'s item
+slot and `receive_item`/`equip_item` against a real catalog item
+weren't exercised this pass either. What *did* work end to end, with
+zero item-library dependency: the DM created a real CR-0.25 goblin NPC
+via `create_npc`, called `generate_loot` against it, and got back real
+dice-rolled coin (2800 copper, 1800 silver, 80 gold, all within
+`StandardLootGenerator`'s own Tier-1 ranges), then called `add_currency`
+to place 80 gold directly into the goblin's own inventory before the
+fight — narrated correctly from the real tool results throughout,
+including the DM's own reasonable call to track the rest as party loot
+rather than dump it all on one goblin (no even-split algorithm exists
+or was expected to — same "left to DM narrative judgment" precedent
+`give_item`'s own distribution already relies on). Second asterisk:
+post-combat looting (`give_item`/`transfer_currency`) wasn't exercised
+live this pass, for a live-test-harness limitation rather than a
+product one — the scratch script had no way to hand the DM the real ID
+`create_npc` had generated for the goblin in a later, separate
+narrative turn, and the DM correctly asked for it rather than guessing
+one to call `transfer_currency` with. That's the "gates over prompting"
+never-invent-an-identifier principle actually holding, live, not a
+defect — `transfer_currency`'s own mechanics (a real transfer between
+two inventories, and a real rejection when source can't afford the
+amount) are proven instead by its deterministic test suite on both
+sides.
+
+Off-site possessions (mounts, stashes), land holdings, death/
+inheritance distribution when a party doesn't resurrect a fallen
+character, and a buy/sell/vendor economy remain real, named,
+deliberately deferred follow-ons — see
+[`docs/design.md`](../docs/design.md) for where a future pass should
+pick this up; `IItem.Value` still has no reader anywhere, and no
+location/world-state concept exists outside an active combat grid.
+
 The rest of §9 (§9.4's review panel, §9.6 spotlight balance, §9.7
 knowledge scoping) is still to come — see
 [`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.

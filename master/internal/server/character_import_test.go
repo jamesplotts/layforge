@@ -166,6 +166,26 @@ type fakeSystemEngineClient struct {
 	// call's request, for asserting on what Server actually sent the
 	// engine.
 	lastTransferItemRequest *systemenginepb.TransferItemRequest
+
+	generateLootResp *systemenginepb.GenerateLootResponse
+	generateLootErr  error
+	// lastGenerateLootRequest captures the most recent GenerateLoot()
+	// call's request, for asserting on what Server actually sent the
+	// engine.
+	lastGenerateLootRequest *systemenginepb.GenerateLootRequest
+
+	addCurrencyResp *systemenginepb.AddCurrencyResponse
+	addCurrencyErr  error
+	// lastAddCurrencyRequest captures the most recent AddCurrency() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastAddCurrencyRequest *systemenginepb.AddCurrencyRequest
+
+	transferCurrencyResp *systemenginepb.TransferCurrencyResponse
+	transferCurrencyErr  error
+	// lastTransferCurrencyRequest captures the most recent
+	// TransferCurrency() call's request, for asserting on what Server
+	// actually sent the engine.
+	lastTransferCurrencyRequest *systemenginepb.TransferCurrencyRequest
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -272,6 +292,30 @@ func (f *fakeSystemEngineClient) TransferItem(_ context.Context, in *systemengin
 		return nil, f.transferItemErr
 	}
 	return f.transferItemResp, nil
+}
+
+func (f *fakeSystemEngineClient) GenerateLoot(_ context.Context, in *systemenginepb.GenerateLootRequest, _ ...grpc.CallOption) (*systemenginepb.GenerateLootResponse, error) {
+	f.lastGenerateLootRequest = in
+	if f.generateLootErr != nil {
+		return nil, f.generateLootErr
+	}
+	return f.generateLootResp, nil
+}
+
+func (f *fakeSystemEngineClient) AddCurrency(_ context.Context, in *systemenginepb.AddCurrencyRequest, _ ...grpc.CallOption) (*systemenginepb.AddCurrencyResponse, error) {
+	f.lastAddCurrencyRequest = in
+	if f.addCurrencyErr != nil {
+		return nil, f.addCurrencyErr
+	}
+	return f.addCurrencyResp, nil
+}
+
+func (f *fakeSystemEngineClient) TransferCurrency(_ context.Context, in *systemenginepb.TransferCurrencyRequest, _ ...grpc.CallOption) (*systemenginepb.TransferCurrencyResponse, error) {
+	f.lastTransferCurrencyRequest = in
+	if f.transferCurrencyErr != nil {
+		return nil, f.transferCurrencyErr
+	}
+	return f.transferCurrencyResp, nil
 }
 
 func (f *fakeSystemEngineClient) GetAvailableActions(_ context.Context, in *systemenginepb.GetAvailableActionsRequest, _ ...grpc.CallOption) (*systemenginepb.GetAvailableActionsResponse, error) {
