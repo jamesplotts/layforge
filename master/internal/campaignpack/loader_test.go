@@ -154,6 +154,25 @@ func TestLoadPack_MalformedLocationFrontMatter_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestLoadPack_NoNPCsOrEncountersDirectories_ReturnsEmptySlicesNotError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "campaign.md"), "---\nid: test\ntitle: Test\n---\nOverview.\n")
+
+	pack, err := campaignpack.LoadPack(dir)
+	if err != nil {
+		t.Fatalf("LoadPack() error = %v, want nil (npcs/encounters directories are optional)", err)
+	}
+	if len(pack.NPCs) != 0 {
+		t.Errorf("NPCs = %v, want empty", pack.NPCs)
+	}
+	if len(pack.Encounters) != 0 {
+		t.Errorf("Encounters = %v, want empty", pack.Encounters)
+	}
+	if len(pack.Locations) != 0 {
+		t.Errorf("Locations = %v, want empty", pack.Locations)
+	}
+}
+
 func TestLoadPack_LocationMissingID_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "campaign.md"), "---\nid: test\ntitle: Test\n---\nOverview.\n")

@@ -128,17 +128,18 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 	if s.imageGen != nil {
 		tools = append(tools, imageGenTool())
 	}
-	// Unlike imageGen, location tools stay behind the same system-engine
-	// gate as dmTools(): stash_item/stash_currency/retrieve_item/
-	// retrieve_currency call real engine RPCs (RemoveItemFromInventory/
-	// RemoveCurrency/AddItemToInventory/AddCurrency), so a "no system
-	// engine, only campaignPack" deployment would still get an
-	// inconsistent mix of working (list_locations/travel_to/
+	// Unlike imageGen, campaign-pack tools stay behind the same
+	// system-engine gate as dmTools(): stash_item/stash_currency/
+	// retrieve_item/retrieve_currency call real engine RPCs
+	// (RemoveItemFromInventory/RemoveCurrency/AddItemToInventory/
+	// AddCurrency), so a "no system engine, only campaignPack"
+	// deployment would still get an inconsistent mix of working
+	// (list_locations/list_npcs/list_encounters/travel_to/
 	// claim_location) and always-failing tools — more confusing than
 	// omitting the whole category, the same reasoning dmTools() itself
 	// already applies wholesale.
 	if s.systemEngine != nil && s.characters != nil && s.campaignPack != nil {
-		tools = append(tools, locationTools()...)
+		tools = append(tools, campaignPackTools()...)
 	}
 
 	var finalText string

@@ -20,19 +20,30 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
 
-// locationTools returns the DM tools built on a bound campaign pack
-// (design doc §6.4) — location tracking, travel, and off-site
-// possessions (stashed items/currency, land holdings). Offered
-// alongside dmTools() under the same system-engine gate (see the call
-// site in dm_slow_pass.go) — half of these tools call real engine RPCs
+// campaignPackTools returns the DM tools built on a bound campaign pack
+// (design doc §6.4) — location tracking, travel, off-site possessions
+// (stashed items/currency, land holdings), and read access to the
+// pack's own NPCs/encounters. Offered alongside dmTools() under the
+// same system-engine gate (see the call site in dm_slow_pass.go) —
+// several of these tools call real engine RPCs
 // (RemoveItemFromInventory/RemoveCurrency/AddItemToInventory/
 // AddCurrency), so gating the category as a whole avoids a confusing
 // mix of working and always-failing tools.
-func locationTools() []llm.Tool {
+func campaignPackTools() []llm.Tool {
 	return []llm.Tool{
 		{
 			Name:        "list_locations",
 			Description: "Get the real, full list of every location in this campaign's bound pack — id, which other locations it connects to, whether the party has discovered it, and whether the party has claimed it as a land holding. Call this before narrating what's reachable from here, or before travel_to, so you're describing the real map, not inventing one.",
+			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
+		},
+		{
+			Name:        "list_npcs",
+			Description: "Get the real, full list of every NPC pre-authored in this campaign's bound pack — id, home location, a reference stat block to build them from (e.g. \"SRD Veteran\") if you need to create_npc a mechanical record for them, and their real voice/personality notes. Call this before inventing an NPC on the spot for a location you're narrating — check whether one already exists here first.",
+			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
+		},
+		{
+			Name:        "list_encounters",
+			Description: "Get the real, full list of every pre-authored encounter in this campaign's bound pack — id, the location it's set at, which pre-authored NPCs it involves, and its full real setup/trigger text (checks, conditions, what happens). Call this when the party reaches a location that might have one, so you run what was actually authored rather than improvising a generic fight.",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
 		{
@@ -205,6 +216,63 @@ func (s *Server) dmListLocations(ctx context.Context, campaignID string) (string
 	}
 
 	payload, err := json.Marshal(map[string]any{"party_location": partyLocation, "locations": locations})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmListNPCs returns the bound pack's real, full NPC roster — read-only,
+// no store lookups beyond loadBoundPack: NPCs have no mutable per-
+// campaign state of their own the way locations do (no discovered/
+// claimed equivalent), so this is a direct pass-through of what
+// LoadPack parsed.
+func (s *Server) dmListNPCs(ctx context.Context, campaignID string) (string, bool, string) {
+	pack, err := s.loadBoundPack(ctx, campaignID)
+	if err != nil {
+		return err.Error(), false, "no_campaign_pack"
+	}
+
+	npcs := make([]map[string]any, 0, len(pack.NPCs))
+	for _, npc := range pack.NPCs {
+		npcs = append(npcs, map[string]any{
+			"id":             npc.ID,
+			"location":       npc.Location,
+			"stat_block_ref": npc.StatBlockRef,
+			"voice":          npc.Voice,
+			"description":    npc.Body,
+		})
+	}
+
+	payload, err := json.Marshal(map[string]any{"npcs": npcs})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmListEncounters returns the bound pack's real, full encounter
+// roster — read-only, same reasoning as dmListNPCs: encounters carry no
+// mutable per-campaign state in this pass (whether one has already
+// fired is left to the DM's own judgment/campaign notes, not tracked
+// mechanically here).
+func (s *Server) dmListEncounters(ctx context.Context, campaignID string) (string, bool, string) {
+	pack, err := s.loadBoundPack(ctx, campaignID)
+	if err != nil {
+		return err.Error(), false, "no_campaign_pack"
+	}
+
+	encounters := make([]map[string]any, 0, len(pack.Encounters))
+	for _, enc := range pack.Encounters {
+		encounters = append(encounters, map[string]any{
+			"id":          enc.ID,
+			"location":    enc.Location,
+			"involves":    enc.Involves,
+			"description": enc.Body,
+		})
+	}
+
+	payload, err := json.Marshal(map[string]any{"encounters": encounters})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
 	}

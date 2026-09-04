@@ -474,6 +474,10 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmVendorBuyItem(ctx, campaignID, actingSenderID, call.Arguments)
 	case "list_locations":
 		return s.dmListLocations(ctx, campaignID)
+	case "list_npcs":
+		return s.dmListNPCs(ctx, campaignID)
+	case "list_encounters":
+		return s.dmListEncounters(ctx, campaignID)
 	case "travel_to":
 		return s.dmTravelTo(ctx, campaignID, call.Arguments)
 	case "stash_item":

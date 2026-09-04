@@ -1025,6 +1025,35 @@ effect) is covered by `CampaignPackPolicyProvider`'s own deterministic
 tests instead, which read the real `pve_only` value out of the real
 committed `campaign.md` file.
 
+**New**: `list_npcs` and `list_encounters` — the campaign-pack loader
+above parsed `npcs/*.md`/`encounters/*.md` from day one, but nothing
+read `Pack.NPCs`/`Pack.Encounters` until now, the same "real reader
+finally exists" shape as `IItem.Value` before the vendor-economy pass.
+Both are read-only, full-enumeration DM tools (`campaignPackTools()`,
+renamed from `locationTools()` now that it covers more than location
+mechanics) — id, home location, a `stat_block_ref` hint for `create_npc`
+to build a mechanical record from, and real voice/personality text for
+NPCs; id, location, involved NPCs, and the full real setup/trigger text
+for encounters (the actual DC checks and branching, not a summary) —
+so the DM checks what was pre-authored before improvising a generic
+NPC or fight from nothing. Neither carries mutable per-campaign state
+of its own (no discovered/claimed equivalent) — a direct pass-through
+of whatever `LoadPack` parsed, gated the same "no campaign pack bound"
+way every other campaign-pack tool already is.
+
+**Verified live**: real sidecar + Master + `qwen3.8:27b`, the real
+`sable-ravine` pack bound. `list_npcs` correctly narrated all four real
+NPCs (Captain Orlen Vashti, First Digger Nix, Goblin Chief Skreel, the
+Hollow Flame) with real voice/personality detail, not invented ones.
+`list_encounters` — asked in the same session — called
+`list_encounters` *and* `list_npcs` *and* `list_locations` together
+unprompted to build one coherent briefing, correctly citing the real
+DC 13 Wisdom ambush check, the parley-or-raid branch at the goblin
+camp, the two captive scouts, the kobolds' information-for-safety
+trade, and the shrine's two-layer guardian/Hollow-Flame structure —
+all pulled from the real committed encounter/NPC text, not
+paraphrased summaries.
+
 **Verified live**: the admin API round-trip above (create a named
 campaign, list it back with real defaults, archive it, confirm a player
 can still join) ran against a real Master process with a real

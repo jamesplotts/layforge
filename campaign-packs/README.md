@@ -32,7 +32,11 @@ accepted. Once bound, the DM gets real `list_locations`/`travel_to`
 tools gated against this pack's own real `connections` graph, plus
 off-site possessions (`stash_item`/`retrieve_item`/`stash_currency`/
 `retrieve_currency`, gated to the party's actual current location) and
-land holdings (`claim_location`). `state.json`'s own mutable fields
+land holdings (`claim_location`) — and now `list_npcs`/`list_encounters`
+too, so the DM checks this pack's real, pre-authored NPCs and set-piece
+encounters (Captain Orlen Vashti, the goblin-camp parley-or-raid
+branch, the shrine's guardian) before improvising generic ones from
+nothing. `state.json`'s own mutable fields
 (`discovered_locations`, party location) are tracked in Master's SQLite
 store instead of this file, which stays what it always was: the
 starting shape, not something read or written at runtime.
