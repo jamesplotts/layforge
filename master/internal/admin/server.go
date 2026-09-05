@@ -5,6 +5,8 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +17,8 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/campaignpack"
 	"github.com/jamesplotts/layforge/master/internal/policy"
+	"github.com/jamesplotts/layforge/master/internal/protocol"
+	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
 )
 
@@ -60,7 +64,19 @@ type Server struct {
 	// Pregens tab's endpoints reject with a real "not configured" error,
 	// the same nil-disables-the-feature pattern as campaignPack.
 	pregens store.PregenStore
-	webDir  string
+	// characters persists uploaded/imported characters (design doc §9.4)
+	// — nil means the Character Review tab's endpoints reject with a
+	// real "not configured" error, same as pregens.
+	characters store.CharacterStore
+	// hub is the same connection registry package server's live /ws
+	// listener uses, shared via main.go so an admin approve/reject
+	// action can push character.review_result to a live player
+	// immediately (handleReviewCharacter) rather than only updating the
+	// database. nil means that push is silently skipped — the status
+	// still changes, the player just finds out on their next
+	// character.get/reconnect instead of live.
+	hub    *session.Hub
+	webDir string
 	// origin is this admin listener's own "scheme://host:port", used by
 	// requireSameOrigin to reject a mutating request whose Origin/Referer
 	// header names a different origin — see that method's doc comment.
@@ -84,12 +100,14 @@ type Server struct {
 // with; a key GetSystemSettings has never stored an override for falls
 // back to this map (see handleGetSystem). restartRequested is the
 // send-only end of a channel main.go's run() selects on.
-func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}) *Server {
+func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, characters store.CharacterStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}, hub *session.Hub) *Server {
 	return &Server{
 		logger:           logger,
 		store:            s,
 		campaignPack:     campaignPack,
 		pregens:          pregens,
+		characters:       characters,
+		hub:              hub,
 		webDir:           webDir,
 		origin:           "http://" + addr,
 		systemSeed:       systemSeed,
@@ -116,6 +134,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/campaigns/{id}/pregens", s.handleListPregens)
 	mux.HandleFunc("PUT /api/campaigns/{id}/pregens", s.requireSameOrigin(s.handlePutPregen))
 	mux.HandleFunc("DELETE /api/campaigns/{id}/pregens/{pregenId}", s.requireSameOrigin(s.handleDeletePregen))
+	mux.HandleFunc("GET /api/campaigns/{id}/characters", s.handleListCharacters)
+	mux.HandleFunc("PUT /api/campaigns/{id}/characters/{characterId}/review", s.requireSameOrigin(s.handleReviewCharacter))
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
 	mux.HandleFunc("PUT /api/system", s.requireSameOrigin(s.handlePutSystem))
 	mux.HandleFunc("POST /api/system/restart", s.requireSameOrigin(s.handleRestart))
@@ -163,6 +183,11 @@ type campaignPolicyDTO struct {
 	// means "not set", resolved to 1.0 by
 	// policy.CampaignPolicy.EffectivePriceMultiplier.
 	PriceMultiplier float64 `json:"price_multiplier"`
+	// MinLevel/MaxLevel mirror store.CampaignSettings's own fields of the
+	// same name (design doc §9.4's character-import review flow) — 0 in
+	// either means "no bound in that direction".
+	MinLevel int `json:"min_level"`
+	MaxLevel int `json:"max_level"`
 }
 
 // campaignSecurityDTO is the Security tab's wire shape. An empty
@@ -356,6 +381,8 @@ func (s *Server) handleGetCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		MaturityTierPrompt:      settings.MaturityTierPrompt,
 		ImageMaturityTierPrompt: settings.ImageMaturityTierPrompt,
 		PriceMultiplier:         settings.PriceMultiplier,
+		MinLevel:                settings.MinLevel,
+		MaxLevel:                settings.MaxLevel,
 	})
 }
 
@@ -378,6 +405,14 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		s.writeErrorMsg(w, http.StatusBadRequest, "price_multiplier must not be negative")
 		return
 	}
+	if dto.MinLevel < 0 || dto.MaxLevel < 0 {
+		s.writeErrorMsg(w, http.StatusBadRequest, "min_level/max_level must not be negative")
+		return
+	}
+	if dto.MinLevel > 0 && dto.MaxLevel > 0 && dto.MinLevel > dto.MaxLevel {
+		s.writeErrorMsg(w, http.StatusBadRequest, "min_level must not exceed max_level")
+		return
+	}
 
 	current, _, err := s.store.GetCampaignSettings(r.Context(), id)
 	if err != nil {
@@ -389,6 +424,8 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 	current.MaturityTierPrompt = dto.MaturityTierPrompt
 	current.ImageMaturityTierPrompt = dto.ImageMaturityTierPrompt
 	current.PriceMultiplier = dto.PriceMultiplier
+	current.MinLevel = dto.MinLevel
+	current.MaxLevel = dto.MaxLevel
 	if err := s.store.SaveCampaignSettings(r.Context(), id, current); err != nil {
 		s.writeError(w, err)
 		return
@@ -557,6 +594,139 @@ func (s *Server) handleDeletePregen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// characterDTO is the Character Review tab's wire shape — every
+// character store.CharacterStore.ListCharacters returns for a campaign,
+// player-owned and NPC alike (the admin-web UI is responsible for
+// filtering/grouping by Status; this handler doesn't second-guess that).
+type characterDTO struct {
+	ID            string          `json:"id"`
+	OwnerID       string          `json:"owner_id"`
+	Status        string          `json:"status"`
+	SchemaVersion string          `json:"schema_version"`
+	CharacterJSON json.RawMessage `json:"character_json"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+// characterReviewRequestDTO is handleReviewCharacter's request body — a
+// Host's approve/reject decision (design doc §9.4's character-import
+// veto).
+type characterReviewRequestDTO struct {
+	// Status must be "approved" or "rejected" — never "pending_review",
+	// since submitting a review is what concludes one, not what resets a
+	// character back into the queue.
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+func (s *Server) handleListCharacters(w http.ResponseWriter, r *http.Request) {
+	if s.characters == nil {
+		s.writeJSON(w, http.StatusOK, []characterDTO{})
+		return
+	}
+	characters, err := s.characters.ListCharacters(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	dtos := make([]characterDTO, len(characters))
+	for i, c := range characters {
+		dtos[i] = characterDTO{
+			ID: c.ID, OwnerID: c.OwnerID, Status: string(c.Status),
+			SchemaVersion: c.SchemaVersion, CharacterJSON: c.CharacterData, CreatedAt: c.CreatedAt,
+		}
+	}
+	s.writeJSON(w, http.StatusOK, dtos)
+}
+
+// handleReviewCharacter is the Host's veto/approval endpoint (design doc
+// §9.4): sets characterId's Status to the Host's decision and, when a
+// live hub is configured, pushes character.review_result straight to
+// that character's own owner (sendToSender-equivalent — see hub's own
+// doc comment on *Server) so a connected player finds out immediately,
+// not just on their next reconnect. A Host decision always overrides
+// whatever the automatic post-upload review pass (internal/server/
+// character_review.go) already decided — the Host is this system's
+// final authority, nothing here checks or defers to that prior status.
+func (s *Server) handleReviewCharacter(w http.ResponseWriter, r *http.Request) {
+	if s.characters == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "characters are not configured on this Master")
+		return
+	}
+	campaignID := r.PathValue("id")
+	characterID := r.PathValue("characterId")
+
+	var dto characterReviewRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	status := store.CharacterStatus(dto.Status)
+	if !status.IsValid() || status == store.CharacterStatusPendingReview {
+		s.writeErrorMsg(w, http.StatusBadRequest, "status must be \"approved\" or \"rejected\"")
+		return
+	}
+
+	character, err := s.characters.GetCharacter(r.Context(), characterID)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	if character.CampaignID != campaignID {
+		s.writeErrorMsg(w, http.StatusNotFound, "character does not belong to this campaign")
+		return
+	}
+
+	character.Status = status
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(r.Context(), character); err != nil {
+		s.writeError(w, err)
+		return
+	}
+
+	if s.hub != nil && character.OwnerID != "" {
+		msg, err := newReviewResultMessage(campaignID, protocol.CharacterReviewResultPayload{
+			CharacterID: character.ID,
+			Status:      string(status),
+			Reason:      dto.Reason,
+		})
+		if err != nil {
+			s.logger.Warn("failed to build character.review_result", "error", err, "character_id", character.ID)
+		} else if payload, err := json.Marshal(msg); err != nil {
+			s.logger.Warn("failed to marshal character.review_result", "error", err, "character_id", character.ID)
+		} else {
+			s.hub.SendToSender(campaignID, character.OwnerID, payload)
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, characterDTO{
+		ID: character.ID, OwnerID: character.OwnerID, Status: string(character.Status),
+		SchemaVersion: character.SchemaVersion, CharacterJSON: character.CharacterData, CreatedAt: character.CreatedAt,
+	})
+}
+
+// newReviewResultMessage builds a character.review_result Message —
+// package server's own newMessage helper isn't exported, and this is
+// the only message package admin ever originates, so a small
+// self-contained builder here is simpler than exporting a shared one
+// for a single caller.
+func newReviewResultMessage(campaignID string, payload protocol.CharacterReviewResultPayload) (protocol.Message[protocol.CharacterReviewResultPayload], error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return protocol.Message[protocol.CharacterReviewResultPayload]{}, errors.New("admin: generating message id failed")
+	}
+	return protocol.Message[protocol.CharacterReviewResultPayload]{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       hex.EncodeToString(b[:]),
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "master",
+			CampaignID:      campaignID,
+			Type:            protocol.MessageTypeCharacterReviewResult,
+		},
+		Payload: payload,
+	}, nil
 }
 
 func (s *Server) handleGetSystem(w http.ResponseWriter, r *http.Request) {

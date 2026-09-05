@@ -20,6 +20,7 @@
     <button class="tab-button active" data-tab="campaign" type="button" role="tab">Campaign</button>
     <button class="tab-button" data-tab="security" type="button" role="tab">Security</button>
     <button class="tab-button" data-tab="pregens" type="button" role="tab">Pregens</button>
+    <button class="tab-button" data-tab="characters" type="button" role="tab">Character Review</button>
     <button class="tab-button" data-tab="system" type="button" role="tab">System</button>
   </nav>
 
@@ -98,6 +99,14 @@
         Price Multiplier (applied to every vendor price on top of the engine-listed base cost; 1.0 = unadjusted)
         <input id="price-multiplier" type="text" inputmode="decimal" placeholder="1.0" />
       </label>
+      <label>
+        Min Level (an imported character below this level is automatically rejected; blank/0 = no lower bound)
+        <input id="min-level" type="text" inputmode="numeric" placeholder="e.g. 1" />
+      </label>
+      <label>
+        Max Level (an imported character above this level is automatically rejected; blank/0 = no upper bound)
+        <input id="max-level" type="text" inputmode="numeric" placeholder="e.g. 5" />
+      </label>
       <button id="campaign-save" type="button">Save</button>
       <span id="campaign-save-status" class="save-status"></span>
 
@@ -167,6 +176,29 @@
           <span id="pregen-save-status" class="save-status"></span>
         </div>
       </details>
+    </section>
+
+    <section class="tab-panel" data-tab="characters" hidden>
+      <p class="panel-hint">
+        Characters a player has imported into this campaign (design doc §9.4) — Master's own
+        automatic review (a deterministic campaign level-range check, then the DM AI's own
+        balance judgment) already ran on each of these; approving or rejecting here always
+        overrides that outcome, and a connected player is notified immediately either way.
+        Quick/detailed-rolled characters and claimed pregens never appear here — they're
+        already trusted (engine-generated or Host-authored), not subject to review.
+      </p>
+      <table id="character-table" class="campaign-table">
+        <thead>
+          <tr>
+            <th>Owner</th>
+            <th>Status</th>
+            <th>Character</th>
+            <th></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="character-table-body"></tbody>
+      </table>
     </section>
 
     <section class="tab-panel" data-tab="system" hidden>

@@ -295,6 +295,35 @@ type CharacterValidationResultPayload struct {
 // Message.
 type CharacterValidationResultMessage = Message[CharacterValidationResultPayload]
 
+// CharacterReviewResultPayload is the payload of a
+// character.review_result message: the outcome of the character-import
+// review flow (design doc §9.4) — either the automatic post-upload pass
+// (a deterministic campaign level-range check, then the DM AI's own
+// balance judgment via the review_character tool — see
+// internal/server/character_review.go) or a later Host decision made
+// through the admin panel. Sent only to the character's own
+// owner (sendToSender), never broadcast — this is a private outcome
+// between Master and that one player, not table-facing narrative
+// content. Distinct from character.validation_result: that message
+// means "your upload parsed and was saved as pending review"; this one
+// means "a review of that saved character has now concluded."
+type CharacterReviewResultPayload struct {
+	CharacterID string `json:"character_id"`
+	// Status is store.CharacterStatusApproved or
+	// store.CharacterStatusRejected — review_result is never sent for
+	// CharacterStatusPendingReview, since that's not a concluded review.
+	Status string `json:"status"`
+	// Reason is a short, human-readable explanation — the deterministic
+	// level-range gate's own plain-text message, the DM AI's stated
+	// reason from its review_character tool call, or whatever the Host
+	// typed into the admin panel. Empty when nobody supplied one (e.g. a
+	// bare Host approval with no comment).
+	Reason string `json:"reason,omitempty"`
+}
+
+// CharacterReviewResultMessage is a character.review_result Message.
+type CharacterReviewResultMessage = Message[CharacterReviewResultPayload]
+
 // RollCheckRequestPayload is the payload of a roll.check_request message:
 // a player asking Master to resolve a mechanical check for a character
 // they own (design doc §9.4's OwnerID gates this — see
@@ -473,6 +502,12 @@ type CharacterCreationPromptPayload struct {
 	SessionID  string   `json:"session_id"`
 	PromptText string   `json:"prompt_text"`
 	Choices    []string `json:"choices,omitempty"`
+	// AcceptsFileUpload is set only on the "import" sub-flow's free-text
+	// prompt (Choices empty) — it tells the client to offer a file picker
+	// alongside the plain textarea, since this specific free-text prompt
+	// expects pasted/uploaded character JSON, unlike the roll flow's own
+	// free-text prompt (gender), which never sets this.
+	AcceptsFileUpload bool `json:"accepts_file_upload,omitempty"`
 }
 
 // CharacterCreationPromptMessage is a character.creation_prompt Message.
@@ -531,10 +566,11 @@ type NarrativeDmProseMessage = Message[NarrativeDmProsePayload]
 
 // ToolResultPayload is the payload of a tool.result message: broadcast
 // of a completed DM tool-use call, for transparency/logging (design doc
-// §8). Governance-gate rejections (design doc §9) would surface here as
-// Success=false — no governance-gate engine exists yet beyond
-// safety.flag, so today Success=false only ever means the call itself
-// failed (bad arguments, an engine error), never a policy rejection. See
+// §8). Governance-gate rejections (design doc §9) surface here as
+// Success=false with a real ReasonCode — e.g. "pvp_blocked"/
+// "pvp_no_consent" (§9.1's PvP policy, dmApplyEffect) and
+// "character_not_approved" (§9.4's character-import review flow,
+// characterMayAct in dm_tools.go) — never silently narrated around. See
 // protocol/asyncapi.yaml components.messages.ToolResult.
 type ToolResultPayload struct {
 	ToolName string `json:"tool_name"`
@@ -544,7 +580,8 @@ type ToolResultPayload struct {
 	Caller  string `json:"caller"`
 	Success bool   `json:"success"`
 	// ReasonCode is set on failure, e.g. "invalid_arguments",
-	// "character_not_found", "engine_error".
+	// "character_not_found", "engine_error", "pvp_blocked",
+	// "character_not_approved".
 	ReasonCode string `json:"reason_code,omitempty"`
 }
 

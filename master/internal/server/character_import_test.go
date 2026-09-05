@@ -21,6 +21,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/server"
+	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
@@ -473,7 +474,7 @@ func newTestServerWithSystemEngine(t *testing.T, fakeEngine *fakeSystemEngineCli
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil, nil, st, st, st, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil, nil, st, st, st, nil, nil, session.NewHub()).Handler())
 	return ts, st
 }
 

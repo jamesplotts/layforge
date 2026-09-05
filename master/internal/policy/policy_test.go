@@ -65,6 +65,34 @@ func TestCampaignPolicy_EffectiveSharedKnowledge(t *testing.T) {
 	}
 }
 
+func TestCampaignPolicy_LevelInRange(t *testing.T) {
+	tests := []struct {
+		name  string
+		p     CampaignPolicy
+		level int
+		want  bool
+	}{
+		{"Unconfigured_AnyLevelInRange", CampaignPolicy{}, 20, true},
+		{"UnknownLevelZero_AlwaysInRange", CampaignPolicy{MinLevel: 3, MaxLevel: 8}, 0, true},
+		{"WithinBothBounds", CampaignPolicy{MinLevel: 3, MaxLevel: 8}, 5, true},
+		{"BelowMinLevel", CampaignPolicy{MinLevel: 3, MaxLevel: 8}, 2, false},
+		{"AboveMaxLevel", CampaignPolicy{MinLevel: 3, MaxLevel: 8}, 9, false},
+		{"AtMinLevel_Inclusive", CampaignPolicy{MinLevel: 3, MaxLevel: 8}, 3, true},
+		{"AtMaxLevel_Inclusive", CampaignPolicy{MinLevel: 3, MaxLevel: 8}, 8, true},
+		{"OnlyMinConfigured_AboveIsFine", CampaignPolicy{MinLevel: 3}, 20, true},
+		{"OnlyMinConfigured_BelowRejected", CampaignPolicy{MinLevel: 3}, 1, false},
+		{"OnlyMaxConfigured_BelowIsFine", CampaignPolicy{MaxLevel: 8}, 1, true},
+		{"OnlyMaxConfigured_AboveRejected", CampaignPolicy{MaxLevel: 8}, 9, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.LevelInRange(tt.level); got != tt.want {
+				t.Errorf("LevelInRange(%d) = %v, want %v", tt.level, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefault_IsPveOnlyWithNoMaturityConstraint(t *testing.T) {
 	got := Default()
 	if got.PvPPolicy != PvPPolicyPveOnly {

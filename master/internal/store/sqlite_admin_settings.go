@@ -17,7 +17,7 @@ var _ AdminSettingsStore = (*SQLiteEventStore)(nil)
 // GetCampaignSettings implements AdminSettingsStore.
 func (s *SQLiteEventStore) GetCampaignSettings(ctx context.Context, campaignID string) (CampaignSettings, bool, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier
+		`SELECT pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, min_level, max_level
 		 FROM campaign_settings
 		 WHERE campaign_id = ?`,
 		campaignID,
@@ -25,7 +25,7 @@ func (s *SQLiteEventStore) GetCampaignSettings(ctx context.Context, campaignID s
 
 	var settings CampaignSettings
 	var pvpConsent string
-	err := row.Scan(&settings.PvPPolicy, &pvpConsent, &settings.MaturityTierPrompt, &settings.ImageMaturityTierPrompt, &settings.RoomPassword, &settings.PriceMultiplier)
+	err := row.Scan(&settings.PvPPolicy, &pvpConsent, &settings.MaturityTierPrompt, &settings.ImageMaturityTierPrompt, &settings.RoomPassword, &settings.PriceMultiplier, &settings.MinLevel, &settings.MaxLevel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CampaignSettings{}, false, nil
 	}
@@ -50,8 +50,8 @@ func (s *SQLiteEventStore) SaveCampaignSettings(ctx context.Context, campaignID 
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO campaign_settings (campaign_id, pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO campaign_settings (campaign_id, pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, min_level, max_level, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (campaign_id) DO UPDATE SET
 			pvp_policy = excluded.pvp_policy,
 			pvp_consent = excluded.pvp_consent,
@@ -59,8 +59,10 @@ func (s *SQLiteEventStore) SaveCampaignSettings(ctx context.Context, campaignID 
 			image_maturity_tier_prompt = excluded.image_maturity_tier_prompt,
 			room_password = excluded.room_password,
 			price_multiplier = excluded.price_multiplier,
+			min_level = excluded.min_level,
+			max_level = excluded.max_level,
 			updated_at = excluded.updated_at`,
-		campaignID, settings.PvPPolicy, string(pvpConsent), settings.MaturityTierPrompt, settings.ImageMaturityTierPrompt, settings.RoomPassword, settings.PriceMultiplier,
+		campaignID, settings.PvPPolicy, string(pvpConsent), settings.MaturityTierPrompt, settings.ImageMaturityTierPrompt, settings.RoomPassword, settings.PriceMultiplier, settings.MinLevel, settings.MaxLevel,
 		time.Now().UTC().Format(occurredAtLayout),
 	)
 	if err != nil {

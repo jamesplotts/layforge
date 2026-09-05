@@ -33,12 +33,8 @@ and calls it for real: `character.upload` sends the uploaded JSON to the
 engine's `FromJson`, persists a successfully-parsed character (via the new
 `internal/store` `CharacterStore`), and answers with
 `character.validation_result` carrying the engine's mechanical warnings
-(design doc §9.4). That's the mechanical half of §9.4 only — the
-human-veto review panel (`pending_review` → `approved`/`rejected`) isn't
-implemented, since it needs a privileged-operator/account concept this
-codebase doesn't have yet (only room-password join auth exists); building
-it without real authorization would violate CLAUDE.md's "gates over
-prompting" rule rather than satisfy it.
+(design doc §9.4). The review/veto half now exists too — see the Host +
+DM AI character-import veto entry further down this file.
 
 Authoritative dice now work too: `roll.check_request` (a player asking to
 roll a check for a character they own — enforced via
@@ -1257,8 +1253,8 @@ only changes connection pooling, not read/write correctness). Both new
 store tables and every new admin API endpoint have their own
 deterministic test coverage in `internal/store` and `internal/admin`.
 
-The rest of §9 (§9.4's review panel) is still to come — see
-[`docs/design.md`](../docs/design.md) §3, §5, and §7–§10.
+§9.4's review panel now exists too — see the Host + DM AI
+character-import veto entry further down this file.
 
 Push-to-talk voice input (design doc §4) now works too: `audio.chunk`
 (the streamed, base64-encoded recording a held mic button uploads) and
@@ -1461,6 +1457,102 @@ despite being answered — traced to `StandardCreature`'s
 `GetState()` had nothing to put back), fixed in OpenCombatEngine with a
 new regression test covering that exact round trip, not just the
 already-passing `CreatureStateJson` one that never exercised this path.
+
+**New**: a real Host + DM AI veto over an imported character (design doc
+§9.4), closing the exact gap `importCharacter`'s own doc comment used to
+flag as needing "a privileged-operator concept Master doesn't have" —
+the admin panel (`internal/admin`, its own separate `127.0.0.1`-only
+listener) already *is* that privileged surface, it just hadn't been
+connected to character review yet. Scoped to the **import** path only —
+quick/detailed-rolled characters and claimed pregens are already
+`Approved` directly, unaffected by any of this.
+
+- The import prompt's chat bubble (`master/web/app.js`'s
+  `creationPromptEl`) now offers a real file picker next to the
+  textarea — `CharacterCreationPromptPayload.AcceptsFileUpload`, a new
+  field Master sets only on that one prompt, tells the client to show
+  it; picking a file reads it client-side (`FileReader`) into the same
+  textarea, so it's still the same `character.creation_answer` on the
+  wire either way.
+- `Actor.level` is a new top-level field on the System Engine gRPC
+  contract (`protocol/system_engine.proto`) — the sum of every class
+  level for a multiclass character (`ILevelManager.TotalLevel` in
+  OpenCombatEngine, already real), populated on every Actor-returning
+  RPC via the same `ActorMapping.ToActor` conversion point the Gender
+  fix above lives in. Exists specifically so Master can know a
+  character's level without parsing `character_data`'s engine-specific
+  shape itself (CLAUDE.md's "no D&D-shortcut inside Master" rule) — a 0
+  means "no class levels reported," never a real level.
+- New `internal/server/character_review.go` runs automatically right
+  after a successful import: a deterministic campaign level-range check
+  first (`policy.CampaignPolicy.MinLevel`/`MaxLevel`, new admin-panel
+  Campaign-tab fields — a pure mechanical fact, no LLM call needed when
+  it fires), then, if that passes and an LLM is configured, the DM AI's
+  own balance judgment via a dedicated `review_character` single-shot
+  tool call — deliberately *not* added to the shared `dmTools()`
+  dispatch switch, since admitting a character isn't an in-play action
+  the model should be able to reach mid-narration. Concludes with a new
+  `character.review_result` message pushed privately to the uploader
+  (`sendToSender`) — approved, rejected, or (no LLM configured and no
+  level-range violation) left `PendingReview` for the Host to decide.
+- **A pre-existing quirk this surfaced, not fixed**: `admin.PolicyProvider.Policy`
+  treats a settings row with an empty `pvp_policy` as "never really
+  configured" and falls back to `policy.Default()` for *every* field —
+  discarding `min_level`/`max_level` too if a caller sets only those.
+  The real admin-web Campaign tab never triggers this (its `<select>`
+  always submits a real value), but a raw API caller that PUTs only a
+  level range without `pvp_policy` will find it silently ignored. Left
+  as-is rather than reworked here — it's a shared fallback every other
+  Campaign-tab field already lives with, not something new to this
+  feature.
+- New admin-panel "Character Review" tab
+  (`GET/PUT /api/campaigns/{id}/characters[/{id}/review]`) lists every
+  character and lets the Host approve or reject — always overriding
+  whatever the automatic pass already decided, since the Host is this
+  system's final authority. `admin.Server` now shares the same
+  `*session.Hub` `server.Server` uses (moved into `main.go`, passed to
+  both) specifically so a Host's decision reaches a connected player
+  live, not just on their next reconnect.
+- **A veto that actually vetoes**: `ownedCharacter`
+  (`internal/server/server.go`) gained a `requireApproved` parameter —
+  rolling a check, applying an effect, and moving a map token all now
+  hard-reject a player-owned character that isn't `Approved` (viewing
+  your own character's sheet while it's under review still works). The
+  same gate exists on the DM-tool side (`characterMayAct`,
+  `internal/server/dm_tools.go`) for `resolve_check`/`cast_spell`/
+  `attack`/`grapple`/`shove` — the model narrating around the
+  player-facing gate and calling one of these tools directly for an
+  unapproved character gets a real rejection too, not a second way in.
+  NPCs are exempt from both gates (`create_npc` already has its own,
+  separate, pre-existing PendingReview-forever gap this pass didn't
+  touch).
+
+**Verified live**, real sidecar + real Master + the real LAN Ollama
+server (`qwen3.8:27b`-family model), plus a real browser: set a
+campaign's level range via the actual admin API, imported a level-15
+character into it, and confirmed a real `character.review_result`
+rejection with zero calls to the LLM (log-verified) — the deterministic
+gate firing before any model was asked. Confirmed the mechanical gate
+then actually blocks that rejected character's own
+`roll.check_request`. Separately imported a modest level-2 character
+with no level range configured and got a genuine, reasoned real-model
+verdict ("ability scores... within normal creation range, HP...
+reasonable... anything but overpowered" → approved). Listed characters
+and overrode that verdict through the real admin HTTP API, and
+confirmed the connected player received the live push. In an actual
+browser: picked a real local JSON file through the new file input,
+watched it populate the textarea, sent it, and watched the real DM AI's
+review note ("Your character was approved: ...") appear in the log
+live. Two real bugs were found and fixed live rather than assumed
+correct from the code alone: `AcceptsFileUpload` was defined on the
+wire type but never actually set to `true` anywhere
+(`sendCreationPrompt` needed a new parameter threaded through all three
+call sites), and the admin-web Character Review table's
+`characterDisplayName` called `JSON.parse()` on `character_json` —
+which arrives as an already-parsed object (Go's `json.RawMessage`
+embeds verbatim, it isn't a JSON string), so every row showed
+"unparseable character data" until the needless `JSON.parse` was
+removed.
 
 ## Layout
 

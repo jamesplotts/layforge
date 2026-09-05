@@ -81,6 +81,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/maturitytiers"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/server"
+	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemengine"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
@@ -301,6 +302,14 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 	// leaves MaturityTierPrompt unset in that case — see its own doc
 	// comment for why a raw tier name is never used as prompt text
 	// directly).
+	// hub is shared between package server (the player-facing /ws
+	// listener) and adminServer below, so a Host's approve/reject action
+	// on the admin panel (design doc §9.4's character-import review flow)
+	// can push character.review_result straight to a live player's own
+	// connection via hub.SendToSender — not just update the database and
+	// wait for their next reconnect.
+	hub := session.NewHub()
+
 	var adminServer *admin.Server
 	if adminAddr != "" {
 		authProvider = admin.NewAuthProvider(events, authProvider)
@@ -315,7 +324,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 			admin.SystemKeyComfyUIURL:       comfyUIURL,
 			admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
 		}
-		adminServer = admin.New(logger, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested)
+		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, hub)
 	}
 
 	// imageGenProvider stays nil (no image generation, the
@@ -388,7 +397,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("push-to-talk transcription enabled", "whisper_url", whisperURL, "model", whisperModel)
 	}
 
-	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events, transcriptionProvider, events)
+	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events, transcriptionProvider, events, hub)
 	if err := srv.WarmUpCombatState(context.Background()); err != nil {
 		logger.Warn("failed to rehydrate persisted combat state", "error", err)
 	}

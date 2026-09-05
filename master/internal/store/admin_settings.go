@@ -44,6 +44,12 @@ type CampaignSettings struct {
 	// resolved to 1.0 by policy.CampaignPolicy.EffectivePriceMultiplier,
 	// not by this store.
 	PriceMultiplier float64
+	// MinLevel/MaxLevel mirror policy.CampaignPolicy's own fields of the
+	// same name (design doc §9.4's character-import review flow) — 0
+	// means "no bound in that direction," the same "0 means unset"
+	// convention PriceMultiplier already uses.
+	MinLevel int
+	MaxLevel int
 }
 
 // CampaignSummary is one row of the admin panel's real campaign list

@@ -52,6 +52,7 @@ const (
 	MessageTypeCharacterCreationStart    MessageType = "character.creation_start"
 	MessageTypeCharacterCreationPrompt   MessageType = "character.creation_prompt"
 	MessageTypeCharacterCreationAnswer   MessageType = "character.creation_answer"
+	MessageTypeCharacterReviewResult     MessageType = "character.review_result"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -73,7 +74,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeMapTokenState, MessageTypeMapTokenMoveRequest,
 		MessageTypeVehicleImport, MessageTypeVehicleImported,
 		MessageTypeAudioChunk, MessageTypeAudioTranscription,
-		MessageTypeCharacterCreationStart, MessageTypeCharacterCreationPrompt, MessageTypeCharacterCreationAnswer:
+		MessageTypeCharacterCreationStart, MessageTypeCharacterCreationPrompt, MessageTypeCharacterCreationAnswer,
+		MessageTypeCharacterReviewResult:
 		return true
 	default:
 		return false

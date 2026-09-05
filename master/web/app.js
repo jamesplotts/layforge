@@ -447,6 +447,9 @@ function handleMessage(msg) {
     case "character.creation_prompt":
       onCreationPrompt(msg.payload || {});
       break;
+    case "character.review_result":
+      appendCharacterReviewNote(msg.payload || {});
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -842,10 +845,17 @@ function onSafetyFlagSend() {
 // looking chat bubble with buttons (or a text box for the rare
 // free-text question, e.g. gender or pasting character JSON) rather
 // than a separate screen, so each player works through their own
-// character at their own pace without blocking the table. The flow
-// ends with a character.validation_result (the same message an
-// ordinary character.upload already answers with — see
-// onCharacterValidationResult), whichever path produced it.
+// character at their own pace without blocking the table. The import
+// sub-flow's own free-text prompt sets accepts_file_upload, which adds a
+// file picker next to the textarea (see creationPromptEl) so a player
+// can choose their own character JSON file instead of pasting it — same
+// character.creation_answer either way, no protocol difference beyond
+// that one flag. The flow ends with a character.validation_result (the
+// same message an ordinary character.upload already answers with — see
+// onCharacterValidationResult), whichever path produced it — an
+// imported character then still sits in PendingReview until Master's
+// automatic review pass or a Host's own admin-panel decision concludes
+// it (character.review_result, see appendCharacterReviewNote).
 function onCreationPrompt(payload) {
   el.log.appendChild(creationPromptEl(payload));
   el.log.scrollTop = el.log.scrollHeight;
@@ -877,7 +887,7 @@ function creationPromptEl(payload) {
   // live message.
   const answerAndSettle = (answer) => {
     if (!answer) return;
-    controls.querySelectorAll("button, textarea").forEach((control) => {
+    controls.querySelectorAll("button, textarea, input").forEach((control) => {
       control.disabled = true;
     });
     wrap.classList.add("answered");
@@ -897,6 +907,36 @@ function creationPromptEl(payload) {
     input.className = "creation-prompt-input";
     input.rows = 3;
     controls.appendChild(input);
+
+    // accepts_file_upload is set only on the import sub-flow's "paste
+    // your character's JSON" prompt (Master's own
+    // CharacterCreationPromptPayload.AcceptsFileUpload) — the roll
+    // flow's own free-text prompt (gender) never sets it, so a file
+    // picker only ever appears where pasted/uploaded JSON is actually
+    // expected.
+    if (payload.accepts_file_upload) {
+      const fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.accept = "application/json,.json";
+      fileInput.className = "creation-prompt-file";
+      const maxBytes = 256 * 1024;
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        if (file.size > maxBytes) {
+          appendErrorNote(`"${file.name}" is too large (${Math.round(file.size / 1024)} KB) — character files are expected well under 256 KB.`);
+          fileInput.value = "";
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          input.value = typeof reader.result === "string" ? reader.result : "";
+        };
+        reader.onerror = () => appendErrorNote(`Could not read "${file.name}".`);
+        reader.readAsText(file);
+      });
+      controls.appendChild(fileInput);
+    }
 
     const submit = document.createElement("button");
     submit.type = "button";
@@ -1166,6 +1206,24 @@ function appendErrorNote(text) {
   const note = document.createElement("div");
   note.className = "note error-note";
   note.textContent = text;
+  el.log.appendChild(note);
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+// appendCharacterReviewNote renders a character.review_result — the
+// conclusion of design doc §9.4's character-import review flow, sent
+// privately to this connection only (a deterministic campaign
+// level-range check, the DM AI's own balance judgment, or a later Host
+// decision from the admin panel). Approved/rejected get their own class
+// so a table's stylesheet can distinguish them at a glance, matching
+// error-note's own pattern.
+function appendCharacterReviewNote(payload) {
+  const note = document.createElement("div");
+  const approved = payload.status === "approved";
+  note.className = `note ${approved ? "character-approved-note" : "character-rejected-note"}`;
+  const verb = approved ? "approved" : "rejected";
+  const reason = payload.reason ? `: ${payload.reason}` : ".";
+  note.textContent = `Your character was ${verb}${reason}`;
   el.log.appendChild(note);
   el.log.scrollTop = el.log.scrollHeight;
 }

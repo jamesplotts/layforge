@@ -17,6 +17,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/server"
+	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
 
@@ -269,7 +270,7 @@ func TestCombatState_SecondServerSharingStore_RehydratesAndCanAdvanceTurn(t *tes
 	// thing standing between this and "no combat is active."
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	fakeEngine2 := startCombatFakeEngine()
-	srv2 := server.New(logger, st, fakeLLM, "test-model", nil, fakeEngine2, st, nil, nil, st, st, st, nil, nil)
+	srv2 := server.New(logger, st, fakeLLM, "test-model", nil, fakeEngine2, st, nil, nil, st, st, st, nil, nil, session.NewHub())
 	if err := srv2.WarmUpCombatState(ctx); err != nil {
 		t.Fatalf("WarmUpCombatState() error = %v", err)
 	}

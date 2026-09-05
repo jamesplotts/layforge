@@ -78,7 +78,7 @@ channels:
           - $ref: '#/components/messages/RollResult'
           - $ref: '#/components/messages/AudioTranscription'
           - $ref: '#/components/messages/CharacterValidationResult'
-          - $ref: '#/components/messages/CharacterReviewStatus'
+          - $ref: '#/components/messages/CharacterReviewResult'
           - $ref: '#/components/messages/CharacterSchemaResponse'
           - $ref: '#/components/messages/CharacterState'
           - $ref: '#/components/messages/CharacterCreationPrompt'
@@ -712,6 +712,9 @@ components:
                     items:
                       type: string
                     description: Enumerated options the player picks from; omitted/empty means the client should collect free text instead.
+                  accepts_file_upload:
+                    type: boolean
+                    description: Set only on the import sub-flow's own free-text prompt (pasting character JSON) — tells the client to offer a file picker alongside the plain textarea. Never set on the roll flow's own free-text prompt (gender).
 
     CharacterCreationAnswer:
       name: character.creation_answer
@@ -739,6 +742,41 @@ components:
                     type: string
                   answer:
                     type: string
+
+    CharacterReviewResult:
+      name: character.review_result
+      messageId: character_review_result
+      title: Conclusion of the character-import review flow
+      summary: >
+        Sent only to the character's own owner (sendToSender), never
+        broadcast — the outcome of design doc §9.4's review flow for an
+        imported character: either the automatic post-upload pass (a
+        deterministic campaign level-range check, then the DM AI's own
+        balance judgment) or a later Host decision made through the
+        admin panel. Distinct from character.validation_result, which
+        means "your upload parsed and was saved pending review" — this
+        message means a review of that saved character has now
+        concluded.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.review_result
+              payload:
+                type: object
+                required: [character_id, status]
+                properties:
+                  character_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [approved, rejected]
+                  reason:
+                    type: string
+                    description: Short human-readable explanation — the level-range gate's own message, the DM AI's stated reason, or whatever the Host typed in.
 
     CharacterApplyEffect:
       name: character.apply_effect
@@ -775,32 +813,6 @@ components:
                   effect:
                     type: object
                     description: Engine-defined — see OpenCombatEngine.GrpcSidecar's ApplyEffect for the reference engine's own effect_type/amount/damage_type/name/description/duration_rounds/condition_type fields.
-
-    CharacterReviewStatus:
-      name: character.review_status
-      messageId: character_review_status
-      title: Character review status change
-      summary: Master operator's approve/reject decision on an imported character (docs/design.md §9.4).
-      payload:
-        allOf:
-          - $ref: '#/components/schemas/Envelope'
-          - type: object
-            required: [payload]
-            properties:
-              type:
-                const: character.review_status
-              payload:
-                type: object
-                required: [character_id, status]
-                properties:
-                  character_id:
-                    type: string
-                  status:
-                    type: string
-                    enum: [pending_review, approved, rejected]
-                  reason:
-                    type: string
-                    description: Set when status = rejected, or as change-request notes.
 
     # --- vehicle.* (docs/design.md §6.4) ---
 

@@ -14,6 +14,10 @@
 //   GET/PUT /api/campaigns/{id}/security  (Security tab — applies live)
 //   GET/PUT /api/campaigns/{id}/pregens   (Pregens tab — applies live)
 //   DELETE  /api/campaigns/{id}/pregens/{pregenId}
+//   GET  /api/campaigns/{id}/characters   (Character Review tab)
+//   PUT  /api/campaigns/{id}/characters/{characterId}/review
+//                                          (Host approve/reject — always
+//                                           overrides any prior status)
 //   GET/PUT /api/system                   (System tab — persists only)
 //   POST /api/system/restart              (System tab's "Save & Restart")
 //   GET  /api/health
@@ -44,6 +48,8 @@ const el = {
   maturityTierPrompt: document.getElementById("maturity-tier-prompt"),
   imageMaturityTierPrompt: document.getElementById("image-maturity-tier-prompt"),
   priceMultiplier: document.getElementById("price-multiplier"),
+  minLevel: document.getElementById("min-level"),
+  maxLevel: document.getElementById("max-level"),
   campaignSave: document.getElementById("campaign-save"),
   campaignPackDir: document.getElementById("campaign-pack-dir"),
   campaignPackCurrent: document.getElementById("campaign-pack-current"),
@@ -57,6 +63,7 @@ const el = {
   pregenCharacterJSON: document.getElementById("pregen-character-json"),
   pregenSave: document.getElementById("pregen-save"),
   pregenSaveStatus: document.getElementById("pregen-save-status"),
+  characterTableBody: document.getElementById("character-table-body"),
   campaignSaveStatus: document.getElementById("campaign-save-status"),
   roomPassword: document.getElementById("room-password"),
   securitySave: document.getElementById("security-save"),
@@ -279,7 +286,7 @@ el.campaignSelect.addEventListener("change", () => selectCampaign(el.campaignSel
 async function selectCampaign(id) {
   state.campaignId = id;
   el.campaignSelect.value = id;
-  await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id), loadCampaignPack(id), loadPregens(id)]);
+  await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id), loadCampaignPack(id), loadPregens(id), loadCharacters(id)]);
 }
 
 // --- Campaign tab ---
@@ -292,6 +299,8 @@ async function loadCampaignPolicy(id) {
   el.maturityTierPrompt.value = data.maturity_tier_prompt || "";
   el.imageMaturityTierPrompt.value = data.image_maturity_tier_prompt || "";
   el.priceMultiplier.value = data.price_multiplier ? String(data.price_multiplier) : "1.0";
+  el.minLevel.value = data.min_level ? String(data.min_level) : "";
+  el.maxLevel.value = data.max_level ? String(data.max_level) : "";
 }
 
 el.campaignSave.addEventListener("click", async () => {
@@ -302,12 +311,24 @@ el.campaignSave.addEventListener("click", async () => {
     setStatus(el.campaignSaveStatus, "Price Multiplier must be a non-negative number.", true);
     return;
   }
+  const minLevel = parseInt(el.minLevel.value, 10);
+  const maxLevel = parseInt(el.maxLevel.value, 10);
+  if (el.minLevel.value.trim() !== "" && (Number.isNaN(minLevel) || minLevel < 0)) {
+    setStatus(el.campaignSaveStatus, "Min Level must be a non-negative whole number.", true);
+    return;
+  }
+  if (el.maxLevel.value.trim() !== "" && (Number.isNaN(maxLevel) || maxLevel < 0)) {
+    setStatus(el.campaignSaveStatus, "Max Level must be a non-negative whole number.", true);
+    return;
+  }
   const body = {
     pvp_policy: el.pvpPolicy.value,
     pvp_consent: el.pvpConsent.value.split(",").map((s) => s.trim()).filter(Boolean),
     maturity_tier_prompt: el.maturityTierPrompt.value,
     image_maturity_tier_prompt: el.imageMaturityTierPrompt.value,
     price_multiplier: Number.isNaN(priceMultiplier) ? 0 : priceMultiplier,
+    min_level: Number.isNaN(minLevel) ? 0 : minLevel,
+    max_level: Number.isNaN(maxLevel) ? 0 : maxLevel,
   };
   const resp = await fetch(`/api/campaigns/${encodeURIComponent(state.campaignId)}/policy`, {
     method: "PUT",
@@ -422,6 +443,85 @@ async function deletePregen(campaignId, pregenId) {
     return;
   }
   await loadPregens(campaignId);
+}
+
+// --- Character Review tab ---
+//
+// Lists every character store.CharacterStore.ListCharacters returns for
+// this campaign (design doc §9.4) — quick/detailed-rolled characters
+// and claimed pregens included, though they're already Approved and so
+// have nothing to review; the table's own point is the imported ones
+// still PendingReview, or previously Approved/Rejected by either the
+// automatic pass or an earlier Host decision. Approve/Reject always
+// overrides whatever status a character already has — the Host is this
+// system's final authority (see handleReviewCharacter's own doc
+// comment, package admin).
+
+// characterDisplayName reads the character's own name straight off the
+// parsed object the JSON API response already gives us — character_json
+// is a json.RawMessage on the Go side, which encodes/decodes as a plain
+// embedded JSON value (an object), not a string, so there is nothing to
+// JSON.parse() here; doing so throws (an object isn't valid JSON text).
+function characterDisplayName(characterJSON) {
+  return characterJSON && characterJSON.name ? characterJSON.name : "(unnamed)";
+}
+
+async function loadCharacters(id) {
+  const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/characters`);
+  const characters = (await resp.json()) || [];
+
+  el.characterTableBody.innerHTML = "";
+  for (const c of characters) {
+    const row = document.createElement("tr");
+
+    const ownerCell = document.createElement("td");
+    ownerCell.textContent = c.owner_id;
+    row.appendChild(ownerCell);
+
+    const statusCell = document.createElement("td");
+    statusCell.textContent = c.status;
+    row.appendChild(statusCell);
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = characterDisplayName(c.character_json);
+    row.appendChild(nameCell);
+
+    const approveCell = document.createElement("td");
+    const approveButton = document.createElement("button");
+    approveButton.type = "button";
+    approveButton.textContent = "Approve";
+    approveButton.addEventListener("click", () => reviewCharacter(id, c.id, "approved"));
+    approveCell.appendChild(approveButton);
+    row.appendChild(approveCell);
+
+    const rejectCell = document.createElement("td");
+    const rejectButton = document.createElement("button");
+    rejectButton.type = "button";
+    rejectButton.className = "secondary";
+    rejectButton.textContent = "Reject";
+    rejectButton.addEventListener("click", () => reviewCharacter(id, c.id, "rejected"));
+    rejectCell.appendChild(rejectButton);
+    row.appendChild(rejectCell);
+
+    el.characterTableBody.appendChild(row);
+  }
+}
+
+async function reviewCharacter(campaignId, characterId, status) {
+  const reason = window.prompt(`Reason for marking this character "${status}" (shown to the player, optional):`, "") || "";
+  const resp = await fetch(
+    `/api/campaigns/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/review`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, reason }),
+    },
+  );
+  if (!resp.ok) {
+    window.alert(`Failed: ${await errorText(resp)}`);
+    return;
+  }
+  await loadCharacters(campaignId);
 }
 
 // --- Security tab ---

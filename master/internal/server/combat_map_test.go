@@ -23,7 +23,8 @@ import (
 // combatStats.speed fields — combat-map tests need those (see
 // characterCombatInfo's doc comment for why the server package reads
 // them directly), unlike most of this package's tests which only need a
-// character to exist at all.
+// character to exist at all. Status is Approved — see seedCharacter's
+// own doc comment for why.
 func seedCharacterWithData(t *testing.T, st *store.SQLiteEventStore, id, campaignID, ownerID, characterData string) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -32,7 +33,7 @@ func seedCharacterWithData(t *testing.T, st *store.SQLiteEventStore, id, campaig
 		CampaignID:    campaignID,
 		OwnerID:       ownerID,
 		SchemaVersion: "opencombatengine-v1",
-		Status:        store.CharacterStatusPendingReview,
+		Status:        store.CharacterStatusApproved,
 		CharacterData: json.RawMessage(characterData),
 		CreatedAt:     now,
 		UpdatedAt:     now,

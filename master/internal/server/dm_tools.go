@@ -401,6 +401,31 @@ func (s *Server) campaignCharacter(ctx context.Context, campaignID, characterID 
 	return character, nil
 }
 
+// characterMayAct reports whether character may be the ACTOR in a
+// dice/rules-resolution DM tool call (resolve_check, apply_effect,
+// cast_spell, attack, grapple, shove) — the design doc §9.4 review-flow
+// gate's second half, closing the gap ownedCharacter's own
+// requireApproved parameter can't reach: a player can't submit
+// roll.check_request for their own not-yet-approved character, but
+// nothing stops the DM model from narrating an action and calling one of
+// these tools with that character's ID directly. NPCs (OwnerID ==
+// masterSenderID) are exempt — create_npc also saves them
+// PendingReview, but that's a separate, pre-existing gap this pass
+// doesn't touch; the whole point here is stopping an unvetted *player*
+// character from fighting, not locking every NPC the DM ever creates.
+// ok is false only for a player-owned character whose Status isn't
+// CharacterStatusApproved; reason is a short, human-readable explanation
+// suitable for a tool-result failure string.
+func characterMayAct(character store.Character) (ok bool, reason string) {
+	if character.OwnerID == masterSenderID {
+		return true, ""
+	}
+	if character.Status != store.CharacterStatusApproved {
+		return false, fmt.Sprintf("this character hasn't been approved for play yet (status: %s)", character.Status)
+	}
+	return true, ""
+}
+
 // callDMTool executes one tool call the DM model requested (design doc
 // §8) against campaignID, returning a JSON string result to feed back to
 // the model (see llm.Message's RoleTool), whether the call succeeded,
@@ -519,6 +544,9 @@ func (s *Server) dmResolveCheck(ctx context.Context, campaignID string, argsJSON
 	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
 	if err != nil {
 		return err.Error(), false, "character_not_found"
+	}
+	if ok, reason := characterMayAct(character); !ok {
+		return reason, false, "character_not_approved"
 	}
 
 	characterData := &structpb.Struct{}
@@ -705,6 +733,9 @@ func (s *Server) dmCastSpell(ctx context.Context, campaignID, actingSenderID str
 	if err != nil {
 		return err.Error(), false, "character_not_found"
 	}
+	if ok, reason := characterMayAct(caster); !ok {
+		return reason, false, "character_not_approved"
+	}
 	casterData := &structpb.Struct{}
 	if err := protojson.Unmarshal(caster.CharacterData, casterData); err != nil {
 		return fmt.Sprintf("parsing stored caster data: %v", err), false, "internal_error"
@@ -836,6 +867,9 @@ func (s *Server) dmAttack(ctx context.Context, campaignID, actingSenderID string
 	if err != nil {
 		return err.Error(), false, "character_not_found"
 	}
+	if ok, reason := characterMayAct(attacker); !ok {
+		return reason, false, "character_not_approved"
+	}
 	attackerData := &structpb.Struct{}
 	if err := protojson.Unmarshal(attacker.CharacterData, attackerData); err != nil {
 		return fmt.Sprintf("parsing stored attacker data: %v", err), false, "internal_error"
@@ -956,6 +990,9 @@ func (s *Server) dmGrapple(ctx context.Context, campaignID, actingSenderID strin
 	if err != nil {
 		return err.Error(), false, "character_not_found"
 	}
+	if ok, reason := characterMayAct(actor); !ok {
+		return reason, false, "character_not_approved"
+	}
 	actorData := &structpb.Struct{}
 	if err := protojson.Unmarshal(actor.CharacterData, actorData); err != nil {
 		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
@@ -1072,6 +1109,9 @@ func (s *Server) dmShove(ctx context.Context, campaignID, actingSenderID string,
 	actor, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
 	if err != nil {
 		return err.Error(), false, "character_not_found"
+	}
+	if ok, reason := characterMayAct(actor); !ok {
+		return reason, false, "character_not_approved"
 	}
 	actorData := &structpb.Struct{}
 	if err := protojson.Unmarshal(actor.CharacterData, actorData); err != nil {

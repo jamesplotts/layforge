@@ -37,6 +37,8 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 		ImageMaturityTierPrompt: "No graphic violence in illustrations.",
 		RoomPassword:            "hunter2",
 		PriceMultiplier:         1.5,
+		MinLevel:                3,
+		MaxLevel:                8,
 	}
 
 	if err := s.SaveCampaignSettings(ctx, "campaign-1", want); err != nil {
@@ -52,7 +54,7 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 	}
 	if got.PvPPolicy != want.PvPPolicy || got.MaturityTierPrompt != want.MaturityTierPrompt ||
 		got.ImageMaturityTierPrompt != want.ImageMaturityTierPrompt || got.RoomPassword != want.RoomPassword ||
-		got.PriceMultiplier != want.PriceMultiplier {
+		got.PriceMultiplier != want.PriceMultiplier || got.MinLevel != want.MinLevel || got.MaxLevel != want.MaxLevel {
 		t.Errorf("GetCampaignSettings() = %+v, want %+v", got, want)
 	}
 	if len(got.PvPConsent) != len(want.PvPConsent) {

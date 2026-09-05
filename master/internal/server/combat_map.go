@@ -362,7 +362,7 @@ func (s *Server) handleMapTokenMoveRequest(ctx context.Context, conn *websocket.
 		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("unknown token %q", req.Payload.TokenID))
 	}
 
-	character, err := s.ownedCharacter(ctx, campaignID, senderID, tok.CharacterID, "move")
+	character, err := s.ownedCharacter(ctx, campaignID, senderID, tok.CharacterID, "move", true)
 	if err != nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/server"
+	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
@@ -39,7 +40,7 @@ func newTestServerForCreation(t *testing.T, fakeEngine *fakeSystemEngineClient) 
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, systemEngineClient, st, nil, nil, st, st, st, nil, st).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, systemEngineClient, st, nil, nil, st, st, st, nil, st, session.NewHub()).Handler())
 	return ts, st
 }
 
@@ -99,6 +100,9 @@ func TestServe_CreationStart_SendsTopLevelPromptWithFourChoices(t *testing.T) {
 		if !want[c] {
 			t.Errorf("unexpected choice %q", c)
 		}
+	}
+	if prompt.Payload.AcceptsFileUpload {
+		t.Error("top-level prompt AcceptsFileUpload = true, want false — only the import sub-flow's own paste-JSON prompt should set this")
 	}
 }
 
@@ -185,6 +189,9 @@ func TestServe_CreationImport_FullFlow_SavesAndRespondsWithValidationResult(t *t
 	if len(pastePrompt.Payload.Choices) != 0 {
 		t.Errorf("paste-JSON prompt Choices = %v, want empty (free text)", pastePrompt.Payload.Choices)
 	}
+	if !pastePrompt.Payload.AcceptsFileUpload {
+		t.Error("paste-JSON prompt AcceptsFileUpload = false, want true — this is where the client should offer a file picker")
+	}
 
 	if err := sendCreationAnswer(ctx, conn, "campaign-creation-import", "player-a", "answer-2", pastePrompt.Payload.SessionID, `{"name":"Kestrel"}`); err != nil {
 		t.Fatalf("sendCreationAnswer(json) error = %v", err)
@@ -214,7 +221,7 @@ func TestServe_CreationPregen_NotConfigured_ReturnsSystemError(t *testing.T) {
 	}
 	defer st.Close()
 	// pregens deliberately left nil.
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, nil, st, nil, nil, st, st, st, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, nil, st, nil, nil, st, st, st, nil, nil, session.NewHub()).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-creation-pregen-unconfigured", "player-a")

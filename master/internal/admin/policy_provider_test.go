@@ -73,6 +73,8 @@ func TestPolicyProvider_Policy_StoredSettings_ReturnsThemOverFallback(t *testing
 		MaturityTierPrompt:      "Keep it family friendly.",
 		ImageMaturityTierPrompt: "No graphic violence.",
 		PriceMultiplier:         1.5,
+		MinLevel:                3,
+		MaxLevel:                8,
 	}
 	if err := s.SaveCampaignSettings(context.Background(), "campaign-1", stored); err != nil {
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
@@ -93,6 +95,9 @@ func TestPolicyProvider_Policy_StoredSettings_ReturnsThemOverFallback(t *testing
 	}
 	if got.PriceMultiplier != stored.PriceMultiplier {
 		t.Errorf("PriceMultiplier = %v, want %v", got.PriceMultiplier, stored.PriceMultiplier)
+	}
+	if got.MinLevel != stored.MinLevel || got.MaxLevel != stored.MaxLevel {
+		t.Errorf("MinLevel/MaxLevel = %d/%d, want %d/%d", got.MinLevel, got.MaxLevel, stored.MinLevel, stored.MaxLevel)
 	}
 }
 

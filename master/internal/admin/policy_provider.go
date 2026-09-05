@@ -64,5 +64,7 @@ func (p *PolicyProvider) Policy(ctx context.Context, campaignID string) (policy.
 		MaturityTierPrompt:      settings.MaturityTierPrompt,
 		ImageMaturityTierPrompt: settings.ImageMaturityTierPrompt,
 		PriceMultiplier:         settings.PriceMultiplier,
+		MinLevel:                settings.MinLevel,
+		MaxLevel:                settings.MaxLevel,
 	}, nil
 }

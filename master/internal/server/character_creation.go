@@ -90,6 +90,7 @@ func (s *Server) handleCreationStart(ctx context.Context, conn *websocket.Conn, 
 	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID,
 		"How would you like to create your character? Import an existing character, quick roll a new one (you pick race/class/gender, the rest is rolled), detailed roll a new one (you make every choice), or pick a pregenerated character your Host has offered.",
 		[]string{creationChoiceImport, creationChoiceQuickRoll, creationChoiceDetailedRoll, creationChoicePregen},
+		false,
 	)
 }
 
@@ -136,7 +137,7 @@ func (s *Server) handleCreationTopLevelAnswer(ctx context.Context, conn *websock
 	switch answer {
 	case creationChoiceImport:
 		s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageImport})
-		return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, "Paste your character's JSON.", nil)
+		return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, "Paste your character's JSON.", nil, true)
 
 	case creationChoicePregen:
 		return s.startCreationPregenChoice(ctx, conn, campaignID, senderID, sessionID)
@@ -179,7 +180,7 @@ func (s *Server) startCreationPregenChoice(ctx context.Context, conn *websocket.
 		fmt.Fprintf(&text, "- %s: %s — %s\n", p.ID, p.Name, p.Description)
 	}
 	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStagePregen})
-	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, text.String(), choices)
+	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, text.String(), choices, false)
 }
 
 // handleCreationPregenAnswer claims pregenID: copies its CharacterData
@@ -275,7 +276,7 @@ func (s *Server) handleCreationEngineResponse(ctx context.Context, conn *websock
 		return s.finishCreationRoll(ctx, conn, campaignID, senderID, resp.Actor)
 	}
 	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageEngine})
-	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, resp.PromptText, resp.Choices)
+	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, resp.PromptText, resp.Choices, false)
 }
 
 // finishCreationRoll persists a System-Engine-generated character —
@@ -342,12 +343,16 @@ func (s *Server) sendCreationComplete(ctx context.Context, conn *websocket.Conn,
 // conn — a plain reply on the requesting player's own connection, the
 // same pattern character.get/character.upload's own replies already
 // use, which is exactly why this needs no new privacy mechanism: nobody
-// but this connection is reading it.
-func (s *Server) sendCreationPrompt(ctx context.Context, conn *websocket.Conn, campaignID, sessionID, promptText string, choices []string) error {
+// but this connection is reading it. acceptsFileUpload is true only for
+// the import sub-flow's own free-text prompt (see
+// handleCreationTopLevelAnswer's import case) — every other caller
+// passes false, including the roll flow's own free-text gender prompt.
+func (s *Server) sendCreationPrompt(ctx context.Context, conn *websocket.Conn, campaignID, sessionID, promptText string, choices []string, acceptsFileUpload bool) error {
 	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterCreationPrompt, protocol.CharacterCreationPromptPayload{
-		SessionID:  sessionID,
-		PromptText: promptText,
-		Choices:    choices,
+		SessionID:         sessionID,
+		PromptText:        promptText,
+		Choices:           choices,
+		AcceptsFileUpload: acceptsFileUpload,
 	})
 	if err != nil {
 		return err

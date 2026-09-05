@@ -90,10 +90,12 @@ type CampaignPolicy struct {
 	// §9.1's "pre-session per-player opt-in flag") — consulted only when
 	// PvPPolicy is PvPPolicyWithConsent. Design doc §9.1 also describes
 	// an "in-the-moment Master confirmation" path; that needs a
-	// request/response protocol round-trip and a way to address a
-	// specific player that doesn't exist yet (the same
-	// privileged-operator-concept gap CLAUDE.md's character-import veto
-	// already documents), so only the pre-declared path is implemented.
+	// request/response protocol round-trip mid-session, which nothing
+	// currently triggers (unlike design doc §9.4's character-import
+	// review flow, which now pushes character.review_result to one
+	// player via sendToSender — see
+	// internal/server/character_review.go), so only the pre-declared
+	// path is implemented.
 	PvPConsent []string
 
 	// MaturityTierPrompt, when non-empty, is appended as an additional
@@ -140,6 +142,38 @@ type CampaignPolicy struct {
 	// grants a new capability" reasoning PriceMultiplier's own doc
 	// comment uses.
 	SharedKnowledge SharedKnowledgePolicy
+
+	// MinLevel/MaxLevel bound the party level an imported character
+	// (design doc §9.4's review flow) may enter this campaign at — 0 in
+	// either field means "no bound in that direction," the same "0
+	// means unset" convention PriceMultiplier uses. Checked
+	// deterministically against Actor.level (protocol/system_engine.proto
+	// — a real top-level field, never inferred by parsing
+	// character_data) by internal/server/character_review.go before the
+	// DM AI's own balance judgment ever runs; a level outside a
+	// configured bound is rejected without needing a model's opinion.
+	MinLevel int
+	MaxLevel int
+}
+
+// LevelInRange reports whether level falls within p's configured
+// MinLevel/MaxLevel bounds. level == 0 (the engine's own "no class
+// levels to report" sentinel — see Actor.level's doc comment) always
+// returns true: an unknown level is "can't tell," not "out of range,"
+// so it falls through to the DM AI's own judgment instead of a
+// deterministic rejection. A campaign with neither bound configured
+// also always returns true — see MinLevel/MaxLevel's own doc comment.
+func (p CampaignPolicy) LevelInRange(level int) bool {
+	if level == 0 {
+		return true
+	}
+	if p.MinLevel > 0 && level < p.MinLevel {
+		return false
+	}
+	if p.MaxLevel > 0 && level > p.MaxLevel {
+		return false
+	}
+	return true
 }
 
 // EffectiveSharedKnowledge returns p.SharedKnowledge, or

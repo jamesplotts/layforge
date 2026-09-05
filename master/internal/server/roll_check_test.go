@@ -21,7 +21,11 @@ import (
 
 // seedCharacter directly saves a character into st, bypassing
 // character.upload dispatch — these tests are about roll.check_request,
-// not import, so a real store write is enough setup.
+// not import, so a real store write is enough setup. Status is
+// Approved: these tests exercise roll mechanics/ownership/turn-order,
+// not the character-import review flow (character_review_test.go), so
+// they need a character ownedCharacter's requireApproved gate won't
+// reject.
 func seedCharacter(t *testing.T, st *store.SQLiteEventStore, id, campaignID, ownerID string) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -30,7 +34,7 @@ func seedCharacter(t *testing.T, st *store.SQLiteEventStore, id, campaignID, own
 		CampaignID:    campaignID,
 		OwnerID:       ownerID,
 		SchemaVersion: "opencombatengine-v1",
-		Status:        store.CharacterStatusPendingReview,
+		Status:        store.CharacterStatusApproved,
 		CharacterData: json.RawMessage(`{"name":"Kestrel"}`),
 		CreatedAt:     now,
 		UpdatedAt:     now,

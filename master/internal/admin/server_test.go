@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/admin"
+	"github.com/jamesplotts/layforge/master/internal/session"
 )
 
 func newTestServer(t *testing.T, restartRequested chan struct{}) (*admin.Server, *httptest.Server) {
@@ -21,7 +22,7 @@ func newTestServer(t *testing.T, restartRequested chan struct{}) (*admin.Server,
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
 	seed := map[string]string{admin.SystemKeyAddr: ":8080", admin.SystemKeyLLMModel: "seed-model"}
-	srv := admin.New(logger, s, s, s, "", "127.0.0.1:8090", seed, restartRequested)
+	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", seed, restartRequested, session.NewHub())
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return srv, httpSrv
@@ -254,6 +255,8 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 		"maturity_tier_prompt":       "Keep it clean.",
 		"image_maturity_tier_prompt": "No gore.",
 		"price_multiplier":           1.5,
+		"min_level":                  3,
+		"max_level":                  8,
 	}, "")
 	if putResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(putResp.Body)
@@ -266,6 +269,8 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 		PvPConsent         []string `json:"pvp_consent"`
 		MaturityTierPrompt string   `json:"maturity_tier_prompt"`
 		PriceMultiplier    float64  `json:"price_multiplier"`
+		MinLevel           int      `json:"min_level"`
+		MaxLevel           int      `json:"max_level"`
 	}
 	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding response: %v", err)
@@ -281,6 +286,32 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 	}
 	if got.PriceMultiplier != 1.5 {
 		t.Errorf("PriceMultiplier = %v, want 1.5", got.PriceMultiplier)
+	}
+	if got.MinLevel != 3 || got.MaxLevel != 8 {
+		t.Errorf("MinLevel/MaxLevel = %d/%d, want 3/8", got.MinLevel, got.MaxLevel)
+	}
+}
+
+func TestServer_PutCampaignPolicy_MinLevelAboveMaxLevel_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/policy", map[string]any{
+		"min_level": 10,
+		"max_level": 5,
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_PutCampaignPolicy_NegativeMinLevel_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/policy", map[string]any{
+		"min_level": -1,
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
 

@@ -116,7 +116,12 @@ it — no separate wizard screen, no modal, the whole exchange just reads
 as a sequence of chat messages the player answers at their own pace.
 The very first prompt offers four paths: **import** (falls straight
 into the existing paste-JSON flow, now entered this way instead of a
-dedicated screen), **quick_roll** (three real questions — race, class,
+dedicated screen — its own free-text prompt sets
+`accepts_file_upload`, which adds a real file picker next to the
+textarea, `FileReader`-ing a chosen file straight into it so a player
+can bring in a saved character file instead of copy-pasting; still the
+same `character.creation_answer` on the wire either way), **quick_roll**
+(three real questions — race, class,
 gender — then everything else, including a spellcaster's cantrips/
 prepared spells/slots, is rolled up automatically), **detailed_roll**
 (every choice surfaced, including manual ability-score assignment and
@@ -146,11 +151,35 @@ players, producing two distinct characters and leaving the template
 untouched; and the import sub-flow entered via the new top-level prompt
 instead of a dedicated screen.
 
+The Host/DM-AI import veto above is separately live-verified end to
+end, including in a real browser: picked a real local JSON file
+through the new file input, watched it populate the textarea, sent it,
+and watched a genuine real-model review note ("Your character was
+approved: ability scores... within normal creation range...") appear
+in the log live once the automatic review pass concluded.
+
+An imported character isn't necessarily playable the moment it's saved,
+though (design doc §9.4's review flow, `internal/server/character_review.go`):
+a deterministic campaign level-range check and then, if configured, the
+DM AI's own balance judgment run automatically, and the Host can
+approve or reject (or override either outcome) from the admin panel at
+any time. Either way, the outcome arrives as its own
+`character.review_result` — rendered as a plain log note
+(`appendCharacterReviewNote`) distinct from the ordinary
+`character.validation_result` completion note, since "your upload
+parsed" and "a review of it just concluded" are genuinely different
+events that can land seconds or minutes apart. A character that isn't
+yet `Approved` still shows its own sheet (`character.get` always
+works) but gets a real rejection from the dice tray's Roll Check and
+the sheet's Take Damage/Heal — not a silent no-op.
+
 Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's
 own* check result (a hit doesn't apply its own damage outside the DM
 slow pass — the tray's Roll Check and the sheet's Take Damage/Heal are
-two independent actions for a player).
+two independent actions for a player), and any client-side way to
+restart character creation after a rejection — the player sees the
+note but has to rejoin to try again.
 
 Push-to-talk (design doc §4) is now wired: a hold-to-talk mic button
 next to the chat input, feature-detected (hidden if the browser has no

@@ -21,12 +21,18 @@
 //     narrative.dm_prose. Neither pass is fed campaign/character context
 //     beyond the player's own input yet — no persistent context-assembly
 //     exists in Master to feed it.
-//   - character.upload (§9.4's mechanical half only — see
-//     importCharacter): validated via package systemenginepb, answered
-//     with character.validation_result. The human review/veto half
-//     (character.review_status, pending_review -> approved/rejected) is
-//     NOT implemented — it needs a privileged-operator concept this
-//     codebase doesn't have yet.
+//   - character.upload (§9.4, see importCharacter): validated via
+//     package systemenginepb, answered with character.validation_result,
+//     saved pending_review. The review/veto half now exists too (see
+//     character_review.go): a deterministic campaign level-range check,
+//     then the DM AI's own balance judgment via a dedicated
+//     review_character tool call, either of which can resolve it to
+//     approved/rejected automatically; the Host can also override either
+//     outcome at any time via the admin panel's Character Review tab
+//     (package admin). A character that isn't approved is mechanically
+//     blocked from acting (ownedCharacter's requireApproved parameter,
+//     and dm_tools.go's characterMayAct for DM-tool-initiated actions),
+//     not just labeled — see CLAUDE.md's "gates over prompting".
 //   - roll.check_request (see resolveCheck): calls ResolveCheck for a
 //     character the sender owns, broadcasts roll.request/roll.result.
 //     roll.acknowledge is NOT implemented (no narration-sequencing
@@ -262,13 +268,17 @@ type Server struct {
 // dm_slow_pass.go's tool-assembly gate). transcriptionProvider may be
 // nil to run without push-to-talk transcription at all (design doc §4)
 // — audio.chunk then gets a real "not configured" system.error, the
-// same pattern as every other optional dependency above.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider, pregenStore store.PregenStore) *Server {
+// same pattern as every other optional dependency above. hub is
+// caller-created (main.go) rather than built internally here, so
+// package admin can share the same connection registry and push
+// character.review_result to a live player right after a Host's own
+// approve/reject action (design doc §9.4) — never nil in practice.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider, pregenStore store.PregenStore, hub *session.Hub) *Server {
 	return &Server{
 		logger:           logger,
 		events:           events,
 		characters:       characterStore,
-		hub:              session.NewHub(),
+		hub:              hub,
 		llm:              llmProvider,
 		narrativeModel:   narrativeModel,
 		auth:             authProvider,
@@ -677,14 +687,15 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 // character.validation_result carrying whatever warnings the engine
 // returned.
 //
-// It deliberately never sets a character's status to Approved — design
-// doc §9.4's veto/review panel needs a privileged-operator concept Master
-// doesn't have yet (no account/role system exists, only room-password
-// join auth), and approving on Master's own say-so instead would violate
-// CLAUDE.md's "gates over prompting" rule rather than satisfy it. A
-// character that parses successfully still lands in PendingReview, same
-// as one with mechanical warnings — this endpoint only proves the upload
-// is well-formed, not that a human has reviewed it.
+// It never itself sets a character's status to Approved — that decision
+// belongs to runCharacterReviewPass (launched below, in the background)
+// and to the Host's own admin-panel override (package admin), never to
+// this handler's own say-so; approving here on nothing but "the JSON
+// parsed" would violate CLAUDE.md's "gates over prompting" rule rather
+// than satisfy it. A character that parses successfully still lands in
+// PendingReview, same as one with mechanical warnings — this endpoint
+// only proves the upload is well-formed, not that anyone has reviewed
+// it yet.
 func (s *Server) importCharacter(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, upload protocol.CharacterUploadMessage) error {
 	if s.systemEngine == nil {
 		return s.sendError(ctx, conn, campaignID, upload.MessageID, errors.New("character import unavailable: no system engine configured"))
@@ -727,6 +738,14 @@ func (s *Server) importCharacter(ctx context.Context, conn *websocket.Conn, camp
 		}); err != nil {
 			return s.sendError(ctx, conn, campaignID, upload.MessageID, fmt.Errorf("saving character: %w", err))
 		}
+
+		// Kicks off design doc §9.4's automatic review pass (deterministic
+		// level-range check, then the DM AI's own balance judgment) in the
+		// background — the player doesn't wait on it, and its own
+		// character.review_result reply (if any) arrives as a later,
+		// separate message on this same connection. resp.Actor.Level comes
+		// straight from the FromJson response above — no extra RPC call.
+		go s.runCharacterReviewPass(campaignID, characterID, senderID, resp.Actor.Level)
 	}
 	// resp.Actor is nil when FromJson couldn't parse upload.Payload.
 	// CharacterJSON at all (see the sidecar's own FromJson: it populates
@@ -772,7 +791,7 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("dice resolution unavailable: character storage is disabled"))
 	}
 
-	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "roll checks for")
+	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "roll checks for", true)
 	if err != nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}
@@ -908,7 +927,7 @@ func (s *Server) sendCharacterState(ctx context.Context, conn *websocket.Conn, c
 		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("character state unavailable: character storage is disabled"))
 	}
 
-	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "view")
+	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "view", false)
 	if err != nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}
@@ -965,7 +984,7 @@ func (s *Server) applyCharacterEffect(ctx context.Context, conn *websocket.Conn,
 		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("applying effects unavailable: character storage is disabled"))
 	}
 
-	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "apply effects to")
+	character, err := s.ownedCharacter(ctx, campaignID, senderID, req.Payload.CharacterID, "apply effects to", true)
 	if err != nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, err)
 	}
@@ -1066,7 +1085,17 @@ func characterStatusString(status systemenginepb.CharacterStatus) (value string,
 // "roll checks for", "view", "apply effects to"), so each caller's
 // rejection reads naturally; the returned error is meant to go straight
 // into a system.error.
-func (s *Server) ownedCharacter(ctx context.Context, campaignID, senderID, characterID, verb string) (store.Character, error) {
+//
+// requireApproved additionally rejects a character that hasn't cleared
+// design doc §9.4's review flow yet (store.CharacterStatus other than
+// CharacterStatusApproved) — the real mechanical gate that makes a
+// Host/DM-AI veto over an imported character actually stop something,
+// not just a status label nothing reads. Callers pass false for a
+// read-only action (sendCharacterState's "view" — a player can always
+// see their own character's sheet while it's under review) and true for
+// anything with a mechanical/trust consequence (rolling a check,
+// applying an effect, moving a token).
+func (s *Server) ownedCharacter(ctx context.Context, campaignID, senderID, characterID, verb string, requireApproved bool) (store.Character, error) {
 	character, err := s.characters.GetCharacter(ctx, characterID)
 	if err != nil {
 		return store.Character{}, fmt.Errorf("looking up character: %w", err)
@@ -1076,6 +1105,9 @@ func (s *Server) ownedCharacter(ctx context.Context, campaignID, senderID, chara
 	}
 	if character.OwnerID != senderID {
 		return store.Character{}, fmt.Errorf("you can only %s your own characters", verb)
+	}
+	if requireApproved && character.Status != store.CharacterStatusApproved {
+		return store.Character{}, fmt.Errorf("this character hasn't been approved for play yet (status: %s) — you can't %s it until it is", character.Status, verb)
 	}
 	return character, nil
 }

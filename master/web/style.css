@@ -288,6 +288,12 @@ button.secondary {
   resize: vertical;
 }
 
+.creation-prompt-file {
+  flex: 1 1 100%;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
 /* Answered prompts stay visible in scrollback but visually settle —
    same "pending" opacity treatment .bubble.pending already uses. */
 .creation-prompt.answered {
@@ -409,6 +415,16 @@ button.secondary {
 
 .note.error-note {
   color: var(--danger);
+}
+
+.note.character-rejected-note {
+  color: var(--danger);
+  font-style: normal;
+}
+
+.note.character-approved-note {
+  color: var(--accent);
+  font-style: normal;
 }
 
 .safety-banner {
