@@ -103,6 +103,9 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		} else {
 			userContent += fmt.Sprintf("Character data: %s\n", character.CharacterData)
 		}
+		// Same best-effort reasoning: partyRosterContextText already
+		// returns "" when there's nobody else real to list.
+		userContent += s.partyRosterContextText(ctx, campaignID, input.Payload.CharacterID)
 	}
 	// Same best-effort reasoning as the character-data section above:
 	// a campaign with no pack bound (s.campaignPack nil, or nothing

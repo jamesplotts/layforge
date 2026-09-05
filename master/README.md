@@ -329,24 +329,33 @@ comment for why. A campaign not listed in that file (or the flag left
 unset entirely) gets `policy.Default()` — `pve_only` and no maturity
 constraint, deliberately the *strictest* PvP setting rather than an open
 one, unlike `-room-passwords`' own unconfigured-is-open default.
-**A known, honestly-scoped gap:** exercising the PvP gate against a real
-DM conversation isn't currently reachable, for the same reason
-`create_npc` was needed for monsters — `runSlowPass` only tells the
-model about the *acting* player's own character_id, with no campaign
-roster, so the DM model has no real way to reference a *different*
-player's character in a live conversation today. The gate itself is
-real and thoroughly tested (an 8-case table-driven integration test
-covers the full policy matrix against the actual `dmApplyEffect` code
-path), just not exercisable end-to-end against a live LLM without also
-building roster context — a separate, larger piece of work. Turn-order
-enforcement hits the same wall for the same reason: a live two-player
-"combat starts including both, the wrong one's out-of-turn roll gets
-rejected" scenario isn't reachable through natural conversation today
-either. Verified live instead was that ordinary out-of-combat play stays
-unaffected (a solo `roll.check_request` still succeeds normally when no
-`turn.state` is active); the enforcement logic itself is covered by four
-integration tests exercising the real `enforceTurnOrder` code path
-end-to-end (rejection and success, for both gated message types).
+**The gap named here used to block exercising the PvP gate against a
+real DM conversation** — `runSlowPass` told the model only about the
+*acting* player's own character_id, with no campaign roster, so it had
+no real way to reference a *different* player's character in a live
+conversation. That blocker is now closed: `partyRosterContextText`
+(`internal/server/party_roster.go`) lists every other real player
+character's ID *and* its own raw character data on every slow-pass turn
+— ID alone turned out not to be enough (see that file's own doc comment
+for the live-test failure that proved it: told to address "my companion
+Bram" with no ID given, the model had no way to connect the name to an
+opaque ID and just narrated everything publicly instead of ever calling
+a targeted tool). With each character's own data included, a real
+`qwen3.8:27b` correctly found a second player's real ID on its own and
+used it — see `internal/server/knowledge_scoping.go`'s Status entry
+above, whose own live test originally needed the ID spoon-fed in the
+prompt and now doesn't. The PvP gate itself remains real and thoroughly
+tested (an 8-case table-driven integration test covers the full policy
+matrix against the actual `dmApplyEffect` code path) independent of
+whether a live conversation can reach it; actually re-running a live
+two-player PvP/turn-order conversation now that roster context exists is
+a natural, still-open follow-up, not attempted in this pass. Turn-order
+enforcement's own live-reachability gap is unchanged for now: verified
+live was that ordinary out-of-combat play stays unaffected (a solo
+`roll.check_request` still succeeds normally when no `turn.state` is
+active); the enforcement logic itself is covered by four integration
+tests exercising the real `enforceTurnOrder` code path end-to-end
+(rejection and success, for both gated message types).
 
 Image generation (design doc §6.3) is now a real pluggable provider
 too: a new `generate_scene_image` DM tool calls `imagegen.Provider`
@@ -1342,6 +1351,37 @@ spotlight_test.go` covers the deterministic cases this live run can't
 by itself: the exact turns-since count, "no turns in recent history" for
 a character absent from the whole window, NPCs never flagged, and no
 section at all with fewer than two real players.
+
+**New**: party-roster context for the DM slow pass (`internal/server/
+party_roster.go`), closing the "known, honestly-scoped gap" this section
+used to describe above (see that paragraph, now updated in place rather
+than duplicated here). `partyRosterContextText` lists every other real
+player character's ID alongside its own raw character data — reusing
+`CharacterStore.ListCharacters` from the spotlight-balance pass above,
+and the exact same "forward the raw JSON, never parse or assume a field
+exists" posture the acting character's own "Character data:" line
+already used. NPCs (saved under `masterSenderID`) and the acting
+character itself are excluded; returns nothing at all for a solo player
+or when no characters store is configured.
+
+**Verified live**: a real regression-turned-fix. `internal/server/
+knowledge_scoping.go`'s own earlier live test needed Bram's character_id
+spoon-fed directly into the prompt because the model had no way to find
+it otherwise — repeating that exact scenario against a real Master +
+`qwen3.8:27b`, but this time withholding the ID entirely, first
+reproduced a *different* failure with an ID-only roster (the model,
+unable to connect the stated name "Bram" to an opaque ID like
+`char-ally`, gave up and narrated the private aside publicly instead of
+ever calling `narrate_privately`) — a real, live-observed proof that ID
+alone doesn't solve the actual problem. Adding each character's own data
+to the roster fixed it: the same scenario, same real model, no ID given
+anywhere in the prompt, and the model correctly called `narrate_privately`
+with `character_ids: ["char-ally"]` — the real recipient's own connection
+received the private narration, the sender's connection didn't, exactly
+as design doc §9.7 intends. `internal/server/party_roster_test.go`
+covers the deterministic cases: other players listed with their own
+data, the acting character and NPCs excluded, and no section at all for
+a solo player or an unconfigured characters store.
 
 ## Layout
 
