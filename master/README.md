@@ -1554,6 +1554,23 @@ embeds verbatim, it isn't a JSON string), so every row showed
 "unparseable character data" until the needless `JSON.parse` was
 removed.
 
+**New**: image-maturity-tier rank enforcement (design doc §6.5), closing
+the exact follow-on `maturity-tiers/README.md` already named — a
+campaign pack's `campaign.md` can now set its own `image_maturity_tier`
+front-matter field (a reference into the same tier registry
+`maturity_tier` already uses), and `CampaignPackPolicyProvider.Policy`
+(`internal/admin/campaign_pack_policy_provider.go`) rejects one ranked
+more permissive than the resolved text tier — the one direction §6.5
+actually cares about — falling through exactly like an unresolvable
+tier id already does. Equal rank (deliberately using the same tier for
+both) is always allowed; no `image_maturity_tier` at all keeps the
+existing text-inherits-to-image fallback unchanged. See
+`maturity-tiers/README.md` and `campaign-packs/README.md` for the full
+writeup, including the real `sable-ravine` example pack now setting
+`image_maturity_tier: family_friendly` (stricter than its own
+`maturity_tier: standard`) as a real, working example of the allowed
+case.
+
 ## Layout
 
 ```

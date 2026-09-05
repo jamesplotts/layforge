@@ -2,7 +2,8 @@
 
 Directory-based campaign content: markdown + YAML front matter. Each pack
 is `campaign.md` (title, level range, `pvp_policy`, `maturity_tier`,
-`shared_knowledge`, lines/veils, content warnings) plus `locations/*.md`,
+`image_maturity_tier`, `shared_knowledge`, lines/veils, content
+warnings) plus `locations/*.md`,
 `npcs/*.md`, `encounters/*.md`, and a `state.json` for mutable session
 state kept separate from static content.
 
@@ -56,7 +57,22 @@ resolves independently of the other two and only when a
 `-maturity-tiers-dir` is configured (see
 [`../maturity-tiers/README.md`](../maturity-tiers/README.md)) — a
 campaign pack's own real `pvp_policy`/`shared_knowledge` still apply
-even when no tier registry is set up at all. `shared_knowledge: strict`
+even when no tier registry is set up at all.
+
+`image_maturity_tier` is a new, separate front-matter field (this
+pack sets it to `family_friendly`, stricter than `maturity_tier:
+standard`) — a reference into the same tier registry, resolved into
+`generate_scene_image`'s own constraint text independently of the text
+tier. `CampaignPackPolicyProvider.Policy` enforces the one direction
+design doc §6.5 actually cares about: an image tier ranked *more
+permissive* than the resolved text tier is rejected outright (falls
+through the same way an unresolvable tier id does) — closing
+`maturity-tiers/README.md`'s own previously-named follow-on. Equal
+rank (a pack intentionally using the same tier for both) is always
+allowed; a pack that sets no `image_maturity_tier` at all keeps the
+existing text-tier-inherits-to-image behavior
+(`policy.CampaignPolicy.EffectiveImageMaturityTierPrompt`) unchanged.
+`shared_knowledge: strict`
 (this pack's own setting) is what makes the DM's `narrate_privately`
 tool (design doc §9.7, `internal/server/knowledge_scoping.go`) available
 at all — `party_omniscient` (the default for a pack that omits the

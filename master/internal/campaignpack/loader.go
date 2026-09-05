@@ -27,17 +27,18 @@ func LoadPack(dir string) (Pack, error) {
 		return Pack{}, fmt.Errorf("campaignpack: reading campaign.md: %w", err)
 	}
 	var campaignFrontMatter struct {
-		ID              string   `yaml:"id"`
-		Title           string   `yaml:"title"`
-		LevelRange      string   `yaml:"level_range"`
-		Tone            []string `yaml:"tone"`
-		PvPPolicy       string   `yaml:"pvp_policy"`
-		MaturityTier    string   `yaml:"maturity_tier"`
-		SharedKnowledge string   `yaml:"shared_knowledge"`
-		Lines           []string `yaml:"lines"`
-		Veils           []string `yaml:"veils"`
-		Author          string   `yaml:"author"`
-		ContentWarnings []string `yaml:"content_warnings"`
+		ID                string   `yaml:"id"`
+		Title             string   `yaml:"title"`
+		LevelRange        string   `yaml:"level_range"`
+		Tone              []string `yaml:"tone"`
+		PvPPolicy         string   `yaml:"pvp_policy"`
+		MaturityTier      string   `yaml:"maturity_tier"`
+		ImageMaturityTier string   `yaml:"image_maturity_tier"`
+		SharedKnowledge   string   `yaml:"shared_knowledge"`
+		Lines             []string `yaml:"lines"`
+		Veils             []string `yaml:"veils"`
+		Author            string   `yaml:"author"`
+		ContentWarnings   []string `yaml:"content_warnings"`
 	}
 	overview, err := frontmatter.Parse(campaignBytes, &campaignFrontMatter)
 	if err != nil {
@@ -48,18 +49,19 @@ func LoadPack(dir string) (Pack, error) {
 	}
 
 	pack := Pack{
-		ID:              campaignFrontMatter.ID,
-		Title:           campaignFrontMatter.Title,
-		LevelRange:      campaignFrontMatter.LevelRange,
-		Tone:            campaignFrontMatter.Tone,
-		PvPPolicy:       campaignFrontMatter.PvPPolicy,
-		MaturityTier:    campaignFrontMatter.MaturityTier,
-		SharedKnowledge: campaignFrontMatter.SharedKnowledge,
-		Lines:           campaignFrontMatter.Lines,
-		Veils:           campaignFrontMatter.Veils,
-		Author:          campaignFrontMatter.Author,
-		ContentWarnings: campaignFrontMatter.ContentWarnings,
-		Overview:        overview,
+		ID:                campaignFrontMatter.ID,
+		Title:             campaignFrontMatter.Title,
+		LevelRange:        campaignFrontMatter.LevelRange,
+		Tone:              campaignFrontMatter.Tone,
+		PvPPolicy:         campaignFrontMatter.PvPPolicy,
+		MaturityTier:      campaignFrontMatter.MaturityTier,
+		ImageMaturityTier: campaignFrontMatter.ImageMaturityTier,
+		SharedKnowledge:   campaignFrontMatter.SharedKnowledge,
+		Lines:             campaignFrontMatter.Lines,
+		Veils:             campaignFrontMatter.Veils,
+		Author:            campaignFrontMatter.Author,
+		ContentWarnings:   campaignFrontMatter.ContentWarnings,
+		Overview:          overview,
 	}
 
 	locationFiles, err := sortedMarkdownFiles(filepath.Join(dir, "locations"))

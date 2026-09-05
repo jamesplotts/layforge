@@ -19,24 +19,33 @@ package campaignpack
 // by LoadPack.
 type Pack struct {
 	// ID, Title, LevelRange, Tone, PvPPolicy, MaturityTier,
-	// SharedKnowledge, Lines, Veils, Author, and ContentWarnings come
-	// from campaign.md's front matter (design doc §6.4). PvPPolicy is
-	// one of policy.PvPPolicy's string values, unvalidated here — see
-	// package policy's campaignpack-backed Provider for where that's
-	// checked. MaturityTier is a reference to a maturity_tiers/<id>.md
-	// file (design doc §6.5) — not itself prompt text, and not resolved
-	// by this package; no such loader exists yet.
-	ID              string
-	Title           string
-	LevelRange      string
-	Tone            []string
-	PvPPolicy       string
-	MaturityTier    string
-	SharedKnowledge string
-	Lines           []string
-	Veils           []string
-	Author          string
-	ContentWarnings []string
+	// ImageMaturityTier, SharedKnowledge, Lines, Veils, Author, and
+	// ContentWarnings come from campaign.md's front matter (design doc
+	// §6.4). PvPPolicy is one of policy.PvPPolicy's string values,
+	// unvalidated here — see package policy's campaignpack-backed
+	// Provider for where that's checked. MaturityTier/ImageMaturityTier
+	// are each a reference to a maturity_tiers/<id>.md file in the same
+	// registry (design doc §6.5) — not themselves prompt text, and not
+	// resolved by this package; see admin.CampaignPackPolicyProvider for
+	// where that resolution (and the "image tier must not be more
+	// permissive than text" sanity check — maturity_tiers/README.md's
+	// own "real, separate follow-on") happens. ImageMaturityTier empty
+	// means the pack sets no image-specific override at all — the
+	// existing text/image inheritance (policy.CampaignPolicy.
+	// EffectiveImageMaturityTierPrompt) applies exactly as it does for
+	// the admin panel's own free-text fields.
+	ID                string
+	Title             string
+	LevelRange        string
+	Tone              []string
+	PvPPolicy         string
+	MaturityTier      string
+	ImageMaturityTier string
+	SharedKnowledge   string
+	Lines             []string
+	Veils             []string
+	Author            string
+	ContentWarnings   []string
 	// Overview is campaign.md's markdown body.
 	Overview string
 

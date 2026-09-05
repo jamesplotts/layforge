@@ -5,6 +5,7 @@ level_range: "1-3"
 tone: ["frontier", "wilderness peril", "faction politics", "classic dungeon-crawl"]
 pvp_policy: pve_only
 maturity_tier: standard
+image_maturity_tier: family_friendly
 shared_knowledge: strict
 lines:
   - "no depictions of harm to real-world children or animals"

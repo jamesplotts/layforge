@@ -38,6 +38,9 @@ func TestLoadPack_RealSableRavineFixture_ParsesAllContent(t *testing.T) {
 	if pack.MaturityTier != "standard" {
 		t.Errorf("MaturityTier = %q, want %q", pack.MaturityTier, "standard")
 	}
+	if pack.ImageMaturityTier != "family_friendly" {
+		t.Errorf("ImageMaturityTier = %q, want %q", pack.ImageMaturityTier, "family_friendly")
+	}
 	if pack.SharedKnowledge != "strict" {
 		t.Errorf("SharedKnowledge = %q, want %q", pack.SharedKnowledge, "strict")
 	}

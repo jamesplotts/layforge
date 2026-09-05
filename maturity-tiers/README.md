@@ -6,14 +6,23 @@ prompt-constraint text injected into DM generation in the body.
 
 `rank` orders tiers from most to least restrictive (lower is more
 restrictive) — the field a caller comparing a campaign's text tier against
-an image-gen override would use to sanity-check the image tier isn't set
+an image-gen override uses to sanity-check the image tier isn't set
 *more* permissive than the text tier (design doc §6.5: "the direction
 worth guarding against; a stricter image tier than text is harmless").
-That comparison itself isn't wired up anywhere yet — nothing in this
-codebase resolves an *image* maturity tier from a tier id the way
-`maturity_tier` resolves a text tier (see below); `image_maturity_tier_prompt`
-is still operator-authored free text via the admin panel. A real, separate
-follow-on, not silently dropped.
+
+**Since closed**: a campaign pack's `campaign.md` can now set its own
+`image_maturity_tier` front-matter field — a reference into this same
+registry, resolved by `internal/admin/campaign_pack_policy_provider.go`
+independently of (but sanity-checked against) `maturity_tier`. An image
+tier ranked more permissive than the resolved text tier is rejected
+(falls through the same way an unresolvable tier id does); equal rank —
+using the same tier for both, a common, intentional choice — is always
+allowed. A pack with no `image_maturity_tier` at all keeps the existing
+text-tier-inherits-to-image fallback
+(`policy.CampaignPolicy.EffectiveImageMaturityTierPrompt`) unchanged.
+The admin panel's own `image_maturity_tier_prompt` free-text field is
+untouched by any of this — it's a separate, directly-typed override, not
+a tier-id reference.
 
 Tier files are host-authored and trusted exactly like any other host
 config or campaign pack — Master doesn't police tier content. This is a
@@ -43,6 +52,24 @@ distinctive, testable marker instruction in its prompt text, the DM's
 real narration opened with that exact marker, unprompted — proving the
 resolved tier text actually reached generation, not just the resolution
 logic in isolation.
+
+The `image_maturity_tier` rank check above is covered by real-fixture
+deterministic tests (`internal/admin/campaign_pack_policy_provider_test.go`
+— using the actual shipped `sable-ravine` pack and real `Tier.Rank`
+semantics for the allowed/rejected/equal-rank/no-text-tier cases, not
+synthetic mocks), plus a live re-run of the same marker technique above
+against a real running Master (a scratch pack setting both
+`maturity_tier` and `image_maturity_tier`) confirming
+`CampaignPackPolicyProvider.Policy` — the same function that resolves
+and clamps `image_maturity_tier` — still runs correctly end to end
+against real files in a real process. Not separately live-verified
+through an actual `generate_scene_image`/ComfyUI call: the environment
+available for this pass only had a personal, general-purpose ComfyUI
+install unrelated to this project, and spinning up a real image-
+generation job there just to re-observe a string substitution this
+project's own prior ComfyUI pass already proved works wasn't worth the
+risk or the GPU time — honestly noted as a live-verification gap rather
+than silently skipped.
 
 ## Shipped example tiers
 
