@@ -345,17 +345,42 @@ a targeted tool). With each character's own data included, a real
 used it — see `internal/server/knowledge_scoping.go`'s Status entry
 above, whose own live test originally needed the ID spoon-fed in the
 prompt and now doesn't. The PvP gate itself remains real and thoroughly
-tested (an 8-case table-driven integration test covers the full policy
-matrix against the actual `dmApplyEffect` code path) independent of
-whether a live conversation can reach it; actually re-running a live
-two-player PvP/turn-order conversation now that roster context exists is
-a natural, still-open follow-up, not attempted in this pass. Turn-order
-enforcement's own live-reachability gap is unchanged for now: verified
-live was that ordinary out-of-combat play stays unaffected (a solo
-`roll.check_request` still succeeds normally when no `turn.state` is
-active); the enforcement logic itself is covered by four integration
-tests exercising the real `enforceTurnOrder` code path end-to-end
-(rejection and success, for both gated message types).
+tested independent of whether a live conversation can reach it (an
+8-case table-driven integration test covers the full policy matrix
+against the actual `dmApplyEffect` code path) — and as a direct
+follow-up in the very next pass, that live reachability gap and
+turn-order's matching one were both actually closed:
+
+**Verified live** (the follow-up promised above): real sidecar +
+Master + `qwen3.8:27b`, two campaigns sharing the same two real,
+combat-ready characters (Kestrel and Bram, real ability scores/HP/AC —
+not the placeholder `{"name":...}` JSON every earlier live test in this
+project used, since real damage/combat needs a real stat block), one
+`pve_only` and one `pvp_allowed`. Told "Kestrel throws a real hostile
+punch at Bram, resolve it with the actual game mechanics," the DM
+correctly called `resolve_check` (a real, server-rolled attack that
+sometimes simply misses — this took a couple of retries to land a hit,
+exactly as it should for authoritative dice) followed by `apply_effect`
+targeting Bram's real character_id, found entirely through the new
+roster context with no ID given in the prompt. Under `pve_only`,
+`apply_effect` came back `success: false, reason_code: "pvp_blocked"`
+and a follow-up `character.get` confirmed Bram's stored HP was
+genuinely unchanged; under `pvp_allowed`, it came back `success: true`
+and Bram's stored HP had actually dropped from 22 to 16 — a real,
+persisted mutation, not just a narrated one. Turn order got the same
+treatment: told to start a real fight against a wolf, the DM called
+`create_npc` for the wolf then `start_combat` with *all three* real
+combatants — `turn.state`'s own `order` field confirmed both real
+players were included, the thing that was flatly impossible before this
+pass. A direct `roll.check_request` from whichever player wasn't
+currently up came back a real `system.error` ("it is not your turn —
+it is character ... 's turn"), and the same request from the player
+whose turn it actually was came back a real `roll.request` — both
+against a live combat state the model itself started through ordinary
+conversation, not a test harness pre-seeding turn order. Turn-order's
+own enforcement logic was already covered end-to-end by four
+integration tests (rejection and success, for both gated message
+types); this closes the live-reachability half that was missing.
 
 Image generation (design doc §6.3) is now a real pluggable provider
 too: a new `generate_scene_image` DM tool calls `imagegen.Provider`
