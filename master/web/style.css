@@ -247,6 +247,53 @@ button.secondary {
   font-style: normal;
 }
 
+/* character.creation_prompt (design doc §9.4) — a private, direct reply
+   to this connection only, rendered as a bubble-family card (not a
+   plain .note) since it's interactive, not just informational. */
+.creation-prompt {
+  max-width: 72ch;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--bubble-border);
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+}
+
+.creation-prompt-text {
+  white-space: pre-wrap;
+  margin-bottom: 8px;
+}
+
+.creation-prompt-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.creation-prompt-controls button {
+  padding: 7px 12px;
+  font-size: 13px;
+}
+
+.creation-prompt-input {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+/* Answered prompts stay visible in scrollback but visually settle —
+   same "pending" opacity treatment .bubble.pending already uses. */
+.creation-prompt.answered {
+  opacity: 0.6;
+}
+
 .turn-state-note {
   font-style: normal;
   font-weight: 600;

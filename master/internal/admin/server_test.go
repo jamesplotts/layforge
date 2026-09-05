@@ -21,7 +21,7 @@ func newTestServer(t *testing.T, restartRequested chan struct{}) (*admin.Server,
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
 	seed := map[string]string{admin.SystemKeyAddr: ":8080", admin.SystemKeyLLMModel: "seed-model"}
-	srv := admin.New(logger, s, s, "", "127.0.0.1:8090", seed, restartRequested)
+	srv := admin.New(logger, s, s, s, "", "127.0.0.1:8090", seed, restartRequested)
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return srv, httpSrv

@@ -1408,6 +1408,60 @@ covers the deterministic cases: other players listed with their own
 data, the acting character and NPCs excluded, and no section at all for
 a solo player or an unconfigured characters store.
 
+**New**: a real three-option character-creation flow at join time
+(design doc §9.4), replacing the old auto-uploaded stopgap character.
+`internal/server/character_creation.go` is the Master-side orchestration
+— thin by design, the same "adapter relays, the engine owns domain
+logic" principle every other System Engine call already follows: it
+answers `character.creation_start` with Master's own fixed top-level
+prompt (import / quick_roll / detailed_roll / pregen), then either
+falls straight into the existing `character.upload` import path, lists
+and claims a Host-authored pregen (new `store.PregenStore`, own SQLite
+table, own admin CRUD endpoints), or drives OpenCombatEngine's new
+`StartCharacterCreation`/`AnswerCharacterCreationPrompt` RPCs — an
+entirely new *stateful* engine-side session machine (every other System
+Engine RPC in this codebase is stateless per-call), ephemeral and
+in-memory by design, same "lost until a persistence layer exists"
+posture as other in-memory state this project has shipped with before.
+One state machine handles both quick and detailed roll, distinguished
+only by a `mode` flag: quick surfaces exactly three real prompts (race,
+class, gender) and auto-rolls background/ability scores/spells
+internally using the identical decision logic detailed mode exposes as
+real prompts; detailed surfaces every one. A level-1 Wizard or Cleric is
+a real SRD spellcaster from the moment creation finishes — 3 cantrips,
+2 first-level slots, and a real ability-modifier-plus-level (minimum
+one) prepared/known count — generated from the same live, Open5e-backed
+`ISpellRepository` every other spell-aware RPC already uses, never a
+second hand-authored spell list. Completion (rolled, claimed-pregen, or
+imported) all converge on the same `character.validation_result` reply
+`character.upload` already produced, so the client's existing
+completion handling needed no branching for the new callers.
+
+**Verified live**, real sidecar + real Master, no LLM needed (this
+feature doesn't touch narration): a full quick-roll and a full detailed
+roll end-to-end through the real WS protocol, confirming the SRD
+ability-modifier spellcasting formula and the Human +1-to-all racial
+bonus both compute exactly correctly; the detailed-rolled Cleric's real
+generated spellcasting data actually casting a prepared spell and a
+cantrip via `cast_spell` against the real System Engine (a real slot
+consumed, a real "not prepared" rejection for a spell never chosen);
+two players joining the same campaign and detailed-rolling
+*concurrently* on the same shared `/ws` listener without ever seeing
+each other's prompts or answers; a pregen authored through the real
+admin HTTP API and claimed independently by two different players,
+producing two distinct, independently-owned characters and leaving the
+template row untouched; the import sub-flow entered via the new
+top-level prompt instead of a dedicated screen; and the full flow
+end-to-end in an actual browser (join → prompt bubbles → race → class →
+free-text gender → finished character sheet with real Spellcasting tab
+data). One real bug was found and fixed along the way: the purely-
+cosmetic player-chosen `Gender` field came back `null` after every roll
+despite being answered — traced to `StandardCreature`'s
+`CreatureState`-restoring constructor never capturing it (so its own
+`GetState()` had nothing to put back), fixed in OpenCombatEngine with a
+new regression test covering that exact round trip, not just the
+already-passing `CreatureStateJson` one that never exercised this path.
+
 ## Layout
 
 ```

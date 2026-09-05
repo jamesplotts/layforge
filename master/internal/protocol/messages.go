@@ -442,6 +442,59 @@ type CharacterStatePayload struct {
 // CharacterStateMessage is a character.state Message.
 type CharacterStateMessage = Message[CharacterStatePayload]
 
+// CharacterCreationStartPayload is the payload of a
+// character.creation_start message: a player, right after joining,
+// asking to begin choosing/creating their character. Empty — the
+// campaign/sender are already on the envelope, and this is the first
+// message of the flow, so there's nothing else to say yet. Master
+// replies with its own fixed top-level character.creation_prompt
+// ("Import a character / Roll a new one / Pick a pregen") — this
+// message is Master's own concept, not something the System Engine
+// has any part in.
+type CharacterCreationStartPayload struct{}
+
+// CharacterCreationStartMessage is a character.creation_start Message.
+type CharacterCreationStartMessage = Message[CharacterCreationStartPayload]
+
+// CharacterCreationPromptPayload is the payload of a
+// character.creation_prompt message: one question in the character-
+// creation conversation, sent back to the requesting player's own
+// connection only (see internal/server/character_creation.go's doc
+// comment for why this needs no new privacy mechanism — it's a direct
+// reply on that connection, exactly like character.get already is).
+// The client renders this as a chat-bubble-style prompt: PromptText
+// plus one button per Choices entry, or a free-text input when Choices
+// is empty (today, only the gender question during rolling). SessionID
+// correlates the player's eventual character.creation_answer back to
+// this exact question — a player may have only one creation flow in
+// progress at a time, but the ID still makes the pairing explicit
+// rather than implicit in connection state.
+type CharacterCreationPromptPayload struct {
+	SessionID  string   `json:"session_id"`
+	PromptText string   `json:"prompt_text"`
+	Choices    []string `json:"choices,omitempty"`
+}
+
+// CharacterCreationPromptMessage is a character.creation_prompt Message.
+type CharacterCreationPromptMessage = Message[CharacterCreationPromptPayload]
+
+// CharacterCreationAnswerPayload is the payload of a
+// character.creation_answer message: the player's response to the most
+// recent character.creation_prompt they received. Answer is either one
+// of that prompt's own Choices verbatim, or free text when the prompt
+// had none — Master (for its own top-level prompt and the import/pregen
+// sub-flows) or the System Engine (for an in-progress roll, via
+// AnswerCharacterCreationPrompt) validates it belongs to the pending
+// question; an answer that doesn't is a real rejection (system.error),
+// not a guess at what was meant.
+type CharacterCreationAnswerPayload struct {
+	SessionID string `json:"session_id"`
+	Answer    string `json:"answer"`
+}
+
+// CharacterCreationAnswerMessage is a character.creation_answer Message.
+type CharacterCreationAnswerMessage = Message[CharacterCreationAnswerPayload]
+
 // CharacterApplyEffectPayload is the payload of a character.apply_effect
 // message: a player applying a mechanical effect to a character they
 // own. Effect is opaque, engine-defined JSON (design doc §6.1's

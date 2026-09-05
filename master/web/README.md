@@ -32,10 +32,8 @@ transforms) that physically tumbles (cannon-es) then settles on the
 authoritative face once `roll.check_request` gets back
 `roll.request`/`roll.result` from Master. The physics is purely cosmetic,
 same as the tumble itself — the settle is always forced to the server's
-actual result, never determined by the simulation. Since there's no real
-character-creation UI yet, `onJoined` silently uploads a minimal stock
-character (`character.upload`) so the roll has something to roll for —
-see the stopgap note at the top of `app.js`.
+actual result, never determined by the simulation. Joining now goes straight into a real character-creation flow instead
+of a silent stock-character upload — see the new section below.
 
 There's also now a read-only character sheet (`character-sheet.js`),
 rendered generically from whatever `json_schema`
@@ -104,6 +102,49 @@ illustration (design doc §6.3) appears inline in the log as a bordered
 against a real, running self-hosted ComfyUI instance: a real generated
 image loads correctly via its `/view` endpoint like any other `<img
 src>`, with no code changes needed after the fact.
+
+There's also now a real character-creation flow (design doc §9.4) in
+place of the old stopgap stock-character upload. `onJoined` sends
+`character.creation_start` instead, and Master's reply — and every
+prompt after it — renders as an ordinary-looking chat bubble: a
+**prompt bubble** (`onCreationPrompt`/`creationPromptEl` in `app.js`),
+with one button per offered choice, or a textarea + Send for free text
+(currently only the gender question). Clicking a choice or submitting
+text sends `character.creation_answer`; the bubble dims and disables
+itself (`.answered`) once answered, and the next prompt appends below
+it — no separate wizard screen, no modal, the whole exchange just reads
+as a sequence of chat messages the player answers at their own pace.
+The very first prompt offers four paths: **import** (falls straight
+into the existing paste-JSON flow, now entered this way instead of a
+dedicated screen), **quick_roll** (three real questions — race, class,
+gender — then everything else, including a spellcaster's cantrips/
+prepared spells/slots, is rolled up automatically), **detailed_roll**
+(every choice surfaced, including manual ability-score assignment and
+picking spells one at a time), and **pregen** (claim one of the Host's
+pregenerated characters — see the admin-web README for authoring one).
+Whichever path is taken, completion is signalled the same way
+`character.upload`'s own successful import already was
+(`character.validation_result`) — the existing completion handling
+(`state.rollCharacterId`, schema fetch, dice tray activation) fires
+exactly as before, just from a new caller.
+
+Live-verified against a real sidecar + Master + browser: joined fresh,
+worked through a full quick-roll (Human Wizard, race/class/gender only)
+in the actual chat log, and confirmed the finished character sheet's
+Spellcasting tab held real, engine-generated cantrips and prepared
+spells the player never explicitly chose — not placeholder data. Also
+verified separately (Go WS driver, both repos' real live processes, no
+browser needed for these): a full detailed roll through every prompt
+including manual ability-score assignment and spell picks; the rolled
+Cleric's real generated spellcasting data actually casting a prepared
+spell and a cantrip via the System Engine's `cast_spell` RPC, with an
+unprepared spell correctly rejected by the engine's own gate; two
+players joining the same campaign and detailed-rolling *concurrently*
+without ever seeing each other's prompts or answers; a pregen authored
+through the real admin panel claimed independently by two different
+players, producing two distinct characters and leaving the template
+untouched; and the import sub-flow entered via the new top-level prompt
+instead of a dedicated screen.
 
 Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's
@@ -226,13 +267,13 @@ and point `-web-dir` at the copy instead.
   reference SDK against `protocol/asyncapi.yaml`; this predates that and
   has to be kept in sync with the protocol by hand (see
   `PROTOCOL_VERSION` in `app.js`).
-- **The stock character upload is a stopgap, not real character
-  creation.** Every join silently creates a fresh minimal character
-  (uniform 12s, 10 HP) with no way to customize ability scores, equipment,
-  or anything else — there's no schema-driven character *creation* UI
-  yet (only a read-only schema-driven *viewer*, `character-sheet.js`).
-  It also means every rejoin makes Master store a *new* character record
-  rather than reusing one.
+- **Rejoining makes a new character, not a reused one.** Real character
+  creation now exists (see above), but nothing yet remembers "this
+  sender_id already has a character in this campaign" — every join
+  starts the creation flow fresh and a rejoin makes a brand-new
+  character record rather than resuming the previous one. The character
+  *sheet* itself is still read-only, too (only a schema-driven *viewer*,
+  `character-sheet.js` — no per-field editing after creation).
 - **The character sheet is read-only** — no write-back, no editing;
   `character-sheet.js` only walks `properties`/`items`/`$ref`, not the
   full JSON Schema spec (no `oneOf`/`anyOf`/`patternProperties`/etc.),

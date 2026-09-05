@@ -55,7 +55,12 @@ type Server struct {
 	logger       *slog.Logger
 	store        store.AdminSettingsStore
 	campaignPack store.CampaignPackStore
-	webDir       string
+	// pregens persists Host/DM-authored pregenerated characters (design
+	// doc §9.4's join-time "pick a pregen" option) — nil means the
+	// Pregens tab's endpoints reject with a real "not configured" error,
+	// the same nil-disables-the-feature pattern as campaignPack.
+	pregens store.PregenStore
+	webDir  string
 	// origin is this admin listener's own "scheme://host:port", used by
 	// requireSameOrigin to reject a mutating request whose Origin/Referer
 	// header names a different origin — see that method's doc comment.
@@ -79,11 +84,12 @@ type Server struct {
 // with; a key GetSystemSettings has never stored an override for falls
 // back to this map (see handleGetSystem). restartRequested is the
 // send-only end of a channel main.go's run() selects on.
-func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}) *Server {
+func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}) *Server {
 	return &Server{
 		logger:           logger,
 		store:            s,
 		campaignPack:     campaignPack,
+		pregens:          pregens,
 		webDir:           webDir,
 		origin:           "http://" + addr,
 		systemSeed:       systemSeed,
@@ -107,6 +113,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/campaigns/{id}/security", s.requireSameOrigin(s.handlePutCampaignSecurity))
 	mux.HandleFunc("GET /api/campaigns/{id}/pack", s.handleGetCampaignPack)
 	mux.HandleFunc("PUT /api/campaigns/{id}/pack", s.requireSameOrigin(s.handlePutCampaignPack))
+	mux.HandleFunc("GET /api/campaigns/{id}/pregens", s.handleListPregens)
+	mux.HandleFunc("PUT /api/campaigns/{id}/pregens", s.requireSameOrigin(s.handlePutPregen))
+	mux.HandleFunc("DELETE /api/campaigns/{id}/pregens/{pregenId}", s.requireSameOrigin(s.handleDeletePregen))
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
 	mux.HandleFunc("PUT /api/system", s.requireSameOrigin(s.handlePutSystem))
 	mux.HandleFunc("POST /api/system/restart", s.requireSameOrigin(s.handleRestart))
@@ -169,6 +178,23 @@ type campaignSecurityDTO struct {
 type campaignPackDTO struct {
 	PackDir string `json:"pack_dir"`
 	PackID  string `json:"pack_id"`
+}
+
+// pregenDTO is the Pregens tab's wire shape (design doc §9.4) — ID is
+// Host-chosen (e.g. "bram-fighter"), not server-generated, since it's
+// what a player's join-time character.creation_prompt.choices actually
+// shows and echoes back; a human-readable ID both reads better in that
+// button/list and is inherently unambiguous, unlike Name (two pregens
+// could share a display name). CharacterJSON is trusted verbatim, same
+// level of trust as everything else an operator pastes into this
+// panel — Master does not validate its SRD-legality here, only that it
+// parses as JSON.
+type pregenDTO struct {
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Description   string          `json:"description"`
+	SchemaVersion string          `json:"schema_version"`
+	CharacterJSON json.RawMessage `json:"character_json"`
 }
 
 // systemSettingsDTO is the System tab's wire shape — one field per
@@ -459,6 +485,78 @@ func (s *Server) handlePutCampaignPack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, campaignPackDTO{PackDir: dto.PackDir, PackID: pack.ID})
+}
+
+func (s *Server) handleListPregens(w http.ResponseWriter, r *http.Request) {
+	if s.pregens == nil {
+		s.writeJSON(w, http.StatusOK, []pregenDTO{})
+		return
+	}
+	pregens, err := s.pregens.ListPregens(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	dtos := make([]pregenDTO, len(pregens))
+	for i, p := range pregens {
+		dtos[i] = pregenDTO{ID: p.ID, Name: p.Name, Description: p.Description, SchemaVersion: p.SchemaVersion, CharacterJSON: p.CharacterData}
+	}
+	s.writeJSON(w, http.StatusOK, dtos)
+}
+
+func (s *Server) handlePutPregen(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign id is required")
+		return
+	}
+	if s.pregens == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "pregens are not configured on this Master")
+		return
+	}
+	var dto pregenDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if dto.ID == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if dto.Name == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if len(dto.CharacterJSON) == 0 || !json.Valid(dto.CharacterJSON) {
+		s.writeErrorMsg(w, http.StatusBadRequest, "character_json must be non-empty, valid JSON")
+		return
+	}
+
+	if err := s.pregens.SavePregen(r.Context(), store.Pregen{
+		ID:            dto.ID,
+		CampaignID:    id,
+		Name:          dto.Name,
+		Description:   dto.Description,
+		SchemaVersion: dto.SchemaVersion,
+		CharacterData: dto.CharacterJSON,
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, dto)
+}
+
+func (s *Server) handleDeletePregen(w http.ResponseWriter, r *http.Request) {
+	if s.pregens == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "pregens are not configured on this Master")
+		return
+	}
+	if err := s.pregens.DeletePregen(r.Context(), r.PathValue("pregenId")); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleGetSystem(w http.ResponseWriter, r *http.Request) {

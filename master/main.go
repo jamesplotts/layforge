@@ -315,7 +315,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 			admin.SystemKeyComfyUIURL:       comfyUIURL,
 			admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
 		}
-		adminServer = admin.New(logger, events, events, adminWebDir, adminAddr, systemSeed, restartRequested)
+		adminServer = admin.New(logger, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested)
 	}
 
 	// imageGenProvider stays nil (no image generation, the
@@ -388,7 +388,7 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		logger.Info("push-to-talk transcription enabled", "whisper_url", whisperURL, "model", whisperModel)
 	}
 
-	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events, transcriptionProvider)
+	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events, transcriptionProvider, events)
 	if err := srv.WarmUpCombatState(context.Background()); err != nil {
 		logger.Warn("failed to rehydrate persisted combat state", "error", err)
 	}

@@ -208,6 +208,25 @@ type Server struct {
 	// abandoned mid-restart was never going to be transcribed anyway.
 	audioStreams   map[string]*audioStreamBuffer
 	audioStreamsMu sync.Mutex
+
+	// pregens persists Host/DM-authored pregenerated characters (design
+	// doc §9.4's "pick one the Host offers" join-time option,
+	// character_creation.go). nil means the pregen path always rejects
+	// with a real "not configured" error, the same nil-disables-the-
+	// feature pattern as campaignPack/vehicles.
+	pregens store.PregenStore
+
+	// creationSessions maps an in-progress character-creation
+	// session_id to the sender_id that started it (character_creation.go)
+	// — Master's own record of "which player is working on which
+	// creation session," checked before forwarding a
+	// character.creation_answer to the System Engine's session of the
+	// same ID, so one player can never answer another's prompt.
+	// In-memory only, guarded by its own mutex, same ephemeral-by-design
+	// shape as turnOrders/combatMaps/audioStreams — an abandoned or
+	// mid-restart session is simply gone, and the player starts over.
+	creationSessions   map[string]creationSession
+	creationSessionsMu sync.Mutex
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -244,25 +263,27 @@ type Server struct {
 // nil to run without push-to-talk transcription at all (design doc §4)
 // — audio.chunk then gets a real "not configured" system.error, the
 // same pattern as every other optional dependency above.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider) *Server {
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider, pregenStore store.PregenStore) *Server {
 	return &Server{
-		logger:         logger,
-		events:         events,
-		characters:     characterStore,
-		hub:            session.NewHub(),
-		llm:            llmProvider,
-		narrativeModel: narrativeModel,
-		auth:           authProvider,
-		systemEngine:   systemEngineClient,
-		policy:         policyProvider,
-		imageGen:       imageGenProvider,
-		turnOrders:     make(map[string]*turnOrder),
-		combatMaps:     make(map[string]*combatMapMeta),
-		combatState:    combatStateStore,
-		campaignPack:   campaignPackStore,
-		vehicles:       vehicleStore,
-		transcription:  transcriptionProvider,
-		audioStreams:   make(map[string]*audioStreamBuffer),
+		logger:           logger,
+		events:           events,
+		characters:       characterStore,
+		hub:              session.NewHub(),
+		llm:              llmProvider,
+		narrativeModel:   narrativeModel,
+		auth:             authProvider,
+		systemEngine:     systemEngineClient,
+		policy:           policyProvider,
+		imageGen:         imageGenProvider,
+		turnOrders:       make(map[string]*turnOrder),
+		combatMaps:       make(map[string]*combatMapMeta),
+		combatState:      combatStateStore,
+		campaignPack:     campaignPackStore,
+		vehicles:         vehicleStore,
+		transcription:    transcriptionProvider,
+		audioStreams:     make(map[string]*audioStreamBuffer),
+		pregens:          pregenStore,
+		creationSessions: make(map[string]creationSession),
 	}
 }
 
@@ -556,6 +577,20 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// possibly player-edited narrative.player_input becomes part of
 		// the durable log, the same as typed input already does.
 		return s.handleAudioChunk(ctx, conn, campaignID, envelope.MessageID, req.Payload)
+	case protocol.MessageTypeCharacterCreationStart:
+		// Not recorded: like character.schema_request/character.get, this
+		// is a query kicking off a flow, not itself a game event.
+		return s.handleCreationStart(ctx, conn, campaignID, envelope.SenderID)
+	case protocol.MessageTypeCharacterCreationAnswer:
+		var req protocol.CharacterCreationAnswerMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.creation_answer payload: %w", err))
+		}
+		// Not recorded: per design doc §10's same reasoning as audio.chunk
+		// above — only the finished character (a real character.state,
+		// or an import's own character.validation_result) becomes part of
+		// the durable log, not the back-and-forth that produced it.
+		return s.handleCreationAnswer(ctx, conn, campaignID, envelope.SenderID, req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}

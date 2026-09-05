@@ -47,7 +47,7 @@ func (f *fakeTranscriptionProvider) Transcribe(_ context.Context, audio []byte, 
 func newTestServerWithTranscription(t *testing.T, provider transcription.Provider) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, provider)
+	srv := server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, provider, nil)
 	return httptest.NewServer(srv.Handler())
 }
 
@@ -180,7 +180,7 @@ func TestServe_AudioChunk_NonFinalChunk_NoReplyAndNotYetTranscribed(t *testing.T
 
 func TestServe_AudioChunk_NotConfigured_ReturnsSystemError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-audio-unconfigured", "player-a")

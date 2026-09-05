@@ -91,7 +91,7 @@ func TestServe_NarrativePlayerInput_SlowPass_PartyRoster_NPCExcluded(t *testing.
 func TestServe_NarrativePlayerInput_SlowPass_PartyRoster_NoCharactersStore_NoSectionAtAll(t *testing.T) {
 	fakeLLM := &fakeLLMProvider{response: llm.CompletionResponse{Text: "The scene continues."}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, fakeLLM, "test-model", nil, nil, nil, nil, nil, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, fakeLLM, "test-model", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-roster-nostore", "player-a")

@@ -19,6 +19,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab-button active" data-tab="campaign" type="button" role="tab">Campaign</button>
     <button class="tab-button" data-tab="security" type="button" role="tab">Security</button>
+    <button class="tab-button" data-tab="pregens" type="button" role="tab">Pregens</button>
     <button class="tab-button" data-tab="system" type="button" role="tab">System</button>
   </nav>
 
@@ -120,10 +121,59 @@
       <span id="security-save-status" class="save-status"></span>
     </section>
 
+    <section class="tab-panel" data-tab="pregens" hidden>
+      <p class="panel-hint">
+        Pregenerated characters a player can pick at join time (design doc §9.4) — offered
+        alongside importing their own character or rolling a new one. Claiming a pregen copies
+        it into a brand-new character for that player; the template here is never changed by a
+        claim, so the same pregen can be offered to (and picked by) more than one player.
+      </p>
+      <table id="pregen-table" class="campaign-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Description</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="pregen-table-body"></tbody>
+      </table>
+
+      <details class="create-campaign">
+        <summary>Add a pregen</summary>
+        <div class="create-campaign-form">
+          <label>
+            ID (shown to players as their choice — pick something readable, e.g. "bram-fighter")
+            <input id="pregen-id" type="text" placeholder="bram-fighter" />
+          </label>
+          <label>
+            Name
+            <input id="pregen-name" type="text" placeholder="Bram the Bold" />
+          </label>
+          <label>
+            Description (shown to players alongside the name)
+            <input id="pregen-description" type="text" placeholder="A stalwart level-1 fighter, ready to go." />
+          </label>
+          <label>
+            Schema Version
+            <input id="pregen-schema-version" type="text" placeholder="opencombatengine-v1" />
+          </label>
+          <label>
+            Character JSON
+            <textarea id="pregen-character-json" rows="6" placeholder='{"id":"...","name":"Bram", ...}'></textarea>
+          </label>
+          <button id="pregen-save" type="button">Save</button>
+          <span id="pregen-save-status" class="save-status"></span>
+        </div>
+      </details>
+    </section>
+
     <section class="tab-panel" data-tab="system" hidden>
       <p class="panel-hint panel-hint-warning">
         Every setting on this tab requires a restart to take effect, which disconnects every
-        currently connected player — the web client has no automatic reconnect.
+        currently connected player — the web client reconnects automatically once Master is
+        back up, but anyone mid-turn will see a brief "reconnecting…" status until then.
       </p>
       <label>
         Listen Address

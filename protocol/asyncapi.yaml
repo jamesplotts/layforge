@@ -81,6 +81,7 @@ channels:
           - $ref: '#/components/messages/CharacterReviewStatus'
           - $ref: '#/components/messages/CharacterSchemaResponse'
           - $ref: '#/components/messages/CharacterState'
+          - $ref: '#/components/messages/CharacterCreationPrompt'
           - $ref: '#/components/messages/SafetyFlagBroadcast'
           - $ref: '#/components/messages/ToolResult'
           - $ref: '#/components/messages/TurnState'
@@ -103,6 +104,8 @@ channels:
           - $ref: '#/components/messages/CharacterUpload'
           - $ref: '#/components/messages/CharacterSchemaRequest'
           - $ref: '#/components/messages/CharacterGet'
+          - $ref: '#/components/messages/CharacterCreationStart'
+          - $ref: '#/components/messages/CharacterCreationAnswer'
           - $ref: '#/components/messages/CharacterApplyEffect'
           - $ref: '#/components/messages/SafetyFlag'
           - $ref: '#/components/messages/SystemConnect'
@@ -306,7 +309,7 @@ components:
                     description: Only tokens currently within this recipient's own visible set.
                   image_url:
                     type: string
-                    description: A data: URL of this recipient's own composited PNG view (grid + visible tokens, fog already applied) — Master renders it directly, no external service.
+                    description: "A data: URL of this recipient's own composited PNG view (grid + visible tokens, fog already applied) — Master renders it directly, no external service."
 
     MapTokenMoveRequest:
       name: map.token_move_request
@@ -654,6 +657,88 @@ components:
                   status:
                     type: string
                     enum: [active, unconscious, dying, dead]
+
+    CharacterCreationStart:
+      name: character.creation_start
+      messageId: character_creation_start
+      title: Begin choosing/creating a character
+      summary: >
+        The first message a player sends after joining, in place of an
+        auto-generated stopgap character (design doc §9.4). Empty payload
+        — Master replies with its own fixed top-level character.
+        creation_prompt (import / quick roll / detailed roll / pick a
+        pregen).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.creation_start
+              payload:
+                type: object
+
+    CharacterCreationPrompt:
+      name: character.creation_prompt
+      messageId: character_creation_prompt
+      title: One question in the character-creation conversation
+      summary: >
+        Sent back to the requesting player's own connection only — a
+        direct reply, exactly like character.get, so this needs no new
+        privacy mechanism (design doc §9.4). The client renders this as
+        a chat-bubble-style prompt: prompt_text plus one button per
+        choices entry, or a free-text input when choices is empty (e.g.
+        the gender question during rolling, or pasting character JSON
+        for import).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.creation_prompt
+              payload:
+                type: object
+                required: [session_id, prompt_text]
+                properties:
+                  session_id:
+                    type: string
+                  prompt_text:
+                    type: string
+                  choices:
+                    type: array
+                    items:
+                      type: string
+                    description: Enumerated options the player picks from; omitted/empty means the client should collect free text instead.
+
+    CharacterCreationAnswer:
+      name: character.creation_answer
+      messageId: character_creation_answer
+      title: Answer to the most recent character.creation_prompt
+      summary: >
+        answer is either one of that prompt's own choices verbatim, or
+        free text when the prompt had none. Master validates it belongs
+        to the pending question (directly, or via the System Engine's
+        own in-progress creation session) — an answer that doesn't is a
+        real rejection (system.error), not a guess at what was meant.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: character.creation_answer
+              payload:
+                type: object
+                required: [session_id, answer]
+                properties:
+                  session_id:
+                    type: string
+                  answer:
+                    type: string
 
     CharacterApplyEffect:
       name: character.apply_effect

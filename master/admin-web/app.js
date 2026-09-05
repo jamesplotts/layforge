@@ -12,6 +12,8 @@
 //                                           only — never blocks joining)
 //   GET/PUT /api/campaigns/{id}/policy    (Campaign tab — applies live)
 //   GET/PUT /api/campaigns/{id}/security  (Security tab — applies live)
+//   GET/PUT /api/campaigns/{id}/pregens   (Pregens tab — applies live)
+//   DELETE  /api/campaigns/{id}/pregens/{pregenId}
 //   GET/PUT /api/system                   (System tab — persists only)
 //   POST /api/system/restart              (System tab's "Save & Restart")
 //   GET  /api/health
@@ -47,6 +49,14 @@ const el = {
   campaignPackCurrent: document.getElementById("campaign-pack-current"),
   campaignPackSave: document.getElementById("campaign-pack-save"),
   campaignPackSaveStatus: document.getElementById("campaign-pack-save-status"),
+  pregenTableBody: document.getElementById("pregen-table-body"),
+  pregenId: document.getElementById("pregen-id"),
+  pregenName: document.getElementById("pregen-name"),
+  pregenDescription: document.getElementById("pregen-description"),
+  pregenSchemaVersion: document.getElementById("pregen-schema-version"),
+  pregenCharacterJSON: document.getElementById("pregen-character-json"),
+  pregenSave: document.getElementById("pregen-save"),
+  pregenSaveStatus: document.getElementById("pregen-save-status"),
   campaignSaveStatus: document.getElementById("campaign-save-status"),
   roomPassword: document.getElementById("room-password"),
   securitySave: document.getElementById("security-save"),
@@ -269,7 +279,7 @@ el.campaignSelect.addEventListener("change", () => selectCampaign(el.campaignSel
 async function selectCampaign(id) {
   state.campaignId = id;
   el.campaignSelect.value = id;
-  await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id), loadCampaignPack(id)]);
+  await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id), loadCampaignPack(id), loadPregens(id)]);
 }
 
 // --- Campaign tab ---
@@ -331,6 +341,88 @@ el.campaignPackSave.addEventListener("click", async () => {
   setStatus(el.campaignPackSaveStatus, "Bound.");
   await loadCampaignPack(state.campaignId);
 });
+
+// --- Pregens tab ---
+
+async function loadPregens(id) {
+  const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/pregens`);
+  const pregens = (await resp.json()) || [];
+
+  el.pregenTableBody.innerHTML = "";
+  for (const p of pregens) {
+    const row = document.createElement("tr");
+
+    const idCell = document.createElement("td");
+    idCell.textContent = p.id;
+    row.appendChild(idCell);
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = p.name;
+    row.appendChild(nameCell);
+
+    const descriptionCell = document.createElement("td");
+    descriptionCell.textContent = p.description;
+    row.appendChild(descriptionCell);
+
+    const deleteCell = document.createElement("td");
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "secondary";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", () => deletePregen(id, p.id));
+    deleteCell.appendChild(deleteButton);
+    row.appendChild(deleteCell);
+
+    el.pregenTableBody.appendChild(row);
+  }
+}
+
+el.pregenSave.addEventListener("click", async () => {
+  if (!state.campaignId) return;
+  setStatus(el.pregenSaveStatus, "Saving…");
+
+  let characterJSON;
+  try {
+    characterJSON = JSON.parse(el.pregenCharacterJSON.value);
+  } catch (err) {
+    setStatus(el.pregenSaveStatus, `Character JSON is not valid JSON: ${err.message}`, true);
+    return;
+  }
+
+  const resp = await fetch(`/api/campaigns/${encodeURIComponent(state.campaignId)}/pregens`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: el.pregenId.value.trim(),
+      name: el.pregenName.value.trim(),
+      description: el.pregenDescription.value.trim(),
+      schema_version: el.pregenSchemaVersion.value.trim(),
+      character_json: characterJSON,
+    }),
+  });
+  if (!resp.ok) {
+    setStatus(el.pregenSaveStatus, `Failed: ${await errorText(resp)}`, true);
+    return;
+  }
+  setStatus(el.pregenSaveStatus, "Saved.");
+  el.pregenId.value = "";
+  el.pregenName.value = "";
+  el.pregenDescription.value = "";
+  el.pregenSchemaVersion.value = "";
+  el.pregenCharacterJSON.value = "";
+  await loadPregens(state.campaignId);
+});
+
+async function deletePregen(campaignId, pregenId) {
+  const resp = await fetch(`/api/campaigns/${encodeURIComponent(campaignId)}/pregens/${encodeURIComponent(pregenId)}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok) {
+    setStatus(el.pregenSaveStatus, `Failed to delete: ${await errorText(resp)}`, true);
+    return;
+  }
+  await loadPregens(campaignId);
+}
 
 // --- Security tab ---
 

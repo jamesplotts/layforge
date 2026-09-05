@@ -7,10 +7,13 @@
 // in sync with the protocol by hand in the meantime (see PROTOCOL_VERSION
 // below). Only what Master actually implements is wired up: the
 // handshake, narrative.player_input -> narrative.player_bubble,
-// safety.flag -> safety.flag_broadcast, log.history_request paging, the
-// dice tray (character.upload -> character.validation_result,
-// roll.check_request -> roll.request/roll.result — see dice.js for the
-// actual 3D die), and now a read-only character sheet: character.
+// safety.flag -> safety.flag_broadcast, log.history_request paging, a
+// real join-time character-creation conversation (character.
+// creation_start/_prompt/_answer, ending in the same character.
+// validation_result an ordinary character.upload also produces — design
+// doc §9.4), the dice tray (roll.check_request -> roll.request/
+// roll.result — see dice.js for the actual 3D die), and now a read-only
+// character sheet: character.
 // schema_request/character.get, rendered generically from whatever
 // json_schema the active system engine publishes (see
 // character-sheet.js — not hardcoded to D&D's shape, design doc §4), and
@@ -21,14 +24,13 @@
 // but only transcribes into input-text for the player to edit before
 // sending; it does not stream a live partial preview while recording.
 //
-// The dice tray (and now the sheet) needs a character Master's store
+// The dice tray (and the sheet) needs a character Master's store
 // actually recognizes (roll.check_request/character.get are gated on
 // store.Character.OwnerID — see package server's resolveCheck/
-// sendCharacterState), but there's no real character-creation/import UI
-// yet. As a stopgap, onJoined silently uploads a minimal stock character
-// built from the join screen's character name — see
-// uploadStockCharacter. This is a placeholder for real character
-// creation, not the intended long-term flow.
+// sendCharacterState); onJoined now gets one through a real join-time
+// choice (design doc §9.4) instead of the old auto-uploaded stopgap
+// character — see the "Character creation" section below for
+// character.creation_start/_prompt/_answer.
 
 import { renderCharacterSheetTabs } from "./character-sheet.js";
 
@@ -50,8 +52,9 @@ const state = {
   hasMoreOlder: false,
   // --- Reconnect (design doc §4) ---
   // hasJoinedOnce distinguishes the very first system.session_state
-  // "joined" (runs onJoined: reveals the chat screen, uploads the
-  // stopgap character) from every later one after an unplanned drop
+  // "joined" (runs onJoined: reveals the chat screen, starts the
+  // character-creation conversation) from every later one after an
+  // unplanned drop
   // (runs onReconnected instead: re-announce presence and catch up on
   // whatever was missed, without redoing one-time setup or resetting
   // state the player is mid-way through, like an open dice roll).
@@ -74,8 +77,9 @@ const state = {
   // (design doc §5) to key that de-dupe on.
   renderedMessageIds: new Set(),
   // --- Dice tray ---
-  // rollCharacterId is Master's own store.Character.ID, assigned once the
-  // stopgap upload (see uploadStockCharacter) resolves. Every message
+  // rollCharacterId is Master's own store.Character.ID, assigned once
+  // character creation finishes (see onCharacterValidationResult). Every
+  // message
   // that references the character mechanically — roll.check_request,
   // character.apply_effect, character.get, and narrative.player_input's
   // character_id (see onInputSubmit) — uses this, never characterId (the
@@ -84,7 +88,6 @@ const state = {
   // slow pass (design doc §8) hands that value straight to the System
   // Engine, and "Kestrel" isn't a lookup key.
   rollCharacterId: null,
-  pendingCharacterUploadMessageId: null,
   pendingRollMessageId: null,
   dieHandle: null,
   // --- Character sheet ---
@@ -221,19 +224,6 @@ function randomId() {
   return "id-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
 
-// randomUuid returns a proper UUID v4 string — unlike randomId() above,
-// this is required to actually be UUID-shaped: it becomes CreatureState's
-// Id field (see uploadStockCharacter), which the system engine
-// deserializes into a real C# Guid, not just an opaque unique string.
-function randomUuid() {
-  if (crypto && crypto.randomUUID) return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0"));
-  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
-}
-
 // newEnvelope builds the fields every protocol message carries
 // (protocol/asyncapi.yaml's Envelope schema, design doc §5). Callers
 // spread a "payload" property onto the result.
@@ -365,11 +355,12 @@ function scheduleReconnect() {
 
 // onReconnected runs instead of onJoined for every system.session_state
 // "joined" after the first (see handleMessage) — the chat screen is
-// already showing and the stopgap character already exists server-side
-// from the original join, so redoing either would be wrong (a second
-// uploadStockCharacter call, a screen flicker). All that's actually
-// needed is announcing the reconnect succeeded and catching up on
-// whatever was missed while disconnected.
+// already showing and the character-creation conversation (or the
+// finished character) already exists server-side from the original
+// join, so redoing either would be wrong (a second creation_start,
+// a screen flicker). All that's actually needed is announcing the
+// reconnect succeeded and catching up on whatever was missed while
+// disconnected.
 function onReconnected() {
   state.reconnectAttempts = 0;
   setStatus("connected", "connected");
@@ -453,6 +444,9 @@ function handleMessage(msg) {
     case "audio.transcription":
       onAudioTranscription(msg);
       break;
+    case "character.creation_prompt":
+      onCreationPrompt(msg.payload || {});
+      break;
     default:
       console.warn("unhandled message type from Master", msg.type, msg);
   }
@@ -468,7 +462,12 @@ function onJoined() {
   // — "where things stand now," the natural first page for a chat-style
   // scrollback, not the campaign's very first message.
   requestHistory({});
-  uploadStockCharacter();
+  // Replaces the old auto-generated stopgap character (uploadStockCharacter,
+  // removed) with a real choice, design doc §9.4: Master's own
+  // character.creation_prompt (import / quick roll / detailed roll /
+  // pregen) arrives as a reply to this and renders as a chat-bubble-style
+  // prompt — see onCreationPrompt.
+  send({ ...newEnvelope("character.creation_start"), payload: {} });
 }
 
 function onSystemError(msg) {
@@ -477,10 +476,6 @@ function onSystemError(msg) {
   const inReplyTo = msg.payload && msg.payload.in_reply_to_message_id;
   if (inReplyTo && inReplyTo === state.pendingInputMessageId) {
     clearPendingBubble();
-  }
-  if (inReplyTo && inReplyTo === state.pendingCharacterUploadMessageId) {
-    state.pendingCharacterUploadMessageId = null;
-    el.diceTrayResult.textContent = "Dice tray unavailable: character setup failed.";
   }
   if (inReplyTo && inReplyTo === state.pendingRollMessageId) {
     state.pendingRollMessageId = null;
@@ -633,7 +628,7 @@ function onInputSubmit(event) {
   // which look the character up by that ID. Sending the display name here
   // was a real bug: every DM-triggered tool call failed with
   // character_not_found because "Kestrel" isn't a store ID. Guard against
-  // submitting before uploadStockCharacter's response has set it.
+  // submitting before character creation has finished and set it.
   if (!state.rollCharacterId) {
     appendErrorNote("Still setting up your character — try again in a moment.");
     return;
@@ -834,33 +829,88 @@ function onSafetyFlagSend() {
   closeSafetyFlagPanel();
 }
 
-// --- Dice tray ---
+// --- Character creation (design doc §9.4) ---
 //
-// uploadStockCharacter (see the file-level doc comment for why this is a
-// stopgap) sends a minimal but real CreatureState JSON, shaped to
-// OpenCombatEngine's schema (design doc §6.1) — Master forwards it
-// opaquely to the system engine's FromJson without interpreting it
-// itself, so this client-side shape is the one part of the whole flow
-// that's genuinely system-engine-specific, unlike everything else here.
-function uploadStockCharacter() {
-  const characterJson = JSON.stringify({
-    id: randomUuid(),
-    name: state.characterId || "Adventurer",
-    team: "Player",
-    abilityScores: { strength: 12, dexterity: 12, constitution: 12, intelligence: 12, wisdom: 12, charisma: 12 },
-    hitPoints: { current: 10, max: 10, temporary: 0 },
-  });
+// character.creation_start (sent once, from onJoined) kicks off a
+// conversation entirely driven by character.creation_prompt/
+// character.creation_answer pairs: Master's own top-level choice
+// (import / quick roll / detailed roll / pregen), then either the
+// import/pregen sub-flow or the System Engine's own question sequence
+// for rolling. Every prompt is a direct reply to this connection only
+// (see internal/server/character_creation.go's own doc comment for why
+// that needs no new privacy mechanism) — rendered here as an ordinary-
+// looking chat bubble with buttons (or a text box for the rare
+// free-text question, e.g. gender or pasting character JSON) rather
+// than a separate screen, so each player works through their own
+// character at their own pace without blocking the table. The flow
+// ends with a character.validation_result (the same message an
+// ordinary character.upload already answers with — see
+// onCharacterValidationResult), whichever path produced it.
+function onCreationPrompt(payload) {
+  el.log.appendChild(creationPromptEl(payload));
+  el.log.scrollTop = el.log.scrollHeight;
+}
 
-  const envelope = newEnvelope("character.upload");
-  state.pendingCharacterUploadMessageId = envelope.message_id;
+function sendCreationAnswer(sessionId, answer) {
   send({
-    ...envelope,
-    payload: { character_json: characterJson, schema_version: "opencombatengine-v1" },
+    ...newEnvelope("character.creation_answer"),
+    payload: { session_id: sessionId, answer },
   });
 }
 
+function creationPromptEl(payload) {
+  const wrap = document.createElement("div");
+  wrap.className = "creation-prompt";
+
+  const text = document.createElement("div");
+  text.className = "creation-prompt-text";
+  text.textContent = payload.prompt_text || "";
+  wrap.appendChild(text);
+
+  const controls = document.createElement("div");
+  controls.className = "creation-prompt-controls";
+  wrap.appendChild(controls);
+
+  // Answering disables this specific prompt's own controls (so it can't
+  // be answered twice) and visually settles it — the next prompt in the
+  // conversation arrives as its own new bubble below, same as any other
+  // live message.
+  const answerAndSettle = (answer) => {
+    if (!answer) return;
+    controls.querySelectorAll("button, textarea").forEach((control) => {
+      control.disabled = true;
+    });
+    wrap.classList.add("answered");
+    sendCreationAnswer(payload.session_id, answer);
+  };
+
+  if (payload.choices && payload.choices.length > 0) {
+    for (const choice of payload.choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = choice;
+      button.addEventListener("click", () => answerAndSettle(choice));
+      controls.appendChild(button);
+    }
+  } else {
+    const input = document.createElement("textarea");
+    input.className = "creation-prompt-input";
+    input.rows = 3;
+    controls.appendChild(input);
+
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.textContent = "Send";
+    submit.addEventListener("click", () => answerAndSettle(input.value.trim()));
+    controls.appendChild(submit);
+  }
+
+  return wrap;
+}
+
+// --- Dice tray ---
+
 function onCharacterValidationResult(msg) {
-  state.pendingCharacterUploadMessageId = null;
   const payload = msg.payload || {};
   if (!payload.character_id) {
     el.diceTrayResult.textContent = "Dice tray unavailable: character setup failed.";

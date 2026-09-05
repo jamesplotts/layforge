@@ -206,6 +206,23 @@ type fakeSystemEngineClient struct {
 	// call's request, for asserting on what Server actually sent the
 	// engine.
 	lastListInventoryRequest *systemenginepb.ListInventoryRequest
+
+	// startCharacterCreationFunc/answerCharacterCreationPromptFunc, when
+	// set, compute the response per call — needed by character-creation
+	// tests, which must walk a real multi-step prompt sequence rather
+	// than return the same fixed response every time.
+	startCharacterCreationFunc    func(*systemenginepb.StartCharacterCreationRequest) (*systemenginepb.CharacterCreationPromptResponse, error)
+	startCharacterCreationResp    *systemenginepb.CharacterCreationPromptResponse
+	startCharacterCreationErr     error
+	lastStartCharacterCreationReq *systemenginepb.StartCharacterCreationRequest
+
+	answerCharacterCreationPromptFunc    func(*systemenginepb.AnswerCharacterCreationPromptRequest) (*systemenginepb.CharacterCreationPromptResponse, error)
+	answerCharacterCreationPromptResp    *systemenginepb.CharacterCreationPromptResponse
+	answerCharacterCreationPromptErr     error
+	lastAnswerCharacterCreationPromptReq *systemenginepb.AnswerCharacterCreationPromptRequest
+
+	listClassSpellsResp *systemenginepb.ListClassSpellsResponse
+	listClassSpellsErr  error
 }
 
 func (f *fakeSystemEngineClient) FromJson(_ context.Context, in *systemenginepb.FromJsonRequest, _ ...grpc.CallOption) (*systemenginepb.FromJsonResponse, error) {
@@ -414,6 +431,35 @@ func (f *fakeSystemEngineClient) StreamEvents(context.Context, *systemenginepb.S
 	return nil, errors.New("fakeSystemEngineClient: StreamEvents not implemented in this fake")
 }
 
+func (f *fakeSystemEngineClient) StartCharacterCreation(_ context.Context, in *systemenginepb.StartCharacterCreationRequest, _ ...grpc.CallOption) (*systemenginepb.CharacterCreationPromptResponse, error) {
+	f.lastStartCharacterCreationReq = in
+	if f.startCharacterCreationFunc != nil {
+		return f.startCharacterCreationFunc(in)
+	}
+	if f.startCharacterCreationErr != nil {
+		return nil, f.startCharacterCreationErr
+	}
+	return f.startCharacterCreationResp, nil
+}
+
+func (f *fakeSystemEngineClient) AnswerCharacterCreationPrompt(_ context.Context, in *systemenginepb.AnswerCharacterCreationPromptRequest, _ ...grpc.CallOption) (*systemenginepb.CharacterCreationPromptResponse, error) {
+	f.lastAnswerCharacterCreationPromptReq = in
+	if f.answerCharacterCreationPromptFunc != nil {
+		return f.answerCharacterCreationPromptFunc(in)
+	}
+	if f.answerCharacterCreationPromptErr != nil {
+		return nil, f.answerCharacterCreationPromptErr
+	}
+	return f.answerCharacterCreationPromptResp, nil
+}
+
+func (f *fakeSystemEngineClient) ListClassSpells(context.Context, *systemenginepb.ListClassSpellsRequest, ...grpc.CallOption) (*systemenginepb.ListClassSpellsResponse, error) {
+	if f.listClassSpellsErr != nil {
+		return nil, f.listClassSpellsErr
+	}
+	return f.listClassSpellsResp, nil
+}
+
 // newTestServerWithSystemEngine builds a Server with a real in-memory
 // SQLite store (satisfying both store.EventStore and store.CharacterStore,
 // same as production — see SQLiteEventStore's doc comment) and engine
@@ -427,7 +473,7 @@ func newTestServerWithSystemEngine(t *testing.T, fakeEngine *fakeSystemEngineCli
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil, nil, st, st, st, nil).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, fakeEngine, st, nil, nil, st, st, st, nil, nil).Handler())
 	return ts, st
 }
 
