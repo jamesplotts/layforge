@@ -38,6 +38,7 @@ const PROTOCOL_VERSION = "0.1.0";
 
 const state = {
   ws: null,
+  wsUrl: "",
   campaignId: "",
   senderId: "",
   characterId: "",
@@ -47,6 +48,31 @@ const state = {
   // see the History paging section below.
   oldestLoadedSequence: null,
   hasMoreOlder: false,
+  // --- Reconnect (design doc §4) ---
+  // hasJoinedOnce distinguishes the very first system.session_state
+  // "joined" (runs onJoined: reveals the chat screen, uploads the
+  // stopgap character) from every later one after an unplanned drop
+  // (runs onReconnected instead: re-announce presence and catch up on
+  // whatever was missed, without redoing one-time setup or resetting
+  // state the player is mid-way through, like an open dice roll).
+  hasJoinedOnce: false,
+  // reconnectAttempts drives exponential backoff (capped at 30s);
+  // reconnectTimer is the pending setTimeout handle, or null when no
+  // reconnect is currently scheduled — used to avoid double-scheduling
+  // if "error" and "close" both fire for the same drop.
+  reconnectAttempts: 0,
+  reconnectTimer: null,
+  // pendingReconnectHistory marks the next log.history_response as a
+  // post-reconnect catch-up fetch (append + de-dupe by message_id)
+  // rather than the normal "load earlier"/initial-tail fetch (prepend)
+  // — see onHistoryResponse.
+  pendingReconnectHistory: false,
+  // renderedMessageIds de-dupes by message_id across a reconnect: the
+  // catch-up history fetch's "most recent page" necessarily overlaps
+  // with whatever the client already rendered live before the drop, and
+  // every message this protocol carries has a real, unique message_id
+  // (design doc §5) to key that de-dupe on.
+  renderedMessageIds: new Set(),
   // --- Dice tray ---
   // rollCharacterId is Master's own store.Character.ID, assigned once the
   // stopgap upload (see uploadStockCharacter) resolves. Every message
@@ -255,13 +281,29 @@ function showJoinError(message) {
 function connect(url) {
   el.joinError.hidden = true;
   el.joinButton.disabled = true;
+  state.wsUrl = url;
+  openSocket();
+}
 
+// openSocket opens state.wsUrl and wires it up — shared by the initial
+// join and every later reconnect attempt, since both need the identical
+// handshake/message/close handling. What differs is only what happens
+// on a successful join (see the system.session_state case in
+// handleMessage: onJoined the first time, onReconnected after) and, on
+// an unplanned close, whether that's still "trying to join at all"
+// (show the join-screen error, same as always) or "was already joined"
+// (schedule a reconnect instead of just giving up).
+function openSocket() {
   let ws;
   try {
-    ws = new WebSocket(url);
+    ws = new WebSocket(state.wsUrl);
   } catch (err) {
-    showJoinError("Could not open WebSocket: " + err.message);
-    el.joinButton.disabled = false;
+    if (!state.joined) {
+      showJoinError("Could not open WebSocket: " + err.message);
+      el.joinButton.disabled = false;
+      return;
+    }
+    scheduleReconnect();
     return;
   }
   state.ws = ws;
@@ -291,7 +333,7 @@ function connect(url) {
       state.ws = null;
       return;
     }
-    setStatus("disconnected", "error");
+    scheduleReconnect();
   });
 
   ws.addEventListener("error", () => {
@@ -299,7 +341,40 @@ function connect(url) {
       showJoinError("Could not reach that WebSocket URL.");
       el.joinButton.disabled = false;
     }
+    // Once joined, "error" is normally followed by "close" per the
+    // WebSocket spec — scheduleReconnect() runs there, not here, so a
+    // drop that fires both doesn't schedule two overlapping reconnects.
   });
+}
+
+// scheduleReconnect backs off exponentially (1s, 2s, 4s, ... capped at
+// 30s) and retries indefinitely — a dropped WebSocket is assumed
+// recoverable (a laptop sleeping, a flaky connection, Master restarting)
+// rather than something the player must notice and manually fix.
+// reconnectTimer guards against scheduling twice for the same drop.
+function scheduleReconnect() {
+  if (state.reconnectTimer) return;
+  const delayMs = Math.min(1000 * 2 ** state.reconnectAttempts, 30000);
+  state.reconnectAttempts++;
+  setStatus(`reconnecting (attempt ${state.reconnectAttempts})…`, "reconnecting");
+  state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null;
+    openSocket();
+  }, delayMs);
+}
+
+// onReconnected runs instead of onJoined for every system.session_state
+// "joined" after the first (see handleMessage) — the chat screen is
+// already showing and the stopgap character already exists server-side
+// from the original join, so redoing either would be wrong (a second
+// uploadStockCharacter call, a screen flicker). All that's actually
+// needed is announcing the reconnect succeeded and catching up on
+// whatever was missed while disconnected.
+function onReconnected() {
+  state.reconnectAttempts = 0;
+  setStatus("connected", "connected");
+  state.pendingReconnectHistory = true;
+  requestHistory({});
 }
 
 function setStatus(text, cssClass) {
@@ -310,9 +385,28 @@ function setStatus(text, cssClass) {
 // --- Inbound message routing ---
 
 function handleMessage(msg) {
+  // De-dupe by message_id before anything else: a post-reconnect catch-up
+  // history fetch (onReconnected) necessarily overlaps with whatever was
+  // already rendered live before the drop, and every message on this
+  // protocol carries a real, unique message_id (design doc §5) to key
+  // that on. Harmless outside a reconnect too, since a fresh id is
+  // generated per message (see newMessage/server-side equivalent) —
+  // nothing legitimately reuses one.
+  if (msg.message_id) {
+    if (state.renderedMessageIds.has(msg.message_id)) return;
+    state.renderedMessageIds.add(msg.message_id);
+  }
+
   switch (msg.type) {
     case "system.session_state":
-      if (msg.payload && msg.payload.state === "joined") onJoined();
+      if (msg.payload && msg.payload.state === "joined") {
+        if (state.hasJoinedOnce) {
+          onReconnected();
+        } else {
+          state.hasJoinedOnce = true;
+          onJoined();
+        }
+      }
       break;
     case "system.error":
       onSystemError(msg);
@@ -445,11 +539,18 @@ function onLoadEarlierClick() {
 }
 
 function onHistoryResponse(payload) {
+  if (state.pendingReconnectHistory) {
+    state.pendingReconnectHistory = false;
+    appendReconnectCatchUp(payload);
+    return;
+  }
+
   const events = (payload && payload.events) || [];
   const wasEmpty = el.log.firstChild === null;
 
   const fragment = document.createDocumentFragment();
   for (const raw of events) {
+    if (raw.message_id) state.renderedMessageIds.add(raw.message_id);
     const rendered = renderHistoryEvent(raw);
     if (rendered) fragment.appendChild(rendered);
   }
@@ -469,6 +570,29 @@ function onHistoryResponse(payload) {
   if (wasEmpty) {
     el.log.scrollTop = el.log.scrollHeight;
   }
+}
+
+// appendReconnectCatchUp handles the history page fetched right after a
+// reconnect (onReconnected) — unlike the normal tail/"load earlier"
+// fetch above, this one necessarily re-includes messages already
+// rendered live before the drop, so every event is de-duped by
+// message_id first. What's left, if anything, is appended at the
+// bottom (continuing the log forward in time), not prepended — this is
+// "what did I miss," not "here's more of the past."
+function appendReconnectCatchUp(payload) {
+  const events = (payload && payload.events) || [];
+  const fragment = document.createDocumentFragment();
+  for (const raw of events) {
+    if (raw.message_id) {
+      if (state.renderedMessageIds.has(raw.message_id)) continue;
+      state.renderedMessageIds.add(raw.message_id);
+    }
+    const rendered = renderHistoryEvent(raw);
+    if (rendered) fragment.appendChild(rendered);
+  }
+  if (fragment.childNodes.length === 0) return;
+  el.log.appendChild(fragment);
+  el.log.scrollTop = el.log.scrollHeight;
 }
 
 // renderHistoryEvent returns a DOM element for raw, or null if this

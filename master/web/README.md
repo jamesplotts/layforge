@@ -119,6 +119,24 @@ release — for the player to edit before sending, never auto-sent. See
 `../README.md`'s Status section for the full design rationale and live
 verification; this file just notes it exists.
 
+The client now reconnects on an unplanned drop instead of just sitting
+on "disconnected." `openSocket`/`scheduleReconnect` in `app.js` retry
+with exponential backoff (1s, 2s, 4s… capped at 30s, indefinitely — a
+dropped WebSocket is assumed recoverable, not something the player has
+to notice and reload for), showing "reconnecting (attempt N)…" in the
+status line. On success, `onReconnected` — not `onJoined` again, so the
+one-time setup (stopgap character upload, revealing the chat screen)
+doesn't repeat — re-fetches the most recent history page as a catch-up:
+every message on the wire already carries a real, unique `message_id`
+(design doc §5), so that page is de-duped against everything already
+rendered and only genuinely-missed messages get appended. Verified
+live: joined a real running Master, raised a safety flag, killed the
+Master process (status correctly showed "reconnecting (attempt N)…"),
+posted a second flag from a separate connection while the client was
+still down, restarted Master, and confirmed the client reconnected on
+its own with the first flag shown exactly once and the second — posted
+entirely while disconnected — correctly appended, no console errors.
+
 ## Running
 
 From `master/`:
@@ -191,8 +209,6 @@ and point `-web-dir` at the copy instead.
   gets prepended above what's visible, but the client doesn't adjust
   scroll offset to compensate — the viewport can jump. A real
   implementation would anchor scroll to the insertion point.
-- **No reconnect.** If the WebSocket drops, the status line says
-  "disconnected" and that's it — reload to rejoin.
 - **`sender_id` is just the character name you type in.** There's no
   auth/account system yet (design doc §6.6's Discord OAuth isn't
   implemented), so nothing stops two people from joining as the same

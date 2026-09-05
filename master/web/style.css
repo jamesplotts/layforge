@@ -140,6 +140,10 @@ body {
   color: var(--danger);
 }
 
+.status.reconnecting {
+  color: var(--accent);
+}
+
 .safety-panel {
   display: flex;
   align-items: flex-end;
