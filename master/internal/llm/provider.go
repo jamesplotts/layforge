@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Errors a Provider implementation should return (wrapped, so
@@ -25,6 +26,16 @@ var (
 	// text at all — as opposed to a request/transport failure.
 	ErrEmptyCompletion = errors.New("llm: model returned an empty completion")
 )
+
+// DefaultProviderTimeout is used by every concrete Provider's own
+// New*Provider constructor when httpClient is passed as nil. Generous
+// on purpose: confirmed live that a large single completion (e.g.
+// internal/campaignpack.Generate's whole-pack structured tool call,
+// against a local 27B Ollama model) can genuinely take several minutes
+// — a normal DM narration/tool-use turn finishes far under this, so
+// raising it costs nothing for the common case and only matters for the
+// genuinely large ones.
+const DefaultProviderTimeout = 8 * time.Minute
 
 // Role identifies who or what produced a Message in a multi-turn
 // conversation — design doc §8's DM tool-use loop is the first caller

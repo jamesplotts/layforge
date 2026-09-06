@@ -223,6 +223,25 @@ textarea {
   resize: vertical;
 }
 
+/* One block per generated file in the "Generate a campaign pack with
+   AI" review step — a label naming the file's path plus its own
+   editable textarea, monospace since the content is markdown + YAML
+   front matter. */
+.generated-file {
+  margin-bottom: 14px;
+}
+
+.generated-file label {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.generated-file textarea {
+  min-height: 140px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
 .panel-hint {
   margin: 0 0 16px;
   color: var(--text-dim);

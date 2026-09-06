@@ -5,6 +5,7 @@ package admin_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/admin"
+	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/terms"
 )
@@ -23,7 +25,21 @@ func newTestServer(t *testing.T, restartRequested chan struct{}) (*admin.Server,
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
 	seed := map[string]string{admin.SystemKeyAddr: ":8080", admin.SystemKeyLLMModel: "seed-model"}
-	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", seed, restartRequested, session.NewHub())
+	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", seed, restartRequested, nil, "", "", session.NewHub())
+	httpSrv := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpSrv.Close)
+	return srv, httpSrv
+}
+
+// newTestServerWithLLM is newTestServer plus a real llm.Provider and a
+// real temp-dir campaignPacksDir — for the "Generate a campaign pack
+// with AI" endpoints specifically, which reject with a real "not
+// configured" error against newTestServer's own nil/empty defaults.
+func newTestServerWithLLM(t *testing.T, llmProvider llm.Provider) (*admin.Server, *httptest.Server) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := newTestStore(t)
+	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", nil, nil, llmProvider, "test-model", t.TempDir(), session.NewHub())
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return srv, httpSrv
@@ -689,6 +705,231 @@ func TestServer_PutCampaignPack_CrossOriginRequest_Rejected(t *testing.T) {
 		map[string]any{"pack_dir": sableRavinePackDir}, "http://evil.example")
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403 for a cross-origin request", resp.StatusCode)
+	}
+}
+
+// fakeLLMProvider is a minimal llm.Provider fake local to this
+// package's own tests — internal/campaignpack's own fake (used to unit
+// test Generate directly) isn't importable from here.
+type fakeLLMProvider struct {
+	response llm.CompletionResponse
+	err      error
+}
+
+func (f *fakeLLMProvider) Complete(_ context.Context, _ llm.CompletionRequest) (llm.CompletionResponse, error) {
+	if f.err != nil {
+		return llm.CompletionResponse{}, f.err
+	}
+	return f.response, nil
+}
+
+func writePackToolCallResponse(t *testing.T, files map[string]string) llm.CompletionResponse {
+	t.Helper()
+	type wireFile struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	var wireFiles []wireFile
+	for path, content := range files {
+		wireFiles = append(wireFiles, wireFile{Path: path, Content: content})
+	}
+	args, err := json.Marshal(map[string]any{"files": wireFiles})
+	if err != nil {
+		t.Fatalf("marshaling tool call args: %v", err)
+	}
+	return llm.CompletionResponse{
+		ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "write_campaign_pack", Arguments: args}},
+	}
+}
+
+func wellFormedGeneratedPackResponse(t *testing.T) llm.CompletionResponse {
+	t.Helper()
+	return writePackToolCallResponse(t, map[string]string{
+		"campaign.md":                     "---\nid: haunted-lighthouse\ntitle: The Drowned Light\n---\nA storm-battered lighthouse.\n",
+		"locations/lighthouse-base.md":    "---\nid: lighthouse-base\n---\nThe base.\n",
+		"npcs/keeper-mara.md":             "---\nid: keeper-mara\n---\nThe keeper.\n",
+		"encounters/the-drowned-thing.md": "---\nid: the-drowned-thing\n---\nSomething rises.\n",
+	})
+}
+
+func TestServer_GenerateCampaignPack_NoLLMConfigured_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil) // no LLM provider wired
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate",
+		map[string]any{"description": "A haunted lighthouse.", "min_level": 1, "max_level": 3}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_GenerateCampaignPack_WellFormedGeneration_ReturnsFiles(t *testing.T) {
+	provider := &fakeLLMProvider{response: wellFormedGeneratedPackResponse(t)}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate",
+		map[string]any{"description": "A haunted lighthouse on a storm-battered coast.", "min_level": 1, "max_level": 3}, "")
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Slug  string `json:"slug"`
+		Files []struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.Slug != "a-haunted-lighthouse-on-a-storm-battered-coast" {
+		t.Errorf("Slug = %q, want a description-derived slug", got.Slug)
+	}
+	if len(got.Files) != 4 {
+		t.Errorf("len(Files) = %d, want 4", len(got.Files))
+	}
+}
+
+func TestServer_GenerateCampaignPack_ModelDidNotCallTool_ReturnsBadGatewayWithDetail(t *testing.T) {
+	provider := &fakeLLMProvider{response: llm.CompletionResponse{Text: "Sure, here's an idea..."}}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate",
+		map[string]any{"description": "A haunted lighthouse."}, "")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", resp.StatusCode)
+	}
+	var got struct {
+		Error string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.Error == "" {
+		t.Error("error message is empty, want a real detail for the Host")
+	}
+}
+
+// TestServer_GenerateCampaignPack_MalformedFrontMatter_ReturnsFilesWithValidationError
+// covers a real, live-observed model quirk: one generated file's YAML
+// front matter had a syntax mistake (an unquoted colon inside a
+// string value), which would previously discard the entire multi-
+// minute generation with only an error message — the Host must still
+// get the files back for review/editing instead.
+func TestServer_GenerateCampaignPack_MalformedFrontMatter_ReturnsFilesWithValidationError(t *testing.T) {
+	provider := &fakeLLMProvider{response: writePackToolCallResponse(t, map[string]string{
+		"campaign.md":        "---\nid: haunted-lighthouse\n---\nA storm-battered lighthouse.\n",
+		"npcs/tide-witch.md": "---\nid: tide-witch\nvoice: she speaks in half-finished sentences: trailing off\n---\nThe tide witch.\n",
+	})}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate",
+		map[string]any{"description": "A haunted lighthouse."}, "")
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s (a fixable validation issue must not become a hard error)", resp.StatusCode, body)
+	}
+	var got struct {
+		Files []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+		ValidationError string `json:"validation_error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Files) != 2 {
+		t.Errorf("len(Files) = %d, want 2 (both files returned for review despite one being broken)", len(got.Files))
+	}
+	if got.ValidationError == "" {
+		t.Error("ValidationError is empty, want a real detail about the malformed front matter")
+	}
+}
+
+func TestServer_GenerateCampaignPack_CrossOriginRequest_Rejected(t *testing.T) {
+	provider := &fakeLLMProvider{response: wellFormedGeneratedPackResponse(t)}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate",
+		map[string]any{"description": "A haunted lighthouse."}, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestServer_SaveCampaignPack_ThenBindViaExistingPutPackEndpoint(t *testing.T) {
+	provider := &fakeLLMProvider{response: wellFormedGeneratedPackResponse(t)}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	genResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate",
+		map[string]any{"description": "A haunted lighthouse."}, "")
+	var generated struct {
+		Slug  string `json:"slug"`
+		Files []struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(genResp.Body).Decode(&generated); err != nil {
+		t.Fatalf("decoding generate response: %v", err)
+	}
+
+	saveResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/save",
+		map[string]any{"slug": generated.Slug, "files": generated.Files}, "")
+	if saveResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(saveResp.Body)
+		t.Fatalf("save status = %d, body = %s", saveResp.StatusCode, body)
+	}
+	var saved struct {
+		PackDir string `json:"pack_dir"`
+	}
+	if err := json.NewDecoder(saveResp.Body).Decode(&saved); err != nil {
+		t.Fatalf("decoding save response: %v", err)
+	}
+	if saved.PackDir == "" {
+		t.Fatal("PackDir is empty")
+	}
+
+	// Prove the reuse claim for real: bind saved.PackDir via the
+	// existing, unmodified PUT /api/campaigns/{id}/pack — no new bind
+	// logic exists anywhere for a generated pack.
+	bindResp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/pack",
+		map[string]any{"pack_dir": saved.PackDir}, "")
+	if bindResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(bindResp.Body)
+		t.Fatalf("bind status = %d, body = %s", bindResp.StatusCode, body)
+	}
+	var bound struct {
+		PackID string `json:"pack_id"`
+	}
+	if err := json.NewDecoder(bindResp.Body).Decode(&bound); err != nil {
+		t.Fatalf("decoding bind response: %v", err)
+	}
+	if bound.PackID != "haunted-lighthouse" {
+		t.Errorf("PackID = %q, want haunted-lighthouse", bound.PackID)
+	}
+}
+
+func TestServer_SaveCampaignPack_DisallowedFilePath_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServerWithLLM(t, &fakeLLMProvider{})
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/save", map[string]any{
+		"slug": "malicious",
+		"files": []map[string]any{
+			{"path": "campaign.md", "content": "---\nid: x\n---\nx\n"},
+			{"path": "../../etc/passwd", "content": "malicious"},
+		},
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_SaveCampaignPack_CrossOriginRequest_Rejected(t *testing.T) {
+	_, httpSrv := newTestServerWithLLM(t, &fakeLLMProvider{})
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/save",
+		map[string]any{"slug": "x", "files": []map[string]any{{"path": "campaign.md", "content": "x"}}}, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
 	}
 }
 

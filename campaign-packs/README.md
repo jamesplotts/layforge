@@ -11,6 +11,16 @@ Any pack committed here must be original, SRD-legal, tone-inspired-only
 content — see [`docs/design.md`](../docs/design.md) §6.4 and §12, and
 [`CLAUDE.md`](../CLAUDE.md).
 
+A pack doesn't have to be hand-authored like `sable-ravine/` below
+anymore — the admin panel's Campaign tab can generate one from a
+one-paragraph description via the configured LLM (`internal/campaignpack.Generate`),
+reviewed and editable before anything is written to disk, then
+validated by the exact same `LoadPack` gate a hand-authored pack goes
+through. Its own system prompt restates this same original/SRD-legal
+requirement — it isn't exempt just because a human didn't type it
+directly. See `master/README.md`'s own Status section for how this
+was live-verified.
+
 ## `sable-ravine/`
 
 The first pack committed here: a short, original level 1–3 frontier

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // OpenAICompatibleProvider is a Provider backed by any server speaking
@@ -41,7 +40,7 @@ var _ Provider = (*OpenAICompatibleProvider)(nil)
 // generous timeout is used, matching NewOllamaProvider's own reasoning.
 func NewOpenAICompatibleProvider(baseURL, apiKey string, httpClient *http.Client) *OpenAICompatibleProvider {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 2 * time.Minute}
+		httpClient = &http.Client{Timeout: DefaultProviderTimeout}
 	}
 	return &OpenAICompatibleProvider{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, client: httpClient}
 }

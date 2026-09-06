@@ -207,7 +207,12 @@ for whichever one is configured never leave Master. Master now also
 gates on a Host/operator terms acceptance (once, via the admin panel or
 a scripted `-accept-terms-version` flag) and a per-connection player
 disclaimer acceptance before processing any real message — see
-`master/README.md`'s Running section. A
+`master/README.md`'s Running section. The admin panel can also generate
+a full campaign pack from a one-paragraph description via the
+configured LLM, reviewed and editable before anything is written to
+disk — live-verified against a real local model, which also surfaced
+and fixed four real reliability issues (see `master/README.md`'s
+Status section). A
 player's own roll still doesn't apply its own damage outside the DM
 pass, there's no human review step on imported characters (that needs an
 account/operator concept the admin panel doesn't cover yet), and no full markdown

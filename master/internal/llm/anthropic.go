@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // anthropicAPIVersion is the anthropic-version header value every request
@@ -50,7 +49,7 @@ var _ Provider = (*AnthropicProvider)(nil)
 // generous timeout is used, matching NewOllamaProvider's own reasoning.
 func NewAnthropicProvider(baseURL, apiKey string, httpClient *http.Client) *AnthropicProvider {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 2 * time.Minute}
+		httpClient = &http.Client{Timeout: DefaultProviderTimeout}
 	}
 	return &AnthropicProvider{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, client: httpClient}
 }

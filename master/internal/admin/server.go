@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -124,6 +125,21 @@ type Server struct {
 	// caller (main.go) with capacity 1; New does not create it, since
 	// main.go's own select statement needs to hold the receiving end.
 	restartRequested chan<- struct{}
+	// llmProvider/llmModel back the "Generate a campaign pack with AI"
+	// flow (handleGenerateCampaignPack) — the same provider/model
+	// narration and the DM tool-use loop already use (main.go passes
+	// the identical values), not a separately configured one. nil
+	// llmProvider means that endpoint rejects with a real "not
+	// configured" error, the same nil-disables-the-feature pattern
+	// every other optional Server dependency already uses.
+	llmProvider llm.Provider
+	llmModel    string
+	// campaignPacksDir is the root a generated pack's own directory is
+	// created under (campaignpack.WriteAndValidate) — unrelated to, and
+	// not required to coincide with, wherever a Host keeps hand-authored
+	// packs; binding still accepts any path via the existing
+	// PUT /api/campaigns/{id}/pack, unaffected by this field.
+	campaignPacksDir string
 }
 
 // New creates a Server. addr is this admin listener's own bind address
@@ -133,7 +149,7 @@ type Server struct {
 // with; a key GetSystemSettings has never stored an override for falls
 // back to this map (see handleGetSystem). restartRequested is the
 // send-only end of a channel main.go's run() selects on.
-func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, characters store.CharacterStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}, hub *session.Hub) *Server {
+func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, characters store.CharacterStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}, llmProvider llm.Provider, llmModel, campaignPacksDir string, hub *session.Hub) *Server {
 	return &Server{
 		logger:           logger,
 		store:            s,
@@ -145,6 +161,9 @@ func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.Cam
 		origin:           "http://" + addr,
 		systemSeed:       systemSeed,
 		restartRequested: restartRequested,
+		llmProvider:      llmProvider,
+		llmModel:         llmModel,
+		campaignPacksDir: campaignPacksDir,
 	}
 }
 
@@ -164,6 +183,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/campaigns/{id}/security", s.requireSameOrigin(s.handlePutCampaignSecurity))
 	mux.HandleFunc("GET /api/campaigns/{id}/pack", s.handleGetCampaignPack)
 	mux.HandleFunc("PUT /api/campaigns/{id}/pack", s.requireSameOrigin(s.handlePutCampaignPack))
+	mux.HandleFunc("POST /api/campaign-packs/generate", s.requireSameOrigin(s.handleGenerateCampaignPack))
+	mux.HandleFunc("POST /api/campaign-packs/save", s.requireSameOrigin(s.handleSaveCampaignPack))
 	mux.HandleFunc("GET /api/campaigns/{id}/pregens", s.handleListPregens)
 	mux.HandleFunc("PUT /api/campaigns/{id}/pregens", s.requireSameOrigin(s.handlePutPregen))
 	mux.HandleFunc("DELETE /api/campaigns/{id}/pregens/{pregenId}", s.requireSameOrigin(s.handleDeletePregen))
@@ -245,6 +266,157 @@ type campaignSecurityDTO struct {
 type campaignPackDTO struct {
 	PackDir string `json:"pack_dir"`
 	PackID  string `json:"pack_id"`
+}
+
+// generatedFileDTO is one file in the AI campaign-pack generation
+// flow's wire shape — the same fields as campaignpack.GeneratedFile,
+// kept as a separate type so this package's own JSON tags don't leak
+// into campaignpack's Go-facing struct.
+type generatedFileDTO struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// generateCampaignPackRequestDTO is POST /api/campaign-packs/generate's
+// request body. Slug is optional — a description-derived one is used
+// when omitted (see handleGenerateCampaignPack).
+type generateCampaignPackRequestDTO struct {
+	Description string `json:"description"`
+	MinLevel    int    `json:"min_level"`
+	MaxLevel    int    `json:"max_level"`
+	Slug        string `json:"slug"`
+}
+
+type generateCampaignPackResponseDTO struct {
+	Slug  string             `json:"slug"`
+	Files []generatedFileDTO `json:"files"`
+	// ValidationError is set when the generated files don't yet parse
+	// as a valid pack (e.g. a single file's YAML front matter has a
+	// syntax mistake — confirmed live against a real local model as a
+	// real, non-rare occurrence) — files are still returned for the
+	// Host to review and fix in place, rather than discarding an
+	// otherwise-good multi-minute generation over one fixable file.
+	// Save re-validates for real regardless of this field.
+	ValidationError string `json:"validation_error,omitempty"`
+}
+
+// saveCampaignPackRequestDTO is POST /api/campaign-packs/save's request
+// body — the Host's (possibly hand-edited, after reviewing a generate
+// response) final file set.
+type saveCampaignPackRequestDTO struct {
+	Slug  string             `json:"slug"`
+	Files []generatedFileDTO `json:"files"`
+}
+
+type saveCampaignPackResponseDTO struct {
+	// PackDir is handed straight to the existing, unmodified
+	// PUT /api/campaigns/{id}/pack to actually bind it — no new bind
+	// logic exists anywhere for a generated pack.
+	PackDir string `json:"pack_dir"`
+}
+
+// handleGenerateCampaignPack calls the configured LLM once
+// (campaignpack.Generate) and validates the result in a throwaway temp
+// directory before ever returning it — catching a malformed generation
+// immediately rather than letting the Host review something that would
+// fail to bind anyway. Nothing is written to the real campaign-packs
+// root here; see handleSaveCampaignPack for that.
+func (s *Server) handleGenerateCampaignPack(w http.ResponseWriter, r *http.Request) {
+	if s.llmProvider == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "no LLM provider is configured on this Master — set one up on the System tab first")
+		return
+	}
+	var dto generateCampaignPackRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(dto.Description) == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "description is required")
+		return
+	}
+
+	slugSource := dto.Slug
+	if slugSource == "" {
+		slugSource = dto.Description
+	}
+	slug, err := campaignpack.SanitizeSlug(slugSource)
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "could not derive a valid slug: "+err.Error())
+		return
+	}
+
+	files, err := campaignpack.Generate(r.Context(), s.llmProvider, s.llmModel, campaignpack.GenerateRequest{
+		Description: dto.Description,
+		MinLevel:    dto.MinLevel,
+		MaxLevel:    dto.MaxLevel,
+	})
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadGateway, "generation failed: "+err.Error())
+		return
+	}
+
+	// Pre-validate so the Host finds out immediately whether this
+	// generation is bindable as-is — but a validation failure still
+	// returns the files for review/editing rather than discarding an
+	// otherwise-good multi-minute generation over one fixable file
+	// (confirmed live: a single file's YAML front matter having a
+	// syntax mistake is a real, non-rare model quirk, not a hopeless
+	// generation). Save re-validates for real regardless.
+	var validationError string
+	tempDir, err := os.MkdirTemp("", "layforge-campaign-pack-preview-*")
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	if _, err := campaignpack.WriteAndValidate(tempDir, "preview", files); err != nil {
+		validationError = err.Error()
+	}
+	_ = os.RemoveAll(tempDir)
+
+	respFiles := make([]generatedFileDTO, len(files))
+	for i, f := range files {
+		respFiles[i] = generatedFileDTO{Path: f.Path, Content: f.Content}
+	}
+	s.writeJSON(w, http.StatusOK, generateCampaignPackResponseDTO{Slug: slug, Files: respFiles, ValidationError: validationError})
+}
+
+// handleSaveCampaignPack persists the Host's (possibly hand-edited)
+// reviewed file set for real, under s.campaignPacksDir — see
+// campaignpack.WriteAndValidate for the sandboxing and real-parser
+// validation this depends on. The returned pack_dir is meant to be
+// handed straight to the existing PUT /api/campaigns/{id}/pack by the
+// admin-web UI, not bound here.
+func (s *Server) handleSaveCampaignPack(w http.ResponseWriter, r *http.Request) {
+	if s.campaignPacksDir == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "no campaign-packs directory is configured on this Master")
+		return
+	}
+	var dto saveCampaignPackRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if dto.Slug == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "slug is required")
+		return
+	}
+	if len(dto.Files) == 0 {
+		s.writeErrorMsg(w, http.StatusBadRequest, "files is required and must not be empty")
+		return
+	}
+
+	files := make([]campaignpack.GeneratedFile, len(dto.Files))
+	for i, f := range dto.Files {
+		files[i] = campaignpack.GeneratedFile{Path: f.Path, Content: f.Content}
+	}
+
+	dir, err := campaignpack.WriteAndValidate(s.campaignPacksDir, dto.Slug, files)
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, saveCampaignPackResponseDTO{PackDir: dir})
 }
 
 // pregenDTO is the Pregens tab's wire shape (design doc §9.4) — ID is

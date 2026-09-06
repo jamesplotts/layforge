@@ -85,6 +85,43 @@
           <span id="create-campaign-status" class="save-status"></span>
         </div>
       </details>
+
+      <!-- Generates a full campaign pack (campaign.md + locations/npcs/
+           encounters) from a description via the configured LLM
+           (System tab) — reviewed and editable here before anything is
+           written to disk. Saving pre-fills the existing "Campaign Pack
+           Directory" field below with the result; binding it is that
+           same existing "Bind Pack" button, not new bind logic. -->
+      <details class="create-campaign">
+        <summary>Generate a campaign pack with AI</summary>
+        <div class="create-campaign-form">
+          <label>
+            Describe the adventure
+            <textarea id="generate-pack-description" rows="3" placeholder="e.g. A haunted lighthouse on a storm-battered coast, three keeper's log entries hint at what really happened."></textarea>
+          </label>
+          <label>
+            Min Level
+            <input id="generate-pack-min-level" type="text" inputmode="numeric" placeholder="1" />
+          </label>
+          <label>
+            Max Level
+            <input id="generate-pack-max-level" type="text" inputmode="numeric" placeholder="3" />
+          </label>
+          <label>
+            Slug (optional — derived from the description if left blank; this becomes the pack's directory name)
+            <input id="generate-pack-slug" type="text" placeholder="e.g. haunted-lighthouse" />
+          </label>
+          <button id="generate-pack-submit" type="button">Generate</button>
+          <span id="generate-pack-status" class="save-status"></span>
+
+          <div id="generate-pack-review" hidden>
+            <p class="panel-hint">Review and edit anything below — nothing is written to disk until you click Save Pack.</p>
+            <div id="generate-pack-files"></div>
+            <button id="generate-pack-save" type="button">Save Pack</button>
+            <span id="generate-pack-save-status" class="save-status"></span>
+          </div>
+        </div>
+      </details>
     </div>
 
     <section class="tab-panel" data-tab="campaign" hidden>

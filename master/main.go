@@ -119,10 +119,11 @@ func main() {
 	registryURL := flag.String("registry-url", "", "base URL of a layforge.org-style public campaign directory (registry/ in this repo), e.g. https://layforge.org. Leave empty (today's default) to run without any registry integration at all. Even when set, a specific campaign is only ever published if its own admin-panel Campaign tab has \"List in Public Lobby\" checked with a Join Address filled in — this flag alone lists nothing.")
 	registryHeartbeatInterval := flag.Duration("registry-heartbeat-interval", 30*time.Second, "how often to refresh each opted-in campaign's registry listing; ignored if -registry-url is empty. Should stay comfortably under the registry's own TTL (90s by default in registry/main.go) so a slow tick or two doesn't make a listing flicker.")
 	acceptTermsVersion := flag.String("accept-terms-version", "", "accept the Host/operator terms (internal/terms.Version) non-interactively — must exactly match the current version string to count. For scripted/CI deployments only: with -admin-addr enabled (the default), just open the admin panel once and click Agree instead. Leave empty otherwise.")
+	campaignPacksDir := flag.String("campaign-packs-dir", "generated-campaign-packs", "directory a Host's AI-generated campaign packs (admin panel Campaign tab) are written under, one subdirectory per pack — resolved relative to the working directory, same zero-config convention as -db's own default. Unrelated to wherever hand-authored packs happen to live; binding a pack still accepts any path. Leave empty to disable AI campaign-pack generation entirely.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *llmProvider, *llmAPIKey, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *acceptTermsVersion, *registryHeartbeatInterval, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *llmProvider, *llmAPIKey, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *acceptTermsVersion, *campaignPacksDir, *registryHeartbeatInterval, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -257,7 +258,7 @@ func listenURL(addr string) string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL, acceptTermsVersion string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL, acceptTermsVersion, campaignPacksDir string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -447,7 +448,7 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		policyProvider = admin.NewCampaignPackPolicyProvider(events, tiers, policyProvider)
 		policyProvider = admin.NewPolicyProvider(events, policyProvider)
 		restartRequested = make(chan struct{}, 1)
-		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, hub)
+		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, llmProvider, llmModel, campaignPacksDir, hub)
 	}
 
 	// imageGenProvider stays nil (no image generation, the

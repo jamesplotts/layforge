@@ -31,6 +31,7 @@
 
 const state = {
   campaignId: "",
+  generatedPackSlug: "",
 };
 
 const el = {
@@ -62,6 +63,16 @@ const el = {
   campaignPackCurrent: document.getElementById("campaign-pack-current"),
   campaignPackSave: document.getElementById("campaign-pack-save"),
   campaignPackSaveStatus: document.getElementById("campaign-pack-save-status"),
+  generatePackDescription: document.getElementById("generate-pack-description"),
+  generatePackMinLevel: document.getElementById("generate-pack-min-level"),
+  generatePackMaxLevel: document.getElementById("generate-pack-max-level"),
+  generatePackSlug: document.getElementById("generate-pack-slug"),
+  generatePackSubmit: document.getElementById("generate-pack-submit"),
+  generatePackStatus: document.getElementById("generate-pack-status"),
+  generatePackReview: document.getElementById("generate-pack-review"),
+  generatePackFiles: document.getElementById("generate-pack-files"),
+  generatePackSave: document.getElementById("generate-pack-save"),
+  generatePackSaveStatus: document.getElementById("generate-pack-save-status"),
   pregenTableBody: document.getElementById("pregen-table-body"),
   pregenId: document.getElementById("pregen-id"),
   pregenName: document.getElementById("pregen-name"),
@@ -389,6 +400,89 @@ el.campaignPackSave.addEventListener("click", async () => {
   }
   setStatus(el.campaignPackSaveStatus, "Bound.");
   await loadCampaignPack(state.campaignId);
+});
+
+// --- Generate a campaign pack with AI ---
+
+// Tracks the most recently generated set of files (path -> textarea
+// element) so Save can read back whatever the Host may have edited,
+// keyed the same way the server returned them.
+let generatedPackFiles = [];
+
+el.generatePackSubmit.addEventListener("click", async () => {
+  const description = el.generatePackDescription.value.trim();
+  if (!description) {
+    setStatus(el.generatePackStatus, "A description is required.", true);
+    return;
+  }
+  el.generatePackSubmit.disabled = true;
+  setStatus(el.generatePackStatus, "Generating… this can take a little while.");
+  el.generatePackReview.hidden = true;
+  try {
+    const resp = await fetch("/api/campaign-packs/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description,
+        min_level: parseInt(el.generatePackMinLevel.value, 10) || 0,
+        max_level: parseInt(el.generatePackMaxLevel.value, 10) || 0,
+        slug: el.generatePackSlug.value.trim(),
+      }),
+    });
+    if (!resp.ok) {
+      setStatus(el.generatePackStatus, `Failed: ${await errorText(resp)}`, true);
+      return;
+    }
+    const data = await resp.json();
+    state.generatedPackSlug = data.slug;
+    renderGeneratedPackFiles(data.files || []);
+    el.generatePackReview.hidden = false;
+    if (data.validation_error) {
+      // A single file's syntax mistake shouldn't discard an otherwise-
+      // good multi-minute generation — files are still shown for
+      // editing; Save Pack re-validates for real once fixed.
+      setStatus(el.generatePackStatus, `Generated, but doesn't validate yet — fix it below, then Save Pack: ${data.validation_error}`, true);
+    } else {
+      setStatus(el.generatePackStatus, "Generated — review and edit below, then Save Pack.");
+    }
+  } finally {
+    el.generatePackSubmit.disabled = false;
+  }
+});
+
+function renderGeneratedPackFiles(files) {
+  el.generatePackFiles.innerHTML = "";
+  generatedPackFiles = files.map((f) => {
+    const wrap = document.createElement("div");
+    wrap.className = "generated-file";
+    const label = document.createElement("label");
+    label.textContent = f.path;
+    const textarea = document.createElement("textarea");
+    textarea.value = f.content;
+    label.appendChild(textarea);
+    wrap.appendChild(label);
+    el.generatePackFiles.appendChild(wrap);
+    return { path: f.path, textarea };
+  });
+}
+
+el.generatePackSave.addEventListener("click", async () => {
+  setStatus(el.generatePackSaveStatus, "Saving…");
+  const files = generatedPackFiles.map((f) => ({ path: f.path, content: f.textarea.value }));
+  const resp = await fetch("/api/campaign-packs/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug: state.generatedPackSlug, files }),
+  });
+  if (!resp.ok) {
+    setStatus(el.generatePackSaveStatus, `Failed: ${await errorText(resp)}`, true);
+    return;
+  }
+  const data = await resp.json();
+  // Pre-fill the existing "Campaign Pack Directory" field — binding it
+  // is that same existing "Bind Pack" button, not new bind logic.
+  el.campaignPackDir.value = data.pack_dir;
+  setStatus(el.generatePackSaveStatus, `Saved to ${data.pack_dir} — select a campaign above and click "Bind Pack" to use it.`);
 });
 
 // --- Pregens tab ---

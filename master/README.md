@@ -1776,6 +1776,51 @@ accepted but this connection hasn't sent `terms.accept` yet blocks with
 end-to-end; and the headless-refusal / `-accept-terms-version` paths
 both behave exactly as documented.
 
+**New**: the admin panel's Campaign tab can now generate a full campaign
+pack from a one-paragraph description via the configured LLM
+(`internal/campaignpack.Generate`) — `campaign.md` plus a handful of
+`locations/npcs/encounters` files, in one structured tool call (not a
+raw-text completion — the same "structured JSON arguments via a tool
+call" pattern `internal/server/dm_tools.go` already relies on for
+reliability). Generated content is shown for review and hand-editing
+before anything is written to disk (`POST /api/campaign-packs/generate`),
+then saved under a new sandboxed root (`-campaign-packs-dir`) and
+validated by the *exact same* `campaignpack.LoadPack` gate a
+hand-authored pack goes through (`POST /api/campaign-packs/save`) —
+the result binds via the existing, unmodified `PUT
+/api/campaigns/{id}/pack`, no new bind logic anywhere. Path/slug
+sandboxing (`SanitizeSlug`/`PackDirFor`, a strict file-path allow-list)
+is genuinely new work, not reused from the existing pack-binding
+endpoint: this is the first feature where Master writes files based on
+model-influenced input rather than trusting an operator-typed path
+directly. The generation system prompt restates CLAUDE.md's own legal
+rule inline (original, SRD-legal content only) — the one place a
+self-hoster's *generated content itself*, not just their configuration,
+could raise real legal exposure.
+
+**Live-verified against a real local model**, and genuinely useful for
+having done so: pointed a real Master at the LAN's real Ollama server
+(`qwen3.8:27b`) and found four real, distinct reliability issues a
+fake-provider unit test alone would never have surfaced, fixed all
+four (with matching regression tests), then confirmed a real
+generate → save → bind round trip against real infrastructure:
+- The default 2-minute provider timeout (`internal/llm`) was too short
+  for a bulk multi-file generation against a local 27B model — raised
+  to 8 minutes (`DefaultProviderTimeout`) across all providers; a normal
+  narration/tool-use turn finishes far under either value.
+- The model sometimes stringifies the tool call's nested `files` array
+  instead of emitting a genuine JSON array, even though the schema says
+  array — `parseGeneratedFiles` now accepts either shape.
+- A single generated file's YAML front-matter mistake previously
+  discarded an entire otherwise-good generation with only an error
+  message — `POST /api/campaign-packs/generate` now returns the files
+  for review/editing either way, with a `validation_error` field set
+  when something doesn't parse yet, rather than a hard failure with
+  nothing to fix.
+- The model sometimes writes a backslash that isn't a valid JSON escape
+  (e.g. `\i`) inside its stringified payload — `escapeInvalidJSONBackslashes`
+  repairs that specific, confirmed-deterministic mistake before giving up.
+
 ## Layout
 
 ```

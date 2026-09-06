@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // OllamaProvider is a Provider backed by an Ollama server's /api/chat
@@ -34,7 +33,7 @@ var _ Provider = (*OllamaProvider)(nil)
 // take several seconds just to load, before generation even starts.
 func NewOllamaProvider(baseURL string, httpClient *http.Client) *OllamaProvider {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 2 * time.Minute}
+		httpClient = &http.Client{Timeout: DefaultProviderTimeout}
 	}
 	return &OllamaProvider{baseURL: strings.TrimRight(baseURL, "/"), client: httpClient}
 }
