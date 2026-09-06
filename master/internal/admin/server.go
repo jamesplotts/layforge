@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/campaignpack"
+	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/session"
@@ -30,6 +31,8 @@ const (
 	SystemKeyAddr             = "addr"
 	SystemKeyLLMURL           = "llm_url"
 	SystemKeyLLMModel         = "llm_model"
+	SystemKeyLLMProvider      = "llm_provider"
+	SystemKeyLLMAPIKey        = "llm_api_key"
 	SystemKeySystemEngineAddr = "system_engine_addr"
 	SystemKeyComfyUIURL       = "comfyui_url"
 	SystemKeyComfyUIWorkflow  = "comfyui_workflow_path"
@@ -41,9 +44,29 @@ var systemKeys = []string{
 	SystemKeyAddr,
 	SystemKeyLLMURL,
 	SystemKeyLLMModel,
+	SystemKeyLLMProvider,
+	SystemKeyLLMAPIKey,
 	SystemKeySystemEngineAddr,
 	SystemKeyComfyUIURL,
 	SystemKeyComfyUIWorkflow,
+}
+
+// EffectiveSystemSettings merges seed (typically the CLI flag values
+// Master actually booted with) with stored (whatever the admin panel has
+// saved via SaveSystemSettings) — a key present in stored wins, a key
+// absent from stored falls back to seed. Exported so main.go's own boot
+// sequence can apply the same "a saved System-tab setting overrides the
+// launch flags" resolution design doc §3.3 describes, not just
+// handleGetSystem's display of it.
+func EffectiveSystemSettings(seed, stored map[string]string) map[string]string {
+	effective := make(map[string]string, len(systemKeys))
+	for _, key := range systemKeys {
+		effective[key] = seed[key]
+	}
+	for key, value := range stored {
+		effective[key] = value
+	}
+	return effective
 }
 
 // Server is design doc §3.3's admin/operator HTTP surface: a JSON API
@@ -232,9 +255,19 @@ type pregenDTO struct {
 // systemSettingsDTO is the System tab's wire shape — one field per
 // systemKeys entry.
 type systemSettingsDTO struct {
-	Addr                string `json:"addr"`
-	LLMURL              string `json:"llm_url"`
-	LLMModel            string `json:"llm_model"`
+	Addr     string `json:"addr"`
+	LLMURL   string `json:"llm_url"`
+	LLMModel string `json:"llm_model"`
+	// LLMProvider selects which llm.Provider implementation Master
+	// constructs (see llm.ProviderKind) — empty behaves as
+	// llm.ProviderKindOllama, matching every self-hoster's config from
+	// before this field existed. LLMAPIKey is required for every other
+	// provider (validated in handlePutSystem/handleRestart) and is never
+	// sent to any Slave client — only ever read here, by this same
+	// local-only, operator-trusted admin listener (design doc §3.3).
+	LLMProvider string `json:"llm_provider"`
+	LLMAPIKey   string `json:"llm_api_key"`
+
 	SystemEngineAddr    string `json:"system_engine_addr"`
 	ComfyUIURL          string `json:"comfyui_url"`
 	ComfyUIWorkflowPath string `json:"comfyui_workflow_path"`
@@ -245,6 +278,8 @@ func (d systemSettingsDTO) toMap() map[string]string {
 		SystemKeyAddr:             d.Addr,
 		SystemKeyLLMURL:           d.LLMURL,
 		SystemKeyLLMModel:         d.LLMModel,
+		SystemKeyLLMProvider:      d.LLMProvider,
+		SystemKeyLLMAPIKey:        d.LLMAPIKey,
 		SystemKeySystemEngineAddr: d.SystemEngineAddr,
 		SystemKeyComfyUIURL:       d.ComfyUIURL,
 		SystemKeyComfyUIWorkflow:  d.ComfyUIWorkflowPath,
@@ -256,10 +291,27 @@ func systemSettingsDTOFromMap(m map[string]string) systemSettingsDTO {
 		Addr:                m[SystemKeyAddr],
 		LLMURL:              m[SystemKeyLLMURL],
 		LLMModel:            m[SystemKeyLLMModel],
+		LLMProvider:         m[SystemKeyLLMProvider],
+		LLMAPIKey:           m[SystemKeyLLMAPIKey],
 		SystemEngineAddr:    m[SystemKeySystemEngineAddr],
 		ComfyUIURL:          m[SystemKeyComfyUIURL],
 		ComfyUIWorkflowPath: m[SystemKeyComfyUIWorkflow],
 	}
+}
+
+// validateSystemSettings rejects a System-tab save that can't possibly
+// work, mirroring handlePutCampaignPolicy's own "opt-in requires its
+// companion field" validation shape: an unrecognized LLMProvider value,
+// or a non-Ollama provider with no API key to authenticate with.
+func validateSystemSettings(dto systemSettingsDTO) string {
+	if dto.LLMProvider != "" && !llm.ProviderKind(dto.LLMProvider).IsValid() {
+		return "llm_provider must be one of: ollama, anthropic, openai, openrouter, zai"
+	}
+	kind := llm.ProviderKind(dto.LLMProvider)
+	if kind != "" && kind != llm.ProviderKindOllama && dto.LLMAPIKey == "" {
+		return "llm_api_key is required for every llm_provider except ollama"
+	}
+	return ""
 }
 
 // campaignSummaryDTO is one row of the campaign list's wire shape —
@@ -756,13 +808,7 @@ func (s *Server) handleGetSystem(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, err)
 		return
 	}
-	effective := make(map[string]string, len(systemKeys))
-	for _, key := range systemKeys {
-		effective[key] = s.systemSeed[key]
-	}
-	for key, value := range stored {
-		effective[key] = value
-	}
+	effective := EffectiveSystemSettings(s.systemSeed, stored)
 	s.writeJSON(w, http.StatusOK, systemSettingsDTOFromMap(effective))
 }
 
@@ -774,6 +820,10 @@ func (s *Server) handlePutSystem(w http.ResponseWriter, r *http.Request) {
 	var dto systemSettingsDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if msg := validateSystemSettings(dto); msg != "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, msg)
 		return
 	}
 	if err := s.saveSystemSettings(r.Context(), dto); err != nil {
@@ -799,6 +849,10 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	err := json.NewDecoder(r.Body).Decode(&dto)
 	switch {
 	case err == nil:
+		if msg := validateSystemSettings(dto); msg != "" {
+			s.writeErrorMsg(w, http.StatusBadRequest, msg)
+			return
+		}
 		if err := s.saveSystemSettings(r.Context(), dto); err != nil {
 			s.writeError(w, err)
 			return

@@ -231,12 +231,26 @@
         <input id="sys-addr" type="text" placeholder=":8080" />
       </label>
       <label>
-        Ollama LLM URL
+        LLM Provider
+        <select id="sys-llm-provider">
+          <option value="ollama">Ollama (self-hosted)</option>
+          <option value="anthropic">Anthropic (Claude)</option>
+          <option value="openai">OpenAI (ChatGPT)</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="zai">Z.ai</option>
+        </select>
+      </label>
+      <label>
+        LLM Base URL (Ollama server address; for any other provider, only needed to override its default endpoint)
         <input id="sys-llm-url" type="text" placeholder="http://192.168.1.56:11434" />
       </label>
       <label>
-        Ollama Model
-        <input id="sys-llm-model" type="text" placeholder="qwen2.5:32b" />
+        LLM Model
+        <input id="sys-llm-model" type="text" placeholder="qwen3.8:27b, claude-opus-5, gpt-5, glm-4.6..." />
+      </label>
+      <label>
+        LLM API Key (required for every provider except Ollama — never sent to players)
+        <input id="sys-llm-api-key" type="password" autocomplete="off" placeholder="sk-..." />
       </label>
       <label>
         System Engine Address

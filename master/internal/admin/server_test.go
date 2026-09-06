@@ -437,6 +437,62 @@ func TestServer_PutSystem_OverridesSeedValue(t *testing.T) {
 	}
 }
 
+func TestServer_PutSystem_LLMProviderAndAPIKey_RoundTrip(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	putResp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/system", map[string]any{
+		"addr": ":8080", "llm_provider": "anthropic", "llm_api_key": "sk-ant-test", "llm_model": "claude-opus-5",
+	}, "")
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d", putResp.StatusCode)
+	}
+
+	getResp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/system", nil, "")
+	var got struct {
+		LLMProvider string `json:"llm_provider"`
+		LLMAPIKey   string `json:"llm_api_key"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.LLMProvider != "anthropic" || got.LLMAPIKey != "sk-ant-test" {
+		t.Errorf("got = %+v, want llm_provider=anthropic llm_api_key=sk-ant-test", got)
+	}
+}
+
+func TestServer_PutSystem_UnrecognizedProvider_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/system", map[string]any{
+		"llm_provider": "bogus",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_PutSystem_NonOllamaProviderWithoutAPIKey_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/system", map[string]any{
+		"llm_provider": "openai",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_PutSystem_OllamaProviderWithoutAPIKey_Allowed(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/system", map[string]any{
+		"llm_provider": "ollama", "llm_url": "http://localhost:11434",
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestServer_Restart_SignalsChannelAfterResponding(t *testing.T) {
 	restartRequested := make(chan struct{}, 1)
 	_, httpSrv := newTestServer(t, restartRequested)

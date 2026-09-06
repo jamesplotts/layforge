@@ -72,8 +72,10 @@ const el = {
   securitySave: document.getElementById("security-save"),
   securitySaveStatus: document.getElementById("security-save-status"),
   sysAddr: document.getElementById("sys-addr"),
+  sysLLMProvider: document.getElementById("sys-llm-provider"),
   sysLLMURL: document.getElementById("sys-llm-url"),
   sysLLMModel: document.getElementById("sys-llm-model"),
+  sysLLMAPIKey: document.getElementById("sys-llm-api-key"),
   sysSystemEngineAddr: document.getElementById("sys-system-engine-addr"),
   sysComfyUIURL: document.getElementById("sys-comfyui-url"),
   sysComfyUIWorkflow: document.getElementById("sys-comfyui-workflow"),
@@ -567,8 +569,10 @@ async function loadSystemSettings() {
   const resp = await fetch("/api/system");
   const data = await resp.json();
   el.sysAddr.value = data.addr || "";
+  el.sysLLMProvider.value = data.llm_provider || "ollama";
   el.sysLLMURL.value = data.llm_url || "";
   el.sysLLMModel.value = data.llm_model || "";
+  el.sysLLMAPIKey.value = data.llm_api_key || "";
   el.sysSystemEngineAddr.value = data.system_engine_addr || "";
   el.sysComfyUIURL.value = data.comfyui_url || "";
   el.sysComfyUIWorkflow.value = data.comfyui_workflow_path || "";
@@ -577,8 +581,10 @@ async function loadSystemSettings() {
 function systemSettingsBody() {
   return {
     addr: el.sysAddr.value,
+    llm_provider: el.sysLLMProvider.value,
     llm_url: el.sysLLMURL.value,
     llm_model: el.sysLLMModel.value,
+    llm_api_key: el.sysLLMAPIKey.value,
     system_engine_addr: el.sysSystemEngineAddr.value,
     comfyui_url: el.sysComfyUIURL.value,
     comfyui_workflow_path: el.sysComfyUIWorkflow.value,

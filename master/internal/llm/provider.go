@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 // Errors a Provider implementation should return (wrapped, so
@@ -146,4 +147,123 @@ type Provider interface {
 	// neither usable text nor a tool call, and a wrapped transport/API
 	// error otherwise.
 	Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
+}
+
+// ProviderKind identifies which concrete Provider implementation to
+// construct (see NewProvider) — design doc §3.1's "Holds all LLM provider
+// credentials (OpenRouter, or direct Claude/OpenAI keys)". The zero
+// value, ProviderKindUnspecified, is never valid on a config a caller
+// passes to NewProvider — see IsValid. This is the Go translation of the
+// Unspecified/LastValue enum-sentinel pattern from design doc §12 (see
+// CLAUDE.md).
+type ProviderKind string
+
+const (
+	ProviderKindUnspecified ProviderKind = ""
+	// ProviderKindOllama selects OllamaProvider — a self-hosted server,
+	// no API key.
+	ProviderKindOllama ProviderKind = "ollama"
+	// ProviderKindAnthropic selects AnthropicProvider (Claude's Messages
+	// API).
+	ProviderKindAnthropic ProviderKind = "anthropic"
+	// ProviderKindOpenAI selects OpenAICompatibleProvider pointed at
+	// OpenAI's own endpoint.
+	ProviderKindOpenAI ProviderKind = "openai"
+	// ProviderKindOpenRouter selects OpenAICompatibleProvider pointed at
+	// OpenRouter's endpoint.
+	ProviderKindOpenRouter ProviderKind = "openrouter"
+	// ProviderKindZAI selects OpenAICompatibleProvider pointed at Z.ai's
+	// endpoint.
+	ProviderKindZAI ProviderKind = "zai"
+)
+
+// IsValid reports whether k is a recognized provider kind. It
+// deliberately returns false for ProviderKindUnspecified.
+func (k ProviderKind) IsValid() bool {
+	switch k {
+	case ProviderKindOllama, ProviderKindAnthropic, ProviderKindOpenAI, ProviderKindOpenRouter, ProviderKindZAI:
+		return true
+	default:
+		return false
+	}
+}
+
+// Default base URLs for the hosted providers NewProvider constructs when
+// ProviderConfig.BaseURL is left empty — each provider's own published
+// API endpoint. An operator can override any of these (e.g. to point at
+// a self-hosted OpenAI-compatible gateway, or if a provider changes its
+// endpoint) via ProviderConfig.BaseURL / Master's own -llm-url flag.
+const (
+	AnthropicDefaultBaseURL  = "https://api.anthropic.com/v1"
+	OpenAIDefaultBaseURL     = "https://api.openai.com/v1"
+	OpenRouterDefaultBaseURL = "https://openrouter.ai/api/v1"
+	ZAIDefaultBaseURL        = "https://api.z.ai/api/paas/v4"
+)
+
+// ProviderConfig configures NewProvider.
+type ProviderConfig struct {
+	// Kind selects which Provider implementation to construct. Required.
+	Kind ProviderKind
+	// BaseURL is required for ProviderKindOllama (the operator's own
+	// server address, e.g. "http://192.168.1.56:11434"). For every other
+	// kind it's optional — empty falls back to that provider's own
+	// Default*BaseURL constant above.
+	BaseURL string
+	// APIKey is required for every kind except ProviderKindOllama, which
+	// needs no credential at all.
+	APIKey string
+}
+
+// NewProvider constructs the Provider cfg.Kind selects, wired to talk to
+// cfg.BaseURL (or that kind's own published default) with cfg.APIKey. It
+// returns an error — never panics — if cfg.Kind is invalid or a required
+// field is missing, so a self-hoster's misconfiguration surfaces as a
+// clean startup/admin-panel error rather than a nil-pointer failure the
+// first time Complete is called.
+func NewProvider(cfg ProviderConfig) (Provider, error) {
+	switch cfg.Kind {
+	case ProviderKindOllama:
+		if cfg.BaseURL == "" {
+			return nil, errors.New("llm: ollama provider requires a base URL")
+		}
+		return NewOllamaProvider(cfg.BaseURL, nil), nil
+	case ProviderKindAnthropic:
+		if cfg.APIKey == "" {
+			return nil, errors.New("llm: anthropic provider requires an API key")
+		}
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = AnthropicDefaultBaseURL
+		}
+		return NewAnthropicProvider(baseURL, cfg.APIKey, nil), nil
+	case ProviderKindOpenAI:
+		if cfg.APIKey == "" {
+			return nil, errors.New("llm: openai provider requires an API key")
+		}
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = OpenAIDefaultBaseURL
+		}
+		return NewOpenAICompatibleProvider(baseURL, cfg.APIKey, nil), nil
+	case ProviderKindOpenRouter:
+		if cfg.APIKey == "" {
+			return nil, errors.New("llm: openrouter provider requires an API key")
+		}
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = OpenRouterDefaultBaseURL
+		}
+		return NewOpenAICompatibleProvider(baseURL, cfg.APIKey, nil), nil
+	case ProviderKindZAI:
+		if cfg.APIKey == "" {
+			return nil, errors.New("llm: zai provider requires an API key")
+		}
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = ZAIDefaultBaseURL
+		}
+		return NewOpenAICompatibleProvider(baseURL, cfg.APIKey, nil), nil
+	default:
+		return nil, fmt.Errorf("llm: unknown provider kind %q", cfg.Kind)
+	}
 }

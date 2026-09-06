@@ -42,6 +42,13 @@
 // itself. Leave both unset (today's default) to run without the
 // generate_scene_image DM tool at all.
 //
+// -llm-provider selects which llm.Provider implementation narration and
+// the DM tool-use loop talk to: ollama (the default — self-hosted, no
+// API key, configured via -llm-url/-llm-model as before) or one of
+// anthropic/openai/openrouter/zai (each requiring -llm-api-key; -llm-url
+// becomes an optional override of that provider's own default endpoint).
+// See package llm's NewProvider.
+//
 // A second, local-only HTTP listener serves the admin/operator settings
 // panel (design doc §3.3, -admin-addr, default 127.0.0.1:8090) — see
 // package admin. Campaign/Security tab changes made there apply live;
@@ -92,8 +99,10 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "address for the WebSocket/HTTP listener")
 	dbPath := flag.String("db", "layforge.db", "path to the SQLite event-log database (design doc §10's zero-config default); use :memory: to disable persistence across restarts")
-	llmURL := flag.String("llm-url", "", "base URL of an Ollama server for the narrative-transform pipeline (design doc §7), e.g. http://192.168.1.56:11434; leave empty to disable narrative rendering")
-	llmModel := flag.String("llm-model", "qwen3.8:27b", "Ollama model tag to use for narrative rendering; ignored if -llm-url is empty")
+	llmURL := flag.String("llm-url", "", "for -llm-provider ollama (the default), the Ollama server's base URL, e.g. http://192.168.1.56:11434 — required to enable narrative rendering. For any other -llm-provider, an optional override of that provider's own default API base URL (e.g. to point at a self-hosted OpenAI-compatible gateway); leave empty to use the provider's published default.")
+	llmModel := flag.String("llm-model", "qwen3.8:27b", "model name/tag to use for narrative rendering, in whatever form the selected -llm-provider expects (an Ollama tag like qwen3.8:27b, or a vendor model id like claude-opus-5/gpt-5/glm-4.6/anthropic-claude-sonnet-5-on-openrouter).")
+	llmProvider := flag.String("llm-provider", "ollama", "which LLM provider narrative rendering and the DM tool-use loop (design doc §7, §8) talk to: ollama (self-hosted, default, no API key), anthropic (Claude), openai (ChatGPT), openrouter, or zai (Z.ai). Every provider but ollama additionally requires -llm-api-key.")
+	llmAPIKey := flag.String("llm-api-key", "", "API key for -llm-provider, required for every provider except ollama. Never logged, never sent to any Slave client — see design doc §3.1.")
 	webDir := flag.String("web-dir", defaultWebDir(), "directory to serve at / — the reference web client (design doc §4). Defaults to a \"web\" directory next to this binary, so a self-hoster can restyle it in place (see the package doc comment). Pass a different path to point at another copy (e.g. master/web itself, when iterating on the client via 'go run .' from within master/), or an empty string to disable serving it.")
 	roomPasswordsPath := flag.String("room-passwords", "", "path to a JSON file mapping campaign_id to a required join password (design doc §6.6's room-code auth provider), e.g. {\"my-campaign\": \"hunter2\"}. A campaign not listed is open to anyone. Leave empty to require no password anywhere (today's default).")
 	systemEngineAddr := flag.String("system-engine-addr", "", "host:port of a System Engine gRPC sidecar (design doc §6.1), e.g. localhost:5265 for a locally running OpenCombatEngine.GrpcSidecar. Leave empty to run without one (today's default) — nothing calls it yet, since dice/rules dispatch is still design doc §11 future work.")
@@ -110,7 +119,7 @@ func main() {
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *registryHeartbeatInterval, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *llmProvider, *llmAPIKey, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *registryHeartbeatInterval, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -209,7 +218,7 @@ func defaultAdminWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -221,17 +230,65 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 	}()
 	logger.Info("event store opened", "path", dbPath)
 
-	// llmProvider stays nil (narrative rendering disabled) unless -llm-url
-	// is set — Ollama isn't a zero-config default the way SQLite is, so
-	// self-hosters without one configured get a clean "unavailable"
+	// systemSeed holds the true CLI flag values Master actually started
+	// with — passed to admin.New as-is (see its own doc comment: "the
+	// fallback for a key GetSystemSettings has never stored an override
+	// for"). Resolved effective values below are computed from this seed
+	// plus whatever's in the settings DB, but systemSeed itself must stay
+	// the raw flags, not the resolved result, or a saved System-tab value
+	// would get baked into what handleGetSystem treats as "the flag
+	// default" on the next restart.
+	systemSeed := map[string]string{
+		admin.SystemKeyAddr:             addr,
+		admin.SystemKeyLLMURL:           llmURL,
+		admin.SystemKeyLLMModel:         llmModel,
+		admin.SystemKeyLLMProvider:      llmProviderFlag,
+		admin.SystemKeyLLMAPIKey:        llmAPIKey,
+		admin.SystemKeySystemEngineAddr: systemEngineAddr,
+		admin.SystemKeyComfyUIURL:       comfyUIURL,
+		admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
+	}
+
+	// design doc §3.3: a System-tab setting saved via the admin panel
+	// must take effect on every future boot regardless of what the
+	// launch flags say, since the panel's own "Save & Restart" re-execs
+	// with the same argv — so a stored override has to be resolved here,
+	// not just displayed as "effective" by handleGetSystem. A key never
+	// saved falls back to systemSeed exactly as before.
+	storedSystemSettings, err := events.GetSystemSettings(context.Background())
+	if err != nil {
+		return fmt.Errorf("main: loading system settings: %w", err)
+	}
+	effectiveSystemSettings := admin.EffectiveSystemSettings(systemSeed, storedSystemSettings)
+	addr = effectiveSystemSettings[admin.SystemKeyAddr]
+	llmURL = effectiveSystemSettings[admin.SystemKeyLLMURL]
+	llmModel = effectiveSystemSettings[admin.SystemKeyLLMModel]
+	llmProviderFlag = effectiveSystemSettings[admin.SystemKeyLLMProvider]
+	llmAPIKey = effectiveSystemSettings[admin.SystemKeyLLMAPIKey]
+	systemEngineAddr = effectiveSystemSettings[admin.SystemKeySystemEngineAddr]
+	comfyUIURL = effectiveSystemSettings[admin.SystemKeyComfyUIURL]
+	comfyUIWorkflowPath = effectiveSystemSettings[admin.SystemKeyComfyUIWorkflow]
+
+	// llmProvider stays nil (narrative rendering disabled) unless enabled
+	// below — Ollama isn't a zero-config default the way SQLite is, so a
+	// self-hoster without one configured gets a clean "unavailable"
 	// system.error on narrative.player_input rather than Master trying
-	// (and failing) to reach some default host that isn't theirs.
+	// (and failing) to reach some default host that isn't theirs. The
+	// enable condition mirrors the pre-multi-provider "llmURL != ''" gate
+	// exactly when llmProviderFlag is left at its "ollama" default, so an
+	// existing self-hoster's flags keep working unchanged.
+	kind := llm.ProviderKind(llmProviderFlag)
+	enableLLM := (kind == llm.ProviderKindOllama && llmURL != "") ||
+		(kind != llm.ProviderKindOllama && kind != llm.ProviderKindUnspecified && llmAPIKey != "")
 	var llmProvider llm.Provider
-	if llmURL != "" {
-		llmProvider = llm.NewOllamaProvider(llmURL, nil)
-		logger.Info("narrative rendering enabled", "llm_url", llmURL, "model", llmModel)
+	if enableLLM {
+		llmProvider, err = llm.NewProvider(llm.ProviderConfig{Kind: kind, BaseURL: llmURL, APIKey: llmAPIKey})
+		if err != nil {
+			return fmt.Errorf("main: configuring llm provider: %w", err)
+		}
+		logger.Info("narrative rendering enabled", "llm_provider", kind, "llm_url", llmURL, "model", llmModel)
 	} else {
-		logger.Info("narrative rendering disabled (no -llm-url configured)")
+		logger.Info("narrative rendering disabled (no llm provider configured)")
 	}
 
 	// authProvider stays nil (every campaign open to anyone) unless
@@ -319,14 +376,6 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 		policyProvider = admin.NewCampaignPackPolicyProvider(events, tiers, policyProvider)
 		policyProvider = admin.NewPolicyProvider(events, policyProvider)
 		restartRequested = make(chan struct{}, 1)
-		systemSeed := map[string]string{
-			admin.SystemKeyAddr:             addr,
-			admin.SystemKeyLLMURL:           llmURL,
-			admin.SystemKeyLLMModel:         llmModel,
-			admin.SystemKeySystemEngineAddr: systemEngineAddr,
-			admin.SystemKeyComfyUIURL:       comfyUIURL,
-			admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
-		}
 		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, hub)
 	}
 

@@ -421,17 +421,28 @@ already resolved to as a fallback, so nothing configured that way stops
 working, and a live end-to-end test confirmed a room password saved
 through the Security tab is genuinely enforced by the real `/ws`
 listener on the very next join attempt, no restart. System tab changes
-(listen address, LLM/System-Engine/ComfyUI endpoints) persist to the same
-database but only take effect on a restart, since each is wired into a
-long-lived client or listener exactly once at startup — the panel's own
-"Save & Restart" button triggers one itself: a graceful shutdown followed
-by Master re-executing itself with the same argv (not `syscall.Exec`,
-which would skip the cleanup Master's shutdown path already does). Live
-end-to-end verified: a System-tab value saved and restarted with came
-back correctly in the new process (overriding the flag default it booted
-with the first time), and the admin page's own poll-and-reload picked the
-new process back up automatically. See `main.go`'s package doc comment
-for a systemd `KillMode` caveat this self-restart interacts with.
+(listen address, LLM provider/URL/model/API key, System-Engine/ComfyUI
+endpoints) persist to the same database but only take effect on a
+restart, since each is wired into a long-lived client or listener exactly
+once at startup — the panel's own "Save & Restart" button triggers one
+itself: a graceful shutdown followed by Master re-executing itself with
+the same argv (not `syscall.Exec`, which would skip the cleanup Master's
+shutdown path already does). See `main.go`'s package doc comment for a
+systemd `KillMode` caveat this self-restart interacts with.
+
+**Fixed**: `run()` now actually calls `GetSystemSettings` at boot and
+merges it over the CLI-flag-seeded values (`admin.EffectiveSystemSettings`,
+shared with `handleGetSystem`'s own display logic) before constructing
+anything — a real gap found while adding the LLM-provider fields below:
+the re-exec on "Save & Restart" always passed the *original* argv
+unchanged, and nothing previously re-read the settings database at
+startup, so a saved System-tab value had no actual effect after the
+restart the panel itself triggers, contrary to design doc §3.3. Live
+end-to-end verified: saved `llm_provider`/`llm_api_key`/`llm_model` via
+the System tab, killed and relaunched Master with *none* of the
+corresponding flags on its command line at all, and confirmed the fresh
+process's own startup log showed narrative rendering enabled with the
+saved provider/model, not the flag defaults.
 
 The `map.*` message category (design doc §6.2) is now real too: a new
 `generate_combat_map` DM tool (called only when a fight's physical space
@@ -1769,8 +1780,10 @@ admin-web/                    the admin panel's own web UI — same plain
     `GrpcSidecar` instance (a .NET/C# process, built separately from this
     repo) for real dice/rules resolution and character import
     (`-system-engine-addr`).
-  - An [Ollama](https://ollama.com) server reachable over HTTP for
-    AI-narrated responses (`-llm-url`).
+  - An LLM provider for AI-narrated responses — an [Ollama](https://ollama.com)
+    server reachable over HTTP (`-llm-url`, the zero-API-key default), or
+    a hosted provider instead (`-llm-provider anthropic|openai|openrouter|zai`
+    plus `-llm-api-key`) — see "Provider selection" under Running below.
   - A self-hosted [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
     instance for the DM's `generate_scene_image` tool (`-comfyui-url`).
   - No Node/npm, no bundler for either web client (`web/`,
@@ -1815,6 +1828,24 @@ matters even more for the DM tool-use loop (design doc §8) specifically
 than for plain narration — see the DM tool-use section above for a
 direct, live A/B comparison between `qwen2.5:32b` and this flag's actual
 default, `qwen3.8:27b`, on the identical scenario.
+
+**Provider selection**: `-llm-provider` picks which `llm.Provider`
+implementation narration and the DM tool-use loop talk to — `ollama`
+(the default, self-hosted, no API key), `anthropic` (Claude),
+`openai` (ChatGPT), `openrouter`, or `zai` (Z.ai). Every provider but
+`ollama` additionally requires `-llm-api-key`; `-llm-url` becomes
+optional for them (an override of that provider's own default endpoint,
+e.g. to point at a self-hosted OpenAI-compatible gateway) rather than
+required. `-llm-model` still applies to all five — just set it to
+whatever model name/tag the chosen provider expects (a vendor id like
+`claude-opus-5`, `gpt-5`, or `glm-4.6`, rather than an Ollama tag). All
+five satisfy the same `llm.Provider` interface, so nothing else in
+Master's narrative pipeline or tool-use loop needs to know which one is
+active. The same three settings can also be changed live from the admin
+panel's System tab (see below) — a saved change there now correctly
+takes effect on the restart the panel triggers, closing a gap where a
+System-tab save previously had no actual effect after reboot (see the
+admin-panel Status paragraph further down).
 
 `-room-passwords` points at a JSON file mapping `campaign_id` to a
 required join password, e.g. `{"my-campaign": "hunter2"}` — a campaign
