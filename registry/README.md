@@ -67,9 +67,10 @@ expired entries regardless of whether a sweep has run).
 
 ## Real deployment (layforge.org)
 
-Deployed on this project's own home network, mirroring an
-already-working pattern (`promptdna.org`) on the same infrastructure —
-documented here so it's reproducible, not tribal knowledge:
+**Live**: `https://layforge.org` is this exact deployment, running on
+this project's own home network, mirroring an already-working pattern
+(`promptdna.org`) on the same infrastructure — documented here so it's
+reproducible, not tribal knowledge:
 
 - The `registry` binary + `web/` run on one LAN machine (`videogen`),
   bound to a LAN-reachable port (`8091`), as a systemd service:
@@ -124,6 +125,9 @@ documented here so it's reproducible, not tribal knowledge:
   pointing at the home network's public IP — the same one every other
   domain on this Apache instance already resolves to.
 
+- `certbot --apache -d layforge.org -d www.layforge.org` issued the
+  real cert and deployed `layforge.org-le-ssl.conf` automatically.
+
 ## Verification
 
 - `go build ./... && go vet ./... && go test -race ./...` — 21 tests,
@@ -142,3 +146,10 @@ documented here so it's reproducible, not tribal knowledge:
   that killing Master ungracefully (no deregister call at all) still
   made the listing disappear on its own once the registry's TTL passed
   with no further heartbeats.
+- **Re-verified against the real production deployment** at
+  `https://layforge.org` (not just the local pair of processes above):
+  a real Master pointed at `-registry-url https://layforge.org` opted a
+  test campaign in via the admin API, and the listing appeared in
+  `https://layforge.org/api/v1/listings` and the live homepage over
+  real HTTPS within one heartbeat interval; opting back out produced a
+  real deregister against production.

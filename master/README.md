@@ -1684,6 +1684,19 @@ call at all) still let the listing expire on its own via the
 registry's TTL once heartbeats stopped arriving — the self-healing
 design's actual failure-mode behavior, not just the happy path.
 
+**Deployed**: `https://layforge.org` is now the real, live public
+instance of this registry (see
+[`../registry/README.md`](../registry/README.md)'s own "Real deployment"
+section for the exact infrastructure) — real domain, real Let's
+Encrypt TLS via `certbot`, Apache reverse-proxying to the `registry`
+binary running as a systemd service on the LAN. **Re-verified against
+this real deployment**, not just a local pair of processes: pointed a
+real Master at `-registry-url https://layforge.org`, opted a test
+campaign in via the admin API, confirmed the listing appeared in
+`https://layforge.org/api/v1/listings` and the live homepage over real
+HTTPS within one heartbeat interval, and confirmed opting back out
+produced a real deregister against the production registry.
+
 ## Layout
 
 ```
