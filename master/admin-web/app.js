@@ -39,6 +39,7 @@ const el = {
   termsModal: document.getElementById("terms-modal"),
   termsModalText: document.getElementById("terms-modal-text"),
   termsModalAgree: document.getElementById("terms-modal-agree"),
+  campaignContext: document.getElementById("campaign-context"),
   campaignSelect: document.getElementById("campaign-select"),
   campaignTableBody: document.getElementById("campaign-table-body"),
   campaignListNote: document.getElementById("campaign-list-note"),
@@ -97,6 +98,10 @@ for (const button of el.tabButtons) {
 function selectTab(tabId) {
   for (const button of el.tabButtons) button.classList.toggle("active", button.dataset.tab === tabId);
   for (const panel of el.tabPanels) panel.hidden = panel.dataset.tab !== tabId;
+  // System is process-wide and needs no selected campaign at all — hide
+  // the shared campaign list/picker/create-form while it's active so a
+  // first-time Host sees only AI/LLM setup, not an empty campaign table.
+  el.campaignContext.hidden = tabId === "system";
 }
 
 // --- Campaign list, picker, and creation ---
