@@ -16,10 +16,12 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,11 +42,27 @@ func main() {
 	}
 }
 
+// Write-endpoint rate limiting: generous enough that a single operator
+// running several campaigns off one IP, each heartbeating independently,
+// never trips it in normal operation, while still meaningfully capping a
+// tight-loop spam attempt (see lobby.IPRateLimiter's own doc comment —
+// this only bounds one IP; lobby.ErrStoreFull covers a distributed
+// attempt from many IPs).
+const (
+	writeRateLimitPerSecond = 2
+	writeRateLimitBurst     = 20
+	// rateLimiterIdleTimeout bounds how long a quiet IP's bucket lingers
+	// before Sweep reclaims it — independent of -ttl/-sweep-interval
+	// (which govern listings, not rate-limit bookkeeping).
+	rateLimiterIdleTimeout = 10 * time.Minute
+)
+
 func run(addr, webDir string, ttl, sweepInterval time.Duration, logger *slog.Logger) error {
 	store := lobby.NewStore()
+	limiter := lobby.NewIPRateLimiter(writeRateLimitPerSecond, writeRateLimitBurst)
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/", lobby.NewHandler(store, ttl))
+	mux.Handle("/api/v1/", rateLimitWrites(limiter, lobby.NewHandler(store, ttl)))
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {
@@ -69,11 +87,23 @@ func run(addr, webDir string, ttl, sweepInterval time.Duration, logger *slog.Log
 				return
 			case <-ticker.C:
 				store.Sweep(ttl)
+				limiter.Sweep(rateLimiterIdleTimeout)
 			}
 		}
 	}()
 
-	httpServer := &http.Server{Addr: addr, Handler: mux}
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: securityHeaders(mux),
+		// Slowloris/connection-exhaustion defense — the default
+		// *http.Server has no timeouts at all, so a client opening many
+		// connections and trickling headers/body in slowly can exhaust
+		// goroutines/file descriptors with minimal bandwidth.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("registry listening", "addr", addr, "ttl", ttl)
@@ -95,6 +125,60 @@ func run(addr, webDir string, ttl, sweepInterval time.Duration, logger *slog.Log
 	}
 	<-sweepDone
 	return nil
+}
+
+// securityHeaders wraps next to set a fixed set of hardening response
+// headers on every response — belt-and-suspenders alongside whatever the
+// Apache reverse proxy in front of this in production also sets, so
+// these apply even to a direct request against this binary (local
+// testing, or a self-hoster who doesn't reverse-proxy it). The site
+// itself only ever loads its own same-origin style.css/app.js (no
+// external CDN/font/script), so a strict default-src 'self' CSP costs
+// nothing functionally.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// rateLimitWrites wraps next to reject a non-GET request against a
+// throttled IP with 429 before it ever reaches lobby's own handlers —
+// GET (the public listings read) is never limited, only the write
+// endpoints spam/abuse would actually target.
+func rateLimitWrites(limiter *lobby.IPRateLimiter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && !limiter.Allow(clientIP(r)) {
+			http.Error(w, "rate limit exceeded, try again shortly", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIP returns the request's real source IP for rate-limiting
+// purposes. This binary is documented (registry/README.md) as meant to
+// run behind a reverse proxy on a private port, never exposed directly
+// to the internet — trusting X-Forwarded-For's first hop is only safe
+// under that deployment shape; a self-hoster who exposes this binary
+// directly without a proxy in front loses rate-limit integrity to a
+// spoofed header, the same caveat that applies to trusting any proxy
+// header at all.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if ip := strings.TrimSpace(strings.Split(xff, ",")[0]); ip != "" {
+			return ip
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // defaultWebDir mirrors master/main.go's own defaultWebDir exactly — a

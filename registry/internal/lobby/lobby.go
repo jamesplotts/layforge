@@ -83,7 +83,20 @@ type Fields struct {
 var (
 	ErrNotFound      = errors.New("lobby: listing not found")
 	ErrTokenMismatch = errors.New("lobby: token does not match")
+	// ErrStoreFull is returned by Create once the store already holds
+	// maxListings entries — a hard mechanical cap, independent of any
+	// per-IP rate limiting the HTTP layer applies (package main's
+	// ipRateLimiter), since a distributed spam attempt from many
+	// different source IPs would otherwise still exhaust memory one
+	// listing at a time. A legitimate deployment is nowhere near this
+	// scale; hitting it means something is actively abusing the API.
+	ErrStoreFull = errors.New("lobby: at capacity, try again later")
 )
+
+// maxListings bounds how many listings Store will ever hold
+// simultaneously (see ErrStoreFull). Existing listings still expire and
+// get swept normally, so this self-heals once abusive traffic stops.
+const maxListings = 10000
 
 // Store is an in-memory, mutex-guarded directory of Listings. The zero
 // value is not usable — construct with NewStore.
@@ -117,6 +130,9 @@ func (s *Store) Create(fields Fields) (id, token string, err error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.listings) >= maxListings {
+		return "", "", ErrStoreFull
+	}
 	s.listings[id] = &Listing{
 		ID:                id,
 		Token:             token,

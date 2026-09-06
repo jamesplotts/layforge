@@ -208,3 +208,20 @@ func TestStore_Sweep_KeepsListingsWithinTTL(t *testing.T) {
 		t.Errorf("Live(1h) returned %d listings after Sweep(1h) on a fresh listing, want 1", len(live))
 	}
 }
+
+// TestStore_Create_AtCapacity_ReturnsErrStoreFull mirrors lobby.go's own
+// unexported maxListings constant (10000) — a mechanical cap independent
+// of any HTTP-layer rate limiting, protecting against a distributed spam
+// attempt from many different source IPs.
+func TestStore_Create_AtCapacity_ReturnsErrStoreFull(t *testing.T) {
+	const maxListings = 10000
+	s := lobby.NewStore()
+	for i := 0; i < maxListings; i++ {
+		if _, _, err := s.Create(testFields()); err != nil {
+			t.Fatalf("Create() #%d error = %v, want nil (still under capacity)", i, err)
+		}
+	}
+	if _, _, err := s.Create(testFields()); !errors.Is(err, lobby.ErrStoreFull) {
+		t.Errorf("Create() at capacity error = %v, want ErrStoreFull", err)
+	}
+}

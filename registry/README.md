@@ -51,6 +51,72 @@ self-hosted Master may call; authorization is the per-listing `token`
 alone, the same trust model a lot of small public directory services
 use (low-stakes data, real ownership check, no accounts).
 
+## Security
+
+Since this is a genuinely public, unauthenticated-write, internet-facing
+API, a real security pass (prompted by an actual review of this exact
+service) added several independent layers, each covering a different
+attack the previous ones don't:
+
+- **Request-size caps**, two independent layers: `internal/lobby`'s own
+  handlers wrap every write body in `http.MaxBytesReader` (16KB — see
+  `maxRequestBodyBytes`), so this binary itself never allocates unbounded
+  memory decoding a request regardless of what's in front of it; the
+  production Apache vhost additionally sets `LimitRequestBody 32768`, so
+  an oversized upload is rejected before Apache spends effort relaying it
+  to the backend at all. (A truly enormous body — multiple megabytes —
+  can still surface as a `502` rather than a clean `413` through the full
+  proxy chain, a known rough edge in how `mod_proxy` reacts to the
+  backend closing the connection mid-upload; the actual protection —
+  neither layer ever processes or buffers the oversized data — holds
+  either way.)
+- **Field length/shape validation** (`internal/lobby/handlers.go`'s
+  `validateFields`): `adventure_name`/`campaign_id` capped at 200
+  characters, `join_url` at 500 and required to parse as an absolute URL
+  with a scheme and host — rejects obvious garbage before it ever reaches
+  the public listings page.
+- **Per-IP rate limiting on writes** (`internal/lobby.IPRateLimiter`, a
+  hand-rolled token bucket — no dependency, matching this module's own
+  zero-dependency `go.mod`): 2 req/s sustained, burst 20, applied only to
+  POST/PUT/DELETE — `GET /api/v1/listings` (players' own browsers
+  polling every 30s) is never throttled. Generous enough that a single
+  operator running several campaigns off one IP never trips it in normal
+  heartbeat traffic.
+- **A hard cap on total listings** (`lobby.ErrStoreFull`, 10,000): the
+  per-IP limiter above only bounds one source; this bounds a distributed
+  attempt from many different IPs from exhausting memory one listing at
+  a time. Existing listings still expire/sweep normally, so this
+  self-heals the moment abusive traffic stops.
+- **HTTP server timeouts** (`main.go`'s `*http.Server`): `ReadHeaderTimeout`/
+  `ReadTimeout`/`WriteTimeout`/`IdleTimeout` are all set — Go's default
+  `*http.Server` has none at all, which is a real Slowloris/connection-
+  exhaustion exposure for an internet-facing listener.
+- **Security response headers**, set twice — once in this binary
+  (`securityHeaders` middleware, so they apply even to a direct request
+  bypassing the reverse proxy) and again at the Apache vhost (`mod_headers`,
+  matching in production): `Strict-Transport-Security`,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy`, and a `Content-Security-Policy: default-src 'self'`
+  (the site never loads anything but its own same-origin `style.css`/
+  `app.js`, so this costs nothing functionally).
+- **No stored-XSS surface**: `web/app.js` builds every listing row with
+  `textContent`, never `innerHTML` — attacker-controlled listing data
+  (which anyone can submit, by this API's own open-write design) can
+  never execute as script on the public page.
+- Apache's global `ServerTokens Prod`/`ServerSignature Off` (set on
+  `ironclad`, the box fronting this and its sibling domains) suppress the
+  `Server` response header's version string, a minor but free reduction
+  in what a would-be attacker can fingerprint.
+
+What this deliberately does **not** defend against: a self-hoster is
+always free to publish a fake/spam listing (fabricated `adventure_name`,
+a `join_url` pointing anywhere) — there's no way to cryptographically
+prove a listing corresponds to a real, reachable Master, by this API's
+own open-registration design (see "API" above). The mitigations above
+bound the *scale* of abuse (rate/size/count), not its existence; the
+lobby page's own copy already sets that expectation ("it does not create
+an account or connect you to anything automatically").
+
 ## Running
 
 ```
@@ -102,6 +168,7 @@ reproducible, not tribal knowledge:
   <VirtualHost *:80>
       ServerName layforge.org
       ServerAlias www.layforge.org
+      LimitRequestBody 32768
 
       ProxyPreserveHost On
       ProxyPass / http://192.168.1.56:8091/
@@ -119,7 +186,22 @@ reproducible, not tribal knowledge:
 
   (`192.168.1.56` is `videogen`'s LAN address; adjust for a different
   network.) `certbot --apache -d layforge.org -d www.layforge.org`
-  issues the matching `-le-ssl.conf` half automatically.
+  issues the matching `-le-ssl.conf` half automatically, into which the
+  same `LimitRequestBody` line and the following `mod_headers` block were
+  also added (see "Security" above for why):
+
+  ```apache
+  <IfModule mod_headers.c>
+      Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+      Header always set X-Content-Type-Options "nosniff"
+      Header always set X-Frame-Options "DENY"
+      Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  </IfModule>
+  ```
+
+  `ironclad`'s global `/etc/apache2/conf-available/security.conf` also
+  sets `ServerTokens Prod` / `ServerSignature Off` — box-wide, not
+  specific to this vhost.
 
 - DNS (Porkbun): an A record for `layforge.org` and `www.layforge.org`
   pointing at the home network's public IP — the same one every other
@@ -130,11 +212,22 @@ reproducible, not tribal knowledge:
 
 ## Verification
 
-- `go build ./... && go vet ./... && go test -race ./...` — 21 tests,
-  covering `internal/lobby`'s create/heartbeat/remove/token-mismatch/
-  not-found/TTL-expiry/sweep logic and its HTTP handlers (including
-  confirming `token` never appears in a `GET /api/v1/listings`
-  response).
+- `go build ./... && go vet ./... && go test -race ./...` — covering
+  `internal/lobby`'s create/heartbeat/remove/token-mismatch/not-found/
+  TTL-expiry/sweep logic and its HTTP handlers (including confirming
+  `token` never appears in a `GET /api/v1/listings` response), plus the
+  Security section's own additions: field-length/URL-shape validation,
+  the 413 request-size cap, `ErrStoreFull`'s capacity cap,
+  `IPRateLimiter`'s token-bucket behavior, and `main.go`'s security-
+  headers/rate-limit middleware.
+- **Security fixes re-verified against the real production deployment**
+  (not just local `httptest`): confirmed all 5 security response headers
+  present on `https://layforge.org` after the Apache reload; confirmed a
+  40KB write returns a clean `413` through the full proxy chain (Apache's
+  `LimitRequestBody` catching it before the backend); confirmed a bad
+  `join_url` still returns `400`; confirmed `curl -I` no longer leaks an
+  Apache version string; hammering `POST /api/v1/listings` past the
+  burst locally returned `429` as expected.
 - **Live-verified**, real separate processes (not `httptest` fakes): a
   real `registry` binary and a real `master` binary, `master`'s admin
   API used to opt a real test campaign in via `PUT

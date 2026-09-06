@@ -7,8 +7,49 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"time"
 )
+
+// maxRequestBodyBytes caps every write endpoint's request body — plenty
+// for these fields (see maxAdventureNameLen/maxJoinURLLen/
+// maxCampaignIDLen below), and small enough that a client sending an
+// oversized body can't use this handler to allocate unbounded memory.
+const maxRequestBodyBytes = 16 * 1024
+
+// Field length caps, generous for any real listing but small enough to
+// keep the public page readable and bound how much an attacker can pad
+// a single listing by (on top of maxRequestBodyBytes, which bounds the
+// whole request).
+const (
+	maxAdventureNameLen = 200
+	maxJoinURLLen       = 500
+	maxCampaignIDLen    = 200
+)
+
+// validateFields rejects a listing whose fields can't possibly be a real
+// join-able campaign: empty required fields (create's own additional
+// check), anything over the length caps above, or a join_url that
+// doesn't even parse as a URL with a scheme. Returns "" when fields is
+// acceptable.
+func validateFields(f Fields) string {
+	if len(f.AdventureName) > maxAdventureNameLen {
+		return "adventure_name is too long"
+	}
+	if len(f.JoinURL) > maxJoinURLLen {
+		return "join_url is too long"
+	}
+	if len(f.CampaignID) > maxCampaignIDLen {
+		return "campaign_id is too long"
+	}
+	if f.JoinURL != "" {
+		u, err := url.Parse(f.JoinURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return "join_url must be a valid absolute URL"
+		}
+	}
+	return ""
+}
 
 // NewHandler returns the HTTP handler for store's public API:
 //
@@ -81,31 +122,59 @@ type listingResponseBody struct {
 	CampaignID        string `json:"campaign_id"`
 }
 
+// decodeBody wraps r.Body in http.MaxBytesReader (every write endpoint's
+// shared defense against an oversized request body) and decodes it into
+// v, mapping a MaxBytesReader trip to 413 rather than a generic 400.
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErrorMsg(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		}
+		return false
+	}
+	return true
+}
+
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	var body listingRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+	if !decodeBody(w, r, &body) {
 		return
 	}
 	if body.AdventureName == "" || body.JoinURL == "" || body.CampaignID == "" {
 		writeErrorMsg(w, http.StatusBadRequest, "adventure_name, join_url, and campaign_id are required")
 		return
 	}
-	id, token, err := h.store.Create(body.fields())
-	if err != nil {
-		writeErrorMsg(w, http.StatusInternalServerError, err.Error())
+	fields := body.fields()
+	if msg := validateFields(fields); msg != "" {
+		writeErrorMsg(w, http.StatusBadRequest, msg)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "token": token})
+	id, token, err := h.store.Create(fields)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "token": token})
+	case errors.Is(err, ErrStoreFull):
+		writeErrorMsg(w, http.StatusServiceUnavailable, err.Error())
+	default:
+		writeErrorMsg(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (h *handler) heartbeat(w http.ResponseWriter, r *http.Request) {
 	var body listingRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+	if !decodeBody(w, r, &body) {
 		return
 	}
-	err := h.store.Heartbeat(r.PathValue("id"), body.Token, body.fields())
+	fields := body.fields()
+	if msg := validateFields(fields); msg != "" {
+		writeErrorMsg(w, http.StatusBadRequest, msg)
+		return
+	}
+	err := h.store.Heartbeat(r.PathValue("id"), body.Token, fields)
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusOK)
@@ -122,8 +191,7 @@ func (h *handler) remove(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+	if !decodeBody(w, r, &body) {
 		return
 	}
 	err := h.store.Remove(r.PathValue("id"), body.Token)

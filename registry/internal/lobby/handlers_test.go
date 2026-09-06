@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,6 +239,62 @@ func TestHandler_DeleteListing_WrongToken_ReturnsForbidden_AndDoesNotDelete(t *t
 	getResp.Body.Close()
 	if len(parsed.Listings) != 1 {
 		t.Errorf("listings after a rejected Delete = %+v, want still 1", parsed.Listings)
+	}
+}
+
+func TestHandler_PostListings_TooLongAdventureName_ReturnsBadRequest(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	body := listingRequestBody()
+	body["adventure_name"] = strings.Repeat("a", 201)
+	resp := doJSON(t, http.MethodPost, ts.URL+"/api/v1/listings", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestHandler_PostListings_JoinURLNotAURL_ReturnsBadRequest(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	body := listingRequestBody()
+	body["join_url"] = "not a url at all, just \n control chars"
+	resp := doJSON(t, http.MethodPost, ts.URL+"/api/v1/listings", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestHandler_PostListings_OversizedBody_Returns413(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	// Bigger than any conceivable legitimate listing body — proves the
+	// handler actually caps request size rather than reading it all into
+	// memory unbounded.
+	huge := listingRequestBody()
+	huge["adventure_name"] = strings.Repeat("a", 5*1024*1024)
+	resp := doJSON(t, http.MethodPost, ts.URL+"/api/v1/listings", huge)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge && resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 413 (or 400 if the decoder errors first)", resp.StatusCode)
+	}
+}
+
+func TestHandler_PutListings_TooLongAdventureName_ReturnsBadRequest(t *testing.T) {
+	ts, store := newTestServer(t)
+	id, token, err := store.Create(lobby.Fields{AdventureName: "ok", JoinURL: "wss://example.com/ws", CampaignID: "c"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	body := listingRequestBody()
+	body["token"] = token
+	body["adventure_name"] = strings.Repeat("a", 201)
+	resp := doJSON(t, http.MethodPut, ts.URL+"/api/v1/listings/"+id, body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
 
