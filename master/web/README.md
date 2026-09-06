@@ -183,9 +183,15 @@ note but has to rejoin to try again.
 
 Push-to-talk (design doc §4) is now wired: a hold-to-talk mic button
 next to the chat input, feature-detected (hidden if the browser has no
-`MediaRecorder`/`getUserMedia`), streams `audio.chunk` while held and
-populates `input-text` with Master's `audio.transcription` reply on
-release — for the player to edit before sending, never auto-sent. See
+`MediaRecorder`/`getUserMedia`), streams `audio.chunk` while held. Now
+also includes a genuine live-updating preview: Master periodically
+re-transcribes the growing recording while the button is still held and
+this client shows each result in `input-text` as it arrives
+(`onAudioTranscription`, same handler as the final result), with
+keyboard focus moving into the box only once the true, complete result
+arrives on release (`is_final: true`) — not on every partial, which
+would yank focus every couple of seconds while the player is still
+mid-recording. Never auto-sent, edit-before-send either way. See
 `../README.md`'s Status section for the full design rationale and live
 verification; this file just notes it exists.
 

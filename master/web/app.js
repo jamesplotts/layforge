@@ -21,8 +21,10 @@
 // §6.2) — a current-state widget, not appended to the scrolling log; see
 // onMapTokenState. Push-to-talk (audio.chunk -> audio.transcription,
 // design doc §4) is wired too — see the "Push-to-talk" section below —
-// but only transcribes into input-text for the player to edit before
-// sending; it does not stream a live partial preview while recording.
+// including a live-updating partial preview while still recording
+// (Master re-transcribes the growing recording periodically; this
+// client needs no protocol/capture change to receive that, since
+// audio.transcription already carried is_final for exactly this).
 //
 // The dice tray (and the sheet) needs a character Master's store
 // actually recognizes (roll.check_request/character.get are gated on
@@ -651,12 +653,15 @@ function onInputSubmit(event) {
 
 // --- Push-to-talk (design doc §4) ---
 //
-// Hold mic-button to record, release to stop; Master transcribes the
-// complete recording once (no live partial preview — see
-// internal/server/audio.go's own doc comment for why that's a
-// deliberate scope decision, not a gap) and the result lands in
-// input-text via onAudioTranscription for the player to edit before
-// actually sending, same as anything typed by hand.
+// Hold mic-button to record, release to stop. While still held, Master
+// periodically re-transcribes the growing recording (see internal/
+// server/audio.go's runPartialTranscription) and this client shows each
+// one live in input-text as it arrives (is_final: false) — a genuine
+// preview, not just cosmetic, since it can catch a misheard word before
+// the player has even let go. Releasing sends the Final chunk; the
+// completed transcription (is_final: true) replaces the preview one
+// last time via the same onAudioTranscription handler, and the player
+// edits it before actually sending, same as anything typed by hand.
 
 // PREFERRED_MIME_TYPES is checked in order; MediaRecorder.isTypeSupported
 // varies by browser (Chrome/Firefox default to webm/opus, Safari to
@@ -798,9 +803,17 @@ function onMicPointerUp(event) {
   }
 }
 
-// onAudioTranscription populates input-text with the finished
+// onAudioTranscription populates input-text with the latest
 // transcription so the player can edit it before sending — never sent
 // automatically (design doc §4's own stated goal for this feature).
+// Handles both a live partial (is_final: false, arrives repeatedly
+// while the mic button is still held) and the finished result
+// (is_final: true, on release) identically for the text itself — the
+// box simply always shows the most recent transcription Master has
+// produced. Focus only moves to the box on the final result: doing that
+// on every partial too would yank focus (and, on mobile, pop the
+// on-screen keyboard) every couple of seconds while the player is still
+// actively holding the mic button down, not done typing anything yet.
 // stream_id isn't checked against state.audioStreamId: only one
 // recording can be in flight from this client at a time (mic-button is
 // a single hold-to-record control), so whatever transcription arrives
@@ -810,7 +823,9 @@ function onAudioTranscription(msg) {
   if (!text) return;
   el.inputText.value = text;
   state.pendingInputSource = "voice";
-  el.inputText.focus();
+  if (msg.payload.is_final) {
+    el.inputText.focus();
+  }
 }
 
 function openSafetyFlagPanel() {

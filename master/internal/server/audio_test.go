@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,11 +24,18 @@ import (
 // fakeTranscriptionProvider is a controllable transcription.Provider —
 // lastAudio/lastMimeType capture the most recent call's arguments, for
 // asserting Server actually assembled and forwarded the full recording,
-// not just the last chunk.
+// not just the last chunk. Guarded by mu: the partial-transcription
+// pass calls Transcribe from its own background goroutine, genuinely
+// concurrently with the connection's own read-loop goroutine (which
+// calls it synchronously for the Final chunk) — unlike before that
+// feature existed, when only one goroutine ever touched this fake at
+// all. Tests read the captured fields through the snapshot() accessor
+// rather than directly, for the same reason.
 type fakeTranscriptionProvider struct {
 	text string
 	err  error
 
+	mu           sync.Mutex
 	lastAudio    []byte
 	lastMimeType string
 	callCount    int
@@ -36,13 +44,23 @@ type fakeTranscriptionProvider struct {
 var _ transcription.Provider = (*fakeTranscriptionProvider)(nil)
 
 func (f *fakeTranscriptionProvider) Transcribe(_ context.Context, audio []byte, mimeType string) (string, error) {
+	f.mu.Lock()
 	f.callCount++
 	f.lastAudio = audio
 	f.lastMimeType = mimeType
+	f.mu.Unlock()
 	if f.err != nil {
 		return "", f.err
 	}
 	return f.text, nil
+}
+
+// snapshot returns a consistent, race-free read of the fields Transcribe
+// mutates.
+func (f *fakeTranscriptionProvider) snapshot() (callCount int, lastAudio []byte, lastMimeType string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.callCount, f.lastAudio, f.lastMimeType
 }
 
 func newTestServerWithTranscription(t *testing.T, provider transcription.Provider) *httptest.Server {
@@ -100,11 +118,12 @@ func TestServe_AudioChunk_SingleFinalChunk_TranscribesAndRepliesOnSameConnection
 	if !transcript.Payload.IsFinal {
 		t.Error("IsFinal = false, want true")
 	}
-	if string(fake.lastAudio) != "hello-audio" {
-		t.Errorf("provider received audio = %q, want %q", string(fake.lastAudio), "hello-audio")
+	_, lastAudio, lastMimeType := fake.snapshot()
+	if string(lastAudio) != "hello-audio" {
+		t.Errorf("provider received audio = %q, want %q", string(lastAudio), "hello-audio")
 	}
-	if fake.lastMimeType != "audio/webm;codecs=opus" {
-		t.Errorf("provider received mimeType = %q, want audio/webm;codecs=opus", fake.lastMimeType)
+	if lastMimeType != "audio/webm;codecs=opus" {
+		t.Errorf("provider received mimeType = %q, want audio/webm;codecs=opus", lastMimeType)
 	}
 }
 
@@ -131,11 +150,17 @@ func TestServe_AudioChunk_MultipleChunks_AssemblesInOrderBeforeTranscribing(t *t
 	if err := wsjson.Read(ctx, conn, &transcript); err != nil {
 		t.Fatalf("Read(audio.transcription) error = %v", err)
 	}
-	if string(fake.lastAudio) != "one-two-three" {
-		t.Errorf("provider received assembled audio = %q, want %q", string(fake.lastAudio), "one-two-three")
+	callCount, lastAudio, _ := fake.snapshot()
+	if string(lastAudio) != "one-two-three" {
+		t.Errorf("provider received assembled audio = %q, want %q", string(lastAudio), "one-two-three")
 	}
-	if fake.callCount != 1 {
-		t.Errorf("Transcribe called %d times, want exactly 1 (only on the Final chunk)", fake.callCount)
+	// The first (non-Final) chunk above did start a background partial-
+	// transcription goroutine, but its interval (partialTranscriptionInterval,
+	// 2s by default) is far longer than this test takes to reach this
+	// assertion — see TestRunPartialTranscription_* (internal_test.go)
+	// for that behavior's own dedicated, interval-shrunk coverage.
+	if callCount != 1 {
+		t.Errorf("Transcribe called %d times, want exactly 1 (only on the Final chunk)", callCount)
 	}
 }
 
@@ -174,8 +199,8 @@ func TestServe_AudioChunk_NonFinalChunk_NoReplyAndNotYetTranscribed(t *testing.T
 	if err := wsjson.Read(ctx, conn, &resp); err != nil {
 		t.Fatalf("Read(log.history_response) error = %v", err)
 	}
-	if fake.callCount != 0 {
-		t.Errorf("Transcribe called %d times, want 0 before the Final chunk arrives", fake.callCount)
+	if callCount, _, _ := fake.snapshot(); callCount != 0 {
+		t.Errorf("Transcribe called %d times, want 0 before the Final chunk arrives", callCount)
 	}
 }
 
@@ -219,8 +244,8 @@ func TestServe_AudioChunk_MissingStreamID_ReturnsSystemError(t *testing.T) {
 	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
 		t.Fatalf("Read(system.error) error = %v", err)
 	}
-	if fake.callCount != 0 {
-		t.Errorf("Transcribe called %d times, want 0 for a rejected request", fake.callCount)
+	if callCount, _, _ := fake.snapshot(); callCount != 0 {
+		t.Errorf("Transcribe called %d times, want 0 for a rejected request", callCount)
 	}
 }
 
@@ -290,7 +315,7 @@ func TestServe_AudioChunk_TwoDistinctStreams_DoNotCrossContaminate(t *testing.T)
 	if err := wsjson.Read(ctx, connB, &transcriptB); err != nil {
 		t.Fatalf("Read(audio.transcription b) error = %v", err)
 	}
-	if string(fake.lastAudio) != "from-b" {
-		t.Errorf("stream-b's transcription used audio %q, want %q (must not include stream-a's still-buffered chunk)", string(fake.lastAudio), "from-b")
+	if _, lastAudio, _ := fake.snapshot(); string(lastAudio) != "from-b" {
+		t.Errorf("stream-b's transcription used audio %q, want %q (must not include stream-a's still-buffered chunk)", string(lastAudio), "from-b")
 	}
 }

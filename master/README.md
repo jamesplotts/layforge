@@ -1273,29 +1273,65 @@ rendering (Ollama) and image generation (ComfyUI) already work. New
 `-whisper-url`/`-whisper-model` flags wire it in; left unset (today's
 default), `audio.chunk` gets a real "not configured" `system.error`.
 
-What was actually asked for, and what got built, is narrower than design
-doc §4's full description: a *finished* transcript populated into the
-player's own chat box for them to edit before sending, not a live-
-updating partial preview while they talk. `internal/server/audio.go`
-buffers a stream's chunks (keyed by `stream_id`, guarded by a mutex since
-multiple connections can be mid-recording at once) until the client's
-`Final` chunk arrives, then transcribes the complete recording exactly
-once and replies with a single `audio.transcription` (`is_final: true`)
-on that same connection only — never broadcast, since a still-recording
-or freshly finalized push-to-talk isn't anyone else's business. It
-likewise doesn't run its own Voice Activity Detection: the held-button
+The initial pass here was narrower than design doc §4's full
+description — a *finished* transcript populated into the player's own
+chat box, not a live-updating partial preview while they talk — with
+`AudioTranscriptionPayload.IsFinal` deliberately carrying the field a
+future incremental-partial implementation would need, so adding it
+later would be additive, not a protocol change. **That partial-preview
+half is now built too**: `internal/server/audio.go`'s `handleAudioChunk`
+still buffers a stream's chunks (keyed by `stream_id`, guarded by a
+mutex since multiple connections can be mid-recording at once) until
+the client's `Final` chunk arrives, but a new `runPartialTranscription`
+now also runs in the background from the very first chunk, re-running
+the exact same batch `Provider.Transcribe` call every
+`partialTranscriptionInterval` (2s by default) against whatever audio
+has arrived so far, broadcasting each result as `audio.transcription`
+(`is_final: false`) to the recording player only. This deliberately
+isn't a genuinely different streaming-ASR backend contract — a
+MediaRecorder recording concatenated up to any chunk boundary received
+so far is itself a valid, decodable file (the existing final-pass
+concatenation already relied on exactly this), so live partials need no
+new transcription backend, protocol field, or client audio-capture
+change, only Master re-transcribing more often. The real cost tradeoff
+is explicit, not hidden: each round re-transcribes the *whole*
+recording so far, not just the new audio since the last round (cost
+grows with recording length), and the preview updates in visible jumps
+every interval rather than smoothly word-by-word — both accepted as
+reasonable for push-to-talk's bounded, few-seconds-to-perhaps-
+thirty-seconds recordings.
+
+A real race gets a real fix, not an assumption: a partial pass that
+started before the Final chunk arrived could otherwise finish (its own
+`Transcribe` call takes real time) and get delivered *after* the true,
+complete `is_final: true` result, visibly reverting the player's input
+box to stale, truncated text — the client's own completion handling has
+no timestamp/ordering check of its own, it just shows whatever arrives
+most recently. `sendPartialTranscriptionIfStillRecording` closes this by
+checking "does this stream still have a buffer" under the exact same
+mutex `takeAudioStream` locks to delete it on finalization — whichever
+of the two runs first is guaranteed to complete before the other
+starts, so a losing partial sees the entry already gone and sends
+nothing. Both the final message and every partial now go through
+`sendToSender` (never a direct connection write), so they funnel
+through the same per-connection outbox channel and FIFO delivery order
+matches that lock's own ordering guarantee rather than depending on
+whichever goroutine happens to reach the socket first.
+`partialTranscriptionInterval` is a package `var`, not a `const`,
+specifically so tests can shrink it instead of waiting on the real
+2-second cadence.
+
+It still does not run its own Voice Activity Detection: the held-button
 window is already the speech boundary a human chose, and a self-hosted
-backend is free to do its own VAD internally. `AudioTranscriptionPayload.
-IsFinal` still carries the field a future incremental-partial
-implementation would need, so adding that later is additive, not a
-protocol change. Per design doc §10, none of this — the raw audio, nor
-its transcription — is written to the durable event log; only once the
-player edits/confirms the text and it goes out as a real
-`narrative.player_input` does it join the log, the same as anything
-typed by hand. `protocol/asyncapi.yaml`'s `AudioChunk` schema gained a
-`mime_type` field it didn't have yet (the wire format wasn't specified) —
-needed so Master can forward the browser's actual codec choice to the
-transcription backend rather than assuming one.
+backend is free to do its own VAD internally. Per design doc §10, none
+of this — the raw audio, nor any transcription, partial or final — is
+written to the durable event log; only once the player edits/confirms
+the text and it goes out as a real `narrative.player_input` does it
+join the log, the same as anything typed by hand. `protocol/asyncapi.yaml`'s
+`AudioChunk` schema gained a `mime_type` field it didn't have yet (the
+wire format wasn't specified) — needed so Master can forward the
+browser's actual codec choice to the transcription backend rather than
+assuming one.
 
 The web client (`web/`) gained a hold-to-talk mic button next to the
 chat input, feature-detected (hidden entirely if the browser has no
@@ -1303,9 +1339,16 @@ chat input, feature-detected (hidden entirely if the browser has no
 *Master* has a whisper server configured — a recording sent to an
 unconfigured Master just surfaces the same real `system.error` any other
 unavailable feature would). Held, it records via `MediaRecorder`,
-streaming `audio.chunk` messages in 250ms timeslices; released, it stops
-and the final chunk triggers transcription. The reply lands in
-`input-text` via `onAudioTranscription` — never auto-sent. Whether the
+streaming `audio.chunk` messages in 250ms timeslices; each periodic
+partial result Master sends while still held updates `input-text` live
+via the same `onAudioTranscription` handler (a genuine, not cosmetic,
+preview — it can catch a misheard word before the player even lets go);
+released, the final chunk triggers the last transcription, which
+replaces the preview one more time. `onAudioTranscription` only moves
+keyboard focus into the box on that final result (`is_final: true`) —
+doing it on every partial too would yank focus (and pop a mobile
+on-screen keyboard) every couple of seconds while the player is still
+actively holding the button down. Nothing is ever auto-sent. Whether the
 eventual `narrative.player_input`'s `source` is `"voice"` or `"typed"`
 is tracked per-keystroke: it starts as `"voice"` the instant a
 transcription populates the box, and reverts to `"typed"` the moment the
@@ -1335,6 +1378,34 @@ configured, confirming the mic button renders in the right place with no
 console errors — actually holding it and speaking into a real microphone
 still needs a human check with real hardware, since this environment has
 no audio input device to automate that half of the flow.
+
+**Live partial transcription separately verified live**, real running
+Master (real 2-second default `partialTranscriptionInterval`, not
+shrunk for the test) plus a real, separately-running stub HTTP server
+speaking the same `/v1/audio/transcriptions` contract WhisperProvider
+calls — a real second process, not an in-process Go-test fake, so this
+proves Master's own real timer/goroutine/wire-delivery behavior rather
+than just the `go test` runner's scheduling. (The stub's "transcription"
+is a computed stand-in — audio length and a timestamp, not real
+speech-to-text; real ASR accuracy through this same endpoint contract
+was already proven above with `faster-whisper` — this pass exists only
+to exercise Master's own plumbing.) A WS driver streamed 22 chunks over
+~5.5 real seconds, mimicking a held mic button: two real partial
+`audio.transcription` results arrived at the real ~2-second cadence
+while the simulated recording was still in progress (growing byte
+counts confirming each pass re-transcribed more audio than the last),
+followed by the correct final result with no stale partial arriving
+after it. Confirmed a second way, directly against the real browser
+client rather than just a Go WS driver: joined a real page, injected
+real `audio.chunk` messages over a second raw connection registered
+under the same `sender_id` (delivered to the page's own real connection
+via `sendToSender`, the same "a sender may have more than one
+connection open" behavior this codebase already documents elsewhere),
+and watched the real DOM `#input-text` value update live with each
+partial while `document.activeElement` stayed on `<body>` (no stolen
+focus), then jump to the final result with focus moving into the box
+only at that point — exactly the behavior `onAudioTranscription`'s own
+doc comment describes.
 
 **New**: design doc §9.6 Spotlight Balance — a soft signal, not a hard
 gate, surfacing which player characters have gone quiet so the DM can

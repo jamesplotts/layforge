@@ -586,7 +586,7 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// transcription are explicitly ephemeral — only a finalized,
 		// possibly player-edited narrative.player_input becomes part of
 		// the durable log, the same as typed input already does.
-		return s.handleAudioChunk(ctx, conn, campaignID, envelope.MessageID, req.Payload)
+		return s.handleAudioChunk(ctx, conn, campaignID, envelope.SenderID, envelope.MessageID, req.Payload)
 	case protocol.MessageTypeCharacterCreationStart:
 		// Not recorded: like character.schema_request/character.get, this
 		// is a query kicking off a flow, not itself a game event.
