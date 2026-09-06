@@ -197,24 +197,37 @@ func loadCampaignPolicies(path string) (map[string]policy.CampaignPolicy, error)
 // web/ travels with the binary. Falls back to a cwd-relative "web" if the
 // executable's own path can't be determined, which should only happen in
 // unusual environments (e.g. some minimal containers).
-func defaultWebDir() string {
+// defaultDir resolves name (e.g. "web") for defaultWebDir/
+// defaultAdminWebDir: a cwd-relative name wins if it exists, else falls
+// back to a name directory next to the running executable. The
+// cwd-relative check exists specifically for 'go run .': it compiles to
+// a throwaway os.TempDir() build directory and executes it from there,
+// so os.Executable() alone always resolves to a directory that can
+// never exist — silently disabling the web client for anyone following
+// Quick Start's own documented 'go run .' instruction (a real bug this
+// closes, not a hypothetical one). The executable-relative fallback
+// still matters for a compiled binary launched from an unrelated cwd
+// (e.g. a systemd unit, or an operator invoking it via an absolute
+// path) with its own name directory alongside it on disk.
+func defaultDir(name string) string {
+	if info, err := os.Stat(name); err == nil && info.IsDir() {
+		return name
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		return "web"
+		return name
 	}
-	return filepath.Join(filepath.Dir(exe), "web")
+	return filepath.Join(filepath.Dir(exe), name)
+}
+
+func defaultWebDir() string {
+	return defaultDir("web")
 }
 
 // defaultAdminWebDir mirrors defaultWebDir exactly, for the admin
-// panel's own static UI directory (design doc §3.3) — an "admin-web"
-// directory next to the binary rather than the current working
-// directory, for the same reason defaultWebDir isn't cwd-relative.
+// panel's own static UI directory (design doc §3.3).
 func defaultAdminWebDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "admin-web"
-	}
-	return filepath.Join(filepath.Dir(exe), "admin-web")
+	return defaultDir("admin-web")
 }
 
 // listenURL turns a listener bind address (e.g. ":8080", "0.0.0.0:8080",
