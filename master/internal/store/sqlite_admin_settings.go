@@ -6,7 +6,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -17,23 +16,19 @@ var _ AdminSettingsStore = (*SQLiteEventStore)(nil)
 // GetCampaignSettings implements AdminSettingsStore.
 func (s *SQLiteEventStore) GetCampaignSettings(ctx context.Context, campaignID string) (CampaignSettings, bool, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, min_level, max_level, max_players, registry_listed, join_address
+		`SELECT pvp_policy, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, min_level, max_level, max_players, registry_listed, join_address
 		 FROM campaign_settings
 		 WHERE campaign_id = ?`,
 		campaignID,
 	)
 
 	var settings CampaignSettings
-	var pvpConsent string
-	err := row.Scan(&settings.PvPPolicy, &pvpConsent, &settings.MaturityTierPrompt, &settings.ImageMaturityTierPrompt, &settings.RoomPassword, &settings.PriceMultiplier, &settings.MinLevel, &settings.MaxLevel, &settings.MaxPlayers, &settings.RegistryListed, &settings.JoinAddress)
+	err := row.Scan(&settings.PvPPolicy, &settings.MaturityTierPrompt, &settings.ImageMaturityTierPrompt, &settings.RoomPassword, &settings.PriceMultiplier, &settings.MinLevel, &settings.MaxLevel, &settings.MaxPlayers, &settings.RegistryListed, &settings.JoinAddress)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CampaignSettings{}, false, nil
 	}
 	if err != nil {
 		return CampaignSettings{}, false, fmt.Errorf("store: getting campaign settings: %w", err)
-	}
-	if err := json.Unmarshal([]byte(pvpConsent), &settings.PvPConsent); err != nil {
-		return CampaignSettings{}, false, fmt.Errorf("store: parsing pvp_consent for campaign %q: %w", campaignID, err)
 	}
 	return settings, true, nil
 }
@@ -44,17 +39,11 @@ func (s *SQLiteEventStore) SaveCampaignSettings(ctx context.Context, campaignID 
 		return ErrCampaignIDRequired
 	}
 
-	pvpConsent, err := json.Marshal(settings.PvPConsent)
-	if err != nil {
-		return fmt.Errorf("store: marshaling pvp_consent for campaign %q: %w", campaignID, err)
-	}
-
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO campaign_settings (campaign_id, pvp_policy, pvp_consent, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, min_level, max_level, max_players, registry_listed, join_address, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO campaign_settings (campaign_id, pvp_policy, maturity_tier_prompt, image_maturity_tier_prompt, room_password, price_multiplier, min_level, max_level, max_players, registry_listed, join_address, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (campaign_id) DO UPDATE SET
 			pvp_policy = excluded.pvp_policy,
-			pvp_consent = excluded.pvp_consent,
 			maturity_tier_prompt = excluded.maturity_tier_prompt,
 			image_maturity_tier_prompt = excluded.image_maturity_tier_prompt,
 			room_password = excluded.room_password,
@@ -65,7 +54,7 @@ func (s *SQLiteEventStore) SaveCampaignSettings(ctx context.Context, campaignID 
 			registry_listed = excluded.registry_listed,
 			join_address = excluded.join_address,
 			updated_at = excluded.updated_at`,
-		campaignID, settings.PvPPolicy, string(pvpConsent), settings.MaturityTierPrompt, settings.ImageMaturityTierPrompt, settings.RoomPassword, settings.PriceMultiplier, settings.MinLevel, settings.MaxLevel, settings.MaxPlayers, settings.RegistryListed, settings.JoinAddress,
+		campaignID, settings.PvPPolicy, settings.MaturityTierPrompt, settings.ImageMaturityTierPrompt, settings.RoomPassword, settings.PriceMultiplier, settings.MinLevel, settings.MaxLevel, settings.MaxPlayers, settings.RegistryListed, settings.JoinAddress,
 		time.Now().UTC().Format(occurredAtLayout),
 	)
 	if err != nil {

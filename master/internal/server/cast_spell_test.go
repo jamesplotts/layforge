@@ -217,21 +217,6 @@ func TestServe_NarrativePlayerInput_SlowPass_CastSpell_PvPGate(t *testing.T) {
 			wantSuccess:   true,
 		},
 		{
-			name:          "DamageDifferentPlayer_WithConsent_ConsentGranted_Succeeds",
-			targetOwner:   "player-b",
-			targetDamaged: true,
-			policies:      map[string]policy.CampaignPolicy{"campaign-cast-pvp": {PvPPolicy: policy.PvPPolicyWithConsent, PvPConsent: []string{"player-b"}}},
-			wantSuccess:   true,
-		},
-		{
-			name:           "DamageDifferentPlayer_WithConsent_NoConsent_Blocked",
-			targetOwner:    "player-b",
-			targetDamaged:  true,
-			policies:       map[string]policy.CampaignPolicy{"campaign-cast-pvp": {PvPPolicy: policy.PvPPolicyWithConsent}},
-			wantSuccess:    false,
-			wantReasonCode: "pvp_no_consent",
-		},
-		{
 			name:          "DamageOwnCharacter_NotGated_SucceedsEvenUnderPveOnly",
 			targetOwner:   "player-a",
 			targetDamaged: true,

@@ -14,7 +14,6 @@ func TestPvPPolicy_IsValid(t *testing.T) {
 		{"Unspecified_ReturnsFalse", PvPPolicyUnspecified, false},
 		{"PveOnly_ReturnsTrue", PvPPolicyPveOnly, true},
 		{"Allowed_ReturnsTrue", PvPPolicyAllowed, true},
-		{"WithConsent_ReturnsTrue", PvPPolicyWithConsent, true},
 		{"UnrecognizedValue_ReturnsFalse", PvPPolicy("pvp_free_for_all"), false},
 	}
 	for _, tt := range tests {
@@ -100,9 +99,6 @@ func TestDefault_IsPveOnlyWithNoMaturityConstraint(t *testing.T) {
 	}
 	if got.MaturityTierPrompt != "" {
 		t.Errorf("Default().MaturityTierPrompt = %q, want empty (no constraint injected by default)", got.MaturityTierPrompt)
-	}
-	if len(got.PvPConsent) != 0 {
-		t.Errorf("Default().PvPConsent = %v, want empty", got.PvPConsent)
 	}
 }
 

@@ -64,7 +64,7 @@ func NewCampaignPackPolicyProvider(s store.CampaignPackStore, tiers map[string]m
 // resolve independently of each other: a pack with a valid pvp_policy
 // but an unresolvable maturity_tier (no tiers configured, or an id not
 // in the registry) still gets its pvp_policy applied, with
-// MaturityTierPrompt (and every other field — PvPConsent,
+// MaturityTierPrompt (and every other field —
 // ImageMaturityTierPrompt, PriceMultiplier) carried through from
 // Fallback rather than discarded.
 func (p *CampaignPackPolicyProvider) Policy(ctx context.Context, campaignID string) (policy.CampaignPolicy, error) {

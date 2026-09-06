@@ -278,7 +278,6 @@ func TestCampaignPackPolicyProvider_BoundPack_PreservesFallbackFieldsItDoesNotOv
 	s := newTestStore(t)
 	fallback := fakePolicyProvider{policy: policy.CampaignPolicy{
 		PvPPolicy:               policy.PvPPolicyAllowed,
-		PvPConsent:              []string{"player-a"},
 		ImageMaturityTierPrompt: "image tier text",
 		PriceMultiplier:         1.5,
 	}}
@@ -297,9 +296,6 @@ func TestCampaignPackPolicyProvider_BoundPack_PreservesFallbackFieldsItDoesNotOv
 	// Fallback rather than being reset to zero values.
 	if got.PvPPolicy != policy.PvPPolicyPveOnly {
 		t.Errorf("PvPPolicy = %q, want %q", got.PvPPolicy, policy.PvPPolicyPveOnly)
-	}
-	if len(got.PvPConsent) != 1 || got.PvPConsent[0] != "player-a" {
-		t.Errorf("PvPConsent = %v, want [player-a] (preserved from fallback)", got.PvPConsent)
 	}
 	if got.ImageMaturityTierPrompt != "image tier text" {
 		t.Errorf("ImageMaturityTierPrompt = %q, want %q (preserved from fallback)", got.ImageMaturityTierPrompt, "image tier text")

@@ -61,7 +61,6 @@ var initStatements = []string{
 	`CREATE TABLE IF NOT EXISTS campaign_settings (
 		campaign_id                TEXT PRIMARY KEY,
 		pvp_policy                 TEXT NOT NULL DEFAULT '',
-		pvp_consent                TEXT NOT NULL DEFAULT '[]',
 		maturity_tier_prompt       TEXT NOT NULL DEFAULT '',
 		image_maturity_tier_prompt TEXT NOT NULL DEFAULT '',
 		room_password              TEXT NOT NULL DEFAULT '',

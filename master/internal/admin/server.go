@@ -232,10 +232,9 @@ func (s *Server) requireSameOrigin(next http.HandlerFunc) http.HandlerFunc {
 // store.CampaignSettings carries for policy, minus RoomPassword (that's
 // campaignSecurityDTO's concern instead, per the tab split).
 type campaignPolicyDTO struct {
-	PvPPolicy               string   `json:"pvp_policy"`
-	PvPConsent              []string `json:"pvp_consent"`
-	MaturityTierPrompt      string   `json:"maturity_tier_prompt"`
-	ImageMaturityTierPrompt string   `json:"image_maturity_tier_prompt"`
+	PvPPolicy               string `json:"pvp_policy"`
+	MaturityTierPrompt      string `json:"maturity_tier_prompt"`
+	ImageMaturityTierPrompt string `json:"image_maturity_tier_prompt"`
 	// PriceMultiplier mirrors store.CampaignSettings.PriceMultiplier — 0
 	// means "not set", resolved to 1.0 by
 	// policy.CampaignPolicy.EffectivePriceMultiplier.
@@ -693,7 +692,6 @@ func (s *Server) handleGetCampaignPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	s.writeJSON(w, http.StatusOK, campaignPolicyDTO{
 		PvPPolicy:               settings.PvPPolicy,
-		PvPConsent:              settings.PvPConsent,
 		MaturityTierPrompt:      settings.MaturityTierPrompt,
 		ImageMaturityTierPrompt: settings.ImageMaturityTierPrompt,
 		PriceMultiplier:         settings.PriceMultiplier,
@@ -717,7 +715,7 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if dto.PvPPolicy != "" && !policy.PvPPolicy(dto.PvPPolicy).IsValid() {
-		s.writeErrorMsg(w, http.StatusBadRequest, "invalid pvp_policy (want pve_only, pvp_allowed, or pvp_with_consent)")
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid pvp_policy (want pve_only or pvp_allowed)")
 		return
 	}
 	if dto.PriceMultiplier < 0 {
@@ -747,7 +745,6 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	current.PvPPolicy = dto.PvPPolicy
-	current.PvPConsent = dto.PvPConsent
 	current.MaturityTierPrompt = dto.MaturityTierPrompt
 	current.ImageMaturityTierPrompt = dto.ImageMaturityTierPrompt
 	current.PriceMultiplier = dto.PriceMultiplier

@@ -18,15 +18,11 @@ import (
 // strings rather than those packages' own types.
 type CampaignSettings struct {
 	// PvPPolicy is one of policy.PvPPolicy's string values
-	// (pve_only/pvp_allowed/pvp_with_consent), or empty for "not set by
-	// the admin panel" — callers resolving a campaign's effective policy
-	// treat that the same as no row existing at all (see
+	// (pve_only/pvp_allowed), or empty for "not set by the admin panel" —
+	// callers resolving a campaign's effective policy treat that the
+	// same as no row existing at all (see
 	// AdminSettingsStore.GetCampaignSettings's ok return).
 	PvPPolicy string
-	// PvPConsent lists player sender_ids who've pre-declared consent to
-	// PvP (design doc §9.1) — only consulted when PvPPolicy is
-	// pvp_with_consent.
-	PvPConsent []string
 	// MaturityTierPrompt and ImageMaturityTierPrompt mirror
 	// policy.CampaignPolicy's own fields of the same name (design doc
 	// §9.5, §6.3).

@@ -60,7 +60,6 @@ func (p *PolicyProvider) Policy(ctx context.Context, campaignID string) (policy.
 	}
 	return policy.CampaignPolicy{
 		PvPPolicy:               policy.PvPPolicy(settings.PvPPolicy),
-		PvPConsent:              settings.PvPConsent,
 		MaturityTierPrompt:      settings.MaturityTierPrompt,
 		ImageMaturityTierPrompt: settings.ImageMaturityTierPrompt,
 		PriceMultiplier:         settings.PriceMultiplier,

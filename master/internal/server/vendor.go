@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"slices"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -50,11 +49,6 @@ func (s *Server) pvpGateBlocked(ctx context.Context, campaignID, actingSenderID,
 	switch pol.PvPPolicy {
 	case policy.PvPPolicyAllowed:
 		return "", "", nil
-	case policy.PvPPolicyWithConsent:
-		if slices.Contains(pol.PvPConsent, source.OwnerID) {
-			return "", "", nil
-		}
-		return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", source.OwnerID), "pvp_no_consent", nil
 	default:
 		return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to take %s from another player's character (%s)", actionNoun, source.OwnerID), "pvp_blocked", nil
 	}

@@ -232,9 +232,9 @@ Every tool call/result is logged with: caller (DM vs. specific player action), a
 All of the following are **campaign-pack-scoped settings**, controllable only by the Master's human operator (not emergent from player character choices), enforced primarily at the tool-call layer rather than left to prompting alone.
 
 ### 9.1 PvP Policy
-`pvp_policy: pve_only | pvp_allowed | pvp_with_consent`
+`pvp_policy: pve_only | pvp_allowed`
 - Gates whether `apply_effect(target=other_pc, hostile)`-type tool calls are permitted to execute at all.
-- `pvp_with_consent` (likely the most commonly wanted default): hostile action against a PC requires either an in-the-moment Master confirmation, or a pre-session per-player opt-in flag.
+- Joining a `pvp_allowed` campaign at all is the consent signal — there is no separate per-player opt-in list; a player uncomfortable with PvP simply doesn't join that campaign.
 - This governs the *mechanical* gate only — narrative tension, unpleasant/hostile roleplay short of an actual mechanical attack, is unaffected and should remain fully expressible even under `pve_only`.
 
 ### 9.2 Safety Tools (X-Card / Lines & Veils)

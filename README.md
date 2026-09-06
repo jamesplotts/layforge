@@ -218,8 +218,8 @@ so the model authors a document that actually matches the campaign's
 schema, never a guessed shape) persists it the same way a player's own
 character upload does, so it can then be referenced by `resolve_check`,
 `apply_effect`, or `start_combat` like any other character. A campaign
-can now also configure a real PvP policy — `pve_only`/`pvp_allowed`/
-`pvp_with_consent` — that mechanically gates whether the DM can damage
+can now also configure a real PvP policy — `pve_only`/`pvp_allowed`
+— that mechanically gates whether the DM can damage
 one player's character on another's behalf, and a maturity-tier text
 constraint injected into DM narration, both via a per-campaign JSON
 config file (`-campaign-policies`); an unconfigured campaign gets the

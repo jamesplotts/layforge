@@ -267,8 +267,7 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 	url := httpSrv.URL + "/api/campaigns/campaign-1/policy"
 
 	putResp := doJSON(t, http.MethodPut, url, map[string]any{
-		"pvp_policy":                 "pvp_with_consent",
-		"pvp_consent":                []string{"player-a"},
+		"pvp_policy":                 "pvp_allowed",
 		"maturity_tier_prompt":       "Keep it clean.",
 		"image_maturity_tier_prompt": "No gore.",
 		"price_multiplier":           1.5,
@@ -285,24 +284,20 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 
 	getResp := doJSON(t, http.MethodGet, url, nil, "")
 	var got struct {
-		PvPPolicy          string   `json:"pvp_policy"`
-		PvPConsent         []string `json:"pvp_consent"`
-		MaturityTierPrompt string   `json:"maturity_tier_prompt"`
-		PriceMultiplier    float64  `json:"price_multiplier"`
-		MinLevel           int      `json:"min_level"`
-		MaxLevel           int      `json:"max_level"`
-		MaxPlayers         int      `json:"max_players"`
-		RegistryListed     bool     `json:"registry_listed"`
-		JoinAddress        string   `json:"join_address"`
+		PvPPolicy          string  `json:"pvp_policy"`
+		MaturityTierPrompt string  `json:"maturity_tier_prompt"`
+		PriceMultiplier    float64 `json:"price_multiplier"`
+		MinLevel           int     `json:"min_level"`
+		MaxLevel           int     `json:"max_level"`
+		MaxPlayers         int     `json:"max_players"`
+		RegistryListed     bool    `json:"registry_listed"`
+		JoinAddress        string  `json:"join_address"`
 	}
 	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if got.PvPPolicy != "pvp_with_consent" {
-		t.Errorf("PvPPolicy = %q, want pvp_with_consent", got.PvPPolicy)
-	}
-	if len(got.PvPConsent) != 1 || got.PvPConsent[0] != "player-a" {
-		t.Errorf("PvPConsent = %v, want [player-a]", got.PvPConsent)
+	if got.PvPPolicy != "pvp_allowed" {
+		t.Errorf("PvPPolicy = %q, want pvp_allowed", got.PvPPolicy)
 	}
 	if got.MaturityTierPrompt != "Keep it clean." {
 		t.Errorf("MaturityTierPrompt = %q, want %q", got.MaturityTierPrompt, "Keep it clean.")

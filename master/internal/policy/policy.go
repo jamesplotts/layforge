@@ -13,9 +13,16 @@ package policy
 import "context"
 
 // PvPPolicy is the Go translation of design doc §9.1's pvp_policy enum
-// (pve_only | pvp_allowed | pvp_with_consent). The zero value,
-// PvPPolicyUnspecified, is never a real policy value — see IsValid, and
-// Default, which is what an unspecified policy resolves to in practice.
+// (pve_only | pvp_allowed). The zero value, PvPPolicyUnspecified, is
+// never a real policy value — see IsValid, and Default, which is what
+// an unspecified policy resolves to in practice.
+//
+// Deliberately just these two values — a per-player consent list
+// (a third "pvp_with_consent" tier) was considered and removed: joining
+// a campaign at all is already the real consent signal for the binary
+// pve_only/pvp_allowed choice, and a separate mid-campaign opt-in list
+// added a layer of indirection without a use case that actually needed
+// it.
 type PvPPolicy string
 
 // Recognized PvP policy values (design doc §9.1).
@@ -26,17 +33,14 @@ const (
 	PvPPolicyPveOnly PvPPolicy = "pve_only"
 	// PvPPolicyAllowed permits it unconditionally.
 	PvPPolicyAllowed PvPPolicy = "pvp_allowed"
-	// PvPPolicyWithConsent permits it only against a character whose
-	// owner has pre-declared consent — see CampaignPolicy.PvPConsent.
-	PvPPolicyWithConsent PvPPolicy = "pvp_with_consent"
 )
 
-// IsValid reports whether p is one of the three recognized policy
-// values. Deliberately returns false for PvPPolicyUnspecified — the Go
+// IsValid reports whether p is one of the two recognized policy values.
+// Deliberately returns false for PvPPolicyUnspecified — the Go
 // translation of design doc §12's enum-sentinel pattern (see CLAUDE.md).
 func (p PvPPolicy) IsValid() bool {
 	switch p {
-	case PvPPolicyPveOnly, PvPPolicyAllowed, PvPPolicyWithConsent:
+	case PvPPolicyPveOnly, PvPPolicyAllowed:
 		return true
 	default:
 		return false
@@ -84,19 +88,6 @@ type CampaignPolicy struct {
 	// §9.1) — enforced in dmApplyEffect (package server), never left to
 	// the DM model's own judgment.
 	PvPPolicy PvPPolicy
-
-	// PvPConsent lists player sender_ids who have pre-declared
-	// willingness to be targeted by hostile PvP actions (design doc
-	// §9.1's "pre-session per-player opt-in flag") — consulted only when
-	// PvPPolicy is PvPPolicyWithConsent. Design doc §9.1 also describes
-	// an "in-the-moment Master confirmation" path; that needs a
-	// request/response protocol round-trip mid-session, which nothing
-	// currently triggers (unlike design doc §9.4's character-import
-	// review flow, which now pushes character.review_result to one
-	// player via sendToSender — see
-	// internal/server/character_review.go), so only the pre-declared
-	// path is implemented.
-	PvPConsent []string
 
 	// MaturityTierPrompt, when non-empty, is appended as an additional
 	// constraint to the DM's system prompt for both narrative passes

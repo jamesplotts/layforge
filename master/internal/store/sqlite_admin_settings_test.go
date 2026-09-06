@@ -21,7 +21,7 @@ func TestSQLiteEventStore_GetCampaignSettings_NoRow_ReturnsNotOK(t *testing.T) {
 	if ok {
 		t.Errorf("GetCampaignSettings() ok = true, want false for a campaign never saved")
 	}
-	if settings.PvPPolicy != "" || settings.PvPConsent != nil || settings.MaturityTierPrompt != "" ||
+	if settings.PvPPolicy != "" || settings.MaturityTierPrompt != "" ||
 		settings.ImageMaturityTierPrompt != "" || settings.RoomPassword != "" {
 		t.Errorf("GetCampaignSettings() settings = %+v, want zero value", settings)
 	}
@@ -31,8 +31,7 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 	s := newTestStore(t)
 	ctx := context.Background()
 	want := store.CampaignSettings{
-		PvPPolicy:               "pvp_with_consent",
-		PvPConsent:              []string{"player-a", "player-b"},
+		PvPPolicy:               "pvp_allowed",
 		MaturityTierPrompt:      "Keep content suitable for all ages.",
 		ImageMaturityTierPrompt: "No graphic violence in illustrations.",
 		RoomPassword:            "hunter2",
@@ -60,14 +59,6 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 		got.PriceMultiplier != want.PriceMultiplier || got.MinLevel != want.MinLevel || got.MaxLevel != want.MaxLevel ||
 		got.MaxPlayers != want.MaxPlayers || got.RegistryListed != want.RegistryListed || got.JoinAddress != want.JoinAddress {
 		t.Errorf("GetCampaignSettings() = %+v, want %+v", got, want)
-	}
-	if len(got.PvPConsent) != len(want.PvPConsent) {
-		t.Fatalf("PvPConsent = %v, want %v", got.PvPConsent, want.PvPConsent)
-	}
-	for i := range want.PvPConsent {
-		if got.PvPConsent[i] != want.PvPConsent[i] {
-			t.Errorf("PvPConsent[%d] = %q, want %q", i, got.PvPConsent[i], want.PvPConsent[i])
-		}
 	}
 }
 

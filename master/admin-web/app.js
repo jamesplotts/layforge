@@ -49,7 +49,6 @@ const el = {
   createCampaignSubmit: document.getElementById("create-campaign-submit"),
   createCampaignStatus: document.getElementById("create-campaign-status"),
   pvpPolicy: document.getElementById("pvp-policy"),
-  pvpConsent: document.getElementById("pvp-consent"),
   maturityTierPrompt: document.getElementById("maturity-tier-prompt"),
   imageMaturityTierPrompt: document.getElementById("image-maturity-tier-prompt"),
   priceMultiplier: document.getElementById("price-multiplier"),
@@ -321,7 +320,6 @@ async function loadCampaignPolicy(id) {
   const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/policy`);
   const data = await resp.json();
   el.pvpPolicy.value = data.pvp_policy || "pve_only";
-  el.pvpConsent.value = (data.pvp_consent || []).join(", ");
   el.maturityTierPrompt.value = data.maturity_tier_prompt || "";
   el.imageMaturityTierPrompt.value = data.image_maturity_tier_prompt || "";
   el.priceMultiplier.value = data.price_multiplier ? String(data.price_multiplier) : "1.0";
@@ -361,7 +359,6 @@ el.campaignSave.addEventListener("click", async () => {
   }
   const body = {
     pvp_policy: el.pvpPolicy.value,
-    pvp_consent: el.pvpConsent.value.split(",").map((s) => s.trim()).filter(Boolean),
     maturity_tier_prompt: el.maturityTierPrompt.value,
     image_maturity_tier_prompt: el.imageMaturityTierPrompt.value,
     price_multiplier: Number.isNaN(priceMultiplier) ? 0 : priceMultiplier,

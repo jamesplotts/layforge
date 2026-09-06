@@ -68,8 +68,7 @@ func TestPolicyProvider_Policy_StoredSettings_ReturnsThemOverFallback(t *testing
 	p := admin.NewPolicyProvider(s, fallback)
 
 	stored := store.CampaignSettings{
-		PvPPolicy:               string(policy.PvPPolicyWithConsent),
-		PvPConsent:              []string{"player-a"},
+		PvPPolicy:               string(policy.PvPPolicyAllowed),
 		MaturityTierPrompt:      "Keep it family friendly.",
 		ImageMaturityTierPrompt: "No graphic violence.",
 		PriceMultiplier:         1.5,
@@ -84,11 +83,8 @@ func TestPolicyProvider_Policy_StoredSettings_ReturnsThemOverFallback(t *testing
 	if err != nil {
 		t.Fatalf("Policy() error = %v", err)
 	}
-	if got.PvPPolicy != policy.PvPPolicyWithConsent {
-		t.Errorf("PvPPolicy = %q, want stored %q, not fallback", got.PvPPolicy, policy.PvPPolicyWithConsent)
-	}
-	if len(got.PvPConsent) != 1 || got.PvPConsent[0] != "player-a" {
-		t.Errorf("PvPConsent = %v, want [player-a]", got.PvPConsent)
+	if got.PvPPolicy != policy.PvPPolicyAllowed {
+		t.Errorf("PvPPolicy = %q, want stored %q, not fallback", got.PvPPolicy, policy.PvPPolicyAllowed)
 	}
 	if got.MaturityTierPrompt != stored.MaturityTierPrompt {
 		t.Errorf("MaturityTierPrompt = %q, want %q", got.MaturityTierPrompt, stored.MaturityTierPrompt)

@@ -297,8 +297,7 @@ package `policy` and `campaignPolicy`/`withMaturityConstraint` in
 `server.go`): PvP policy is a real mechanical gate — `dmApplyEffect`
 blocks a hostile (damage) `apply_effect` against a *different* player's
 own character outright unless the campaign's configured policy permits
-it (`pve_only`/`pvp_allowed`/`pvp_with_consent`, checked against a
-pre-declared consent list for the consent case), never left to the DM
+it (`pve_only`/`pvp_allowed`), never left to the DM
 model to self-police; healing another player, or any effect against an
 NPC/monster or the acting player's own character, is unaffected.
 `dmCastSpell` applies the same policy, but at a different point: Master
@@ -1136,7 +1135,7 @@ configured, or an id not in it) doesn't block a real `pvp_policy` from
 still applying, and vice versa. Caught and fixed a real, pre-existing
 bug from the campaign-pack pass along the way: the provider used to
 return a bare `CampaignPolicy{PvPPolicy: ...}` on a pack match, silently
-discarding whatever `PvPConsent`/`ImageMaturityTierPrompt`/
+discarding whatever `ImageMaturityTierPrompt`/
 `PriceMultiplier` the admin-panel fallback had set — it now starts from
 the fallback's own resolved policy and only overrides the fields the
 pack actually has an opinion on.

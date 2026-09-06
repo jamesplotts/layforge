@@ -11,8 +11,7 @@ import (
 
 func TestJSONFileProvider_Policy_ConfiguredCampaign_ReturnsIt(t *testing.T) {
 	want := CampaignPolicy{
-		PvPPolicy:          PvPPolicyWithConsent,
-		PvPConsent:         []string{"player-a", "player-b"},
+		PvPPolicy:          PvPPolicyAllowed,
 		MaturityTierPrompt: "Keep content suitable for all ages.",
 	}
 	p := NewJSONFileProvider(map[string]CampaignPolicy{"my-campaign": want})

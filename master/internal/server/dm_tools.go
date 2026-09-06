@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -648,10 +647,6 @@ func (s *Server) dmApplyEffect(ctx context.Context, campaignID, actingSenderID s
 		switch pol.PvPPolicy {
 		case policy.PvPPolicyAllowed:
 			// proceed
-		case policy.PvPPolicyWithConsent:
-			if !slices.Contains(pol.PvPConsent, character.OwnerID) {
-				return fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP damage", character.OwnerID), false, "pvp_no_consent"
-			}
 		default: // PvPPolicyPveOnly, or an unrecognized/unspecified value — fail closed
 			return fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to damage another player's character (%s)", character.OwnerID), false, "pvp_blocked"
 		}
@@ -804,12 +799,6 @@ func (s *Server) dmCastSpell(ctx context.Context, campaignID, actingSenderID str
 		switch pol.PvPPolicy {
 		case policy.PvPPolicyAllowed:
 			// proceed
-		case policy.PvPPolicyWithConsent:
-			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
-				pvpBlocked = true
-				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP damage", target.OwnerID)
-				pvpReasonCode = "pvp_no_consent"
-			}
 		default: // PvPPolicyPveOnly, or an unrecognized/unspecified value — fail closed
 			pvpBlocked = true
 			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to damage another player's character (%s)", target.OwnerID)
@@ -930,12 +919,6 @@ func (s *Server) dmAttack(ctx context.Context, campaignID, actingSenderID string
 		switch pol.PvPPolicy {
 		case policy.PvPPolicyAllowed:
 			// proceed
-		case policy.PvPPolicyWithConsent:
-			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
-				pvpBlocked = true
-				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP damage", target.OwnerID)
-				pvpReasonCode = "pvp_no_consent"
-			}
 		default: // PvPPolicyPveOnly, or an unrecognized/unspecified value — fail closed
 			pvpBlocked = true
 			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to damage another player's character (%s)", target.OwnerID)
@@ -1048,12 +1031,6 @@ func (s *Server) dmGrapple(ctx context.Context, campaignID, actingSenderID strin
 		switch pol.PvPPolicy {
 		case policy.PvPPolicyAllowed:
 			// proceed
-		case policy.PvPPolicyWithConsent:
-			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
-				pvpBlocked = true
-				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", target.OwnerID)
-				pvpReasonCode = "pvp_no_consent"
-			}
 		default:
 			pvpBlocked = true
 			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to affect another player's character (%s)", target.OwnerID)
@@ -1169,12 +1146,6 @@ func (s *Server) dmShove(ctx context.Context, campaignID, actingSenderID string,
 		switch pol.PvPPolicy {
 		case policy.PvPPolicyAllowed:
 			// proceed
-		case policy.PvPPolicyWithConsent:
-			if !slices.Contains(pol.PvPConsent, target.OwnerID) {
-				pvpBlocked = true
-				pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy is pvp_with_consent, and %s has not consented to PvP effects", target.OwnerID)
-				pvpReasonCode = "pvp_no_consent"
-			}
 		default:
 			pvpBlocked = true
 			pvpReason = fmt.Sprintf("PvP blocked: this campaign's policy does not allow one player's action to affect another player's character (%s)", target.OwnerID)

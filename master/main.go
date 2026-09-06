@@ -108,7 +108,7 @@ func main() {
 	webDir := flag.String("web-dir", defaultWebDir(), "directory to serve at / — the reference web client (design doc §4). Defaults to a \"web\" directory next to this binary, so a self-hoster can restyle it in place (see the package doc comment). Pass a different path to point at another copy (e.g. master/web itself, when iterating on the client via 'go run .' from within master/), or an empty string to disable serving it.")
 	roomPasswordsPath := flag.String("room-passwords", "", "path to a JSON file mapping campaign_id to a required join password (design doc §6.6's room-code auth provider), e.g. {\"my-campaign\": \"hunter2\"}. A campaign not listed is open to anyone. Leave empty to require no password anywhere (today's default).")
 	systemEngineAddr := flag.String("system-engine-addr", "", "host:port of a System Engine gRPC sidecar (design doc §6.1), e.g. localhost:5265 for a locally running OpenCombatEngine.GrpcSidecar. Leave empty to run without one (today's default) — nothing calls it yet, since dice/rules dispatch is still design doc §11 future work.")
-	campaignPoliciesPath := flag.String("campaign-policies", "", "path to a JSON file mapping campaign_id to governance settings (design doc §9.1's PvP policy, §9.5's maturity-tier prompt constraint), e.g. {\"my-campaign\": {\"pvp_policy\": \"pvp_with_consent\", \"pvp_consent\": [\"player-a\"], \"maturity_tier_prompt\": \"Keep content suitable for all ages.\"}}. pvp_policy is one of pve_only, pvp_allowed, pvp_with_consent. A campaign not listed (or this flag left empty, today's default) gets pve_only with no maturity constraint — the strictest safe default.")
+	campaignPoliciesPath := flag.String("campaign-policies", "", "path to a JSON file mapping campaign_id to governance settings (design doc §9.1's PvP policy, §9.5's maturity-tier prompt constraint), e.g. {\"my-campaign\": {\"pvp_policy\": \"pvp_allowed\", \"maturity_tier_prompt\": \"Keep content suitable for all ages.\"}}. pvp_policy is one of pve_only, pvp_allowed. A campaign not listed (or this flag left empty, today's default) gets pve_only with no maturity constraint — the strictest safe default.")
 	comfyUIURL := flag.String("comfyui-url", "", "base URL of a self-hosted ComfyUI instance (design doc §6.3), e.g. http://localhost:8188. Leave empty to run without image generation (today's default) — the generate_scene_image DM tool is then simply not offered. Requires -comfyui-workflow.")
 	comfyUIWorkflowPath := flag.String("comfyui-workflow", "", "path to an API-format ComfyUI workflow JSON file (exported from ComfyUI's own UI via \"Save (API Format)\"), containing the literal token %%LAYFORGE_PROMPT%% in place of the positive-prompt node's text value. Master has no way to know your checkpoint/sampler/node graph, so it never constructs a workflow itself — see package imagegen. Required if -comfyui-url is set.")
 	adminAddr := flag.String("admin-addr", "127.0.0.1:8090", "address for the local-only admin/operator settings panel (design doc §3.3) — deliberately not 0.0.0.0: this listener has no login of its own, only the bind address stands between it and anyone who can reach it, so it must never be reverse-proxied or otherwise exposed off the host. Leave empty to disable the admin panel entirely.")
@@ -151,9 +151,8 @@ func loadRoomPasswords(path string) (map[string]string, error) {
 // campaign — a thin, string-keyed mirror of policy.CampaignPolicy so the
 // package itself doesn't need JSON struct tags on its own domain type.
 type rawCampaignPolicy struct {
-	PvPPolicy          string   `json:"pvp_policy"`
-	PvPConsent         []string `json:"pvp_consent,omitempty"`
-	MaturityTierPrompt string   `json:"maturity_tier_prompt,omitempty"`
+	PvPPolicy          string `json:"pvp_policy"`
+	MaturityTierPrompt string `json:"maturity_tier_prompt,omitempty"`
 }
 
 // loadCampaignPolicies reads and parses the JSON file at path into a
@@ -180,11 +179,10 @@ func loadCampaignPolicies(path string) (map[string]policy.CampaignPolicy, error)
 		case pvp == policy.PvPPolicyUnspecified:
 			pvp = policy.PvPPolicyPveOnly
 		case !pvp.IsValid():
-			return nil, fmt.Errorf("campaign-policies file: campaign %q: invalid pvp_policy %q (want pve_only, pvp_allowed, or pvp_with_consent)", campaignID, p.PvPPolicy)
+			return nil, fmt.Errorf("campaign-policies file: campaign %q: invalid pvp_policy %q (want pve_only or pvp_allowed)", campaignID, p.PvPPolicy)
 		}
 		policies[campaignID] = policy.CampaignPolicy{
 			PvPPolicy:          pvp,
-			PvPConsent:         p.PvPConsent,
 			MaturityTierPrompt: p.MaturityTierPrompt,
 		}
 	}
