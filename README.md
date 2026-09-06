@@ -49,6 +49,49 @@ Then open `http://localhost:8080/`. See
 ComfyUI endpoints, room passwords, the admin panel, and what each
 optional dependency unlocks.
 
+## Uninstalling
+
+Master is a single static binary plus plain files on disk — nothing in
+this Quick Start touches a system-wide location, a package manager, or
+a registry, so removing it is just deleting what you created:
+
+1. Stop the running process (`Ctrl+C`, or `sudo systemctl stop
+   layforge-master`/disable it if you set it up as a service — see
+   below).
+2. Delete the cloned directory (`rm -rf layforge`). This removes the
+   binary, the generated `master/internal/systemenginepb/` stubs, the
+   web client assets, and `layforge.db` itself, since it defaults to
+   living inside the working directory you ran `go run .`/the compiled
+   binary from. If you pointed `-db`, `-web-dir`, or `-admin-web-dir` at
+   a path outside the clone, remove those separately too.
+
+That's the whole self-hosted footprint — no admin-panel data, campaign
+state, or credentials live anywhere else.
+
+Two things Quick Start installs that are **not** Layforge-specific and
+are shared with any other Go/protobuf project on your machine — leave
+these alone unless you're sure nothing else needs them:
+
+- `protoc-gen-go`/`protoc-gen-go-grpc` (`go install`ed into
+  `$(go env GOPATH)/bin`) — remove with `rm "$(go env GOPATH)/bin/protoc-gen-go" "$(go env GOPATH)/bin/protoc-gen-go-grpc"`.
+- `protobuf-compiler` (installed via your OS package manager, e.g.
+  `sudo apt remove protobuf-compiler` on Debian/Ubuntu).
+
+**If you deployed Master (or the `registry/` service) as a real systemd
+unit** — following the pattern documented in
+[`registry/README.md`](registry/README.md#real-deployment-layforgeorg) —
+uninstalling means reversing that setup on whatever machine runs it,
+same as for any systemd service:
+
+```
+sudo systemctl disable --now <unit-name>
+sudo rm /etc/systemd/system/<unit-name>.service
+sudo systemctl daemon-reload
+```
+
+then delete the deployed binary/`web/` directory and, if you set up an
+Apache vhost fronting it, remove that vhost file and reload Apache too.
+
 ## Model Providers
 
 Master picks which LLM narrates and runs the DM tool-use loop via
