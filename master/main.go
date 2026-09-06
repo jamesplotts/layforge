@@ -93,6 +93,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemengine"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
+	"github.com/jamesplotts/layforge/master/internal/terms"
 	"github.com/jamesplotts/layforge/master/internal/transcription"
 )
 
@@ -116,10 +117,11 @@ func main() {
 	whisperModel := flag.String("whisper-model", "base", "model name to request from the whisper server (its own \"model\" form field — whichever model size/variant it has loaded); ignored if -whisper-url is empty.")
 	registryURL := flag.String("registry-url", "", "base URL of a layforge.org-style public campaign directory (registry/ in this repo), e.g. https://layforge.org. Leave empty (today's default) to run without any registry integration at all. Even when set, a specific campaign is only ever published if its own admin-panel Campaign tab has \"List in Public Lobby\" checked with a Join Address filled in — this flag alone lists nothing.")
 	registryHeartbeatInterval := flag.Duration("registry-heartbeat-interval", 30*time.Second, "how often to refresh each opted-in campaign's registry listing; ignored if -registry-url is empty. Should stay comfortably under the registry's own TTL (90s by default in registry/main.go) so a slow tick or two doesn't make a listing flicker.")
+	acceptTermsVersion := flag.String("accept-terms-version", "", "accept the Host/operator terms (internal/terms.Version) non-interactively — must exactly match the current version string to count. For scripted/CI deployments only: with -admin-addr enabled (the default), just open the admin panel once and click Agree instead. Leave empty otherwise.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *llmProvider, *llmAPIKey, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *registryHeartbeatInterval, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *llmProvider, *llmAPIKey, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *acceptTermsVersion, *registryHeartbeatInterval, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -218,7 +220,7 @@ func defaultAdminWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL, acceptTermsVersion string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -268,6 +270,38 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 	systemEngineAddr = effectiveSystemSettings[admin.SystemKeySystemEngineAddr]
 	comfyUIURL = effectiveSystemSettings[admin.SystemKeyComfyUIURL]
 	comfyUIWorkflowPath = effectiveSystemSettings[admin.SystemKeyComfyUIWorkflow]
+
+	// Operator-terms gate: SystemKeyTermsAcceptedVersion/*At deliberately
+	// aren't part of systemKeys/systemSettingsDTO (they're not a System-
+	// tab field an operator edits directly — see admin.SystemKeyTermsAcceptedVersion's
+	// own doc comment), so they're read straight from storedSystemSettings
+	// rather than through effectiveSystemSettings above.
+	operatorTermsAccepted := admin.OperatorTermsAccepted(storedSystemSettings)
+	if !operatorTermsAccepted && acceptTermsVersion == terms.Version {
+		// Scripted/CI acceptance — persist immediately, the same record
+		// shape a real admin-panel Agree click produces (handleAcceptTerms).
+		if err := events.SaveSystemSettings(context.Background(), map[string]string{
+			admin.SystemKeyTermsAcceptedVersion: terms.Version,
+			admin.SystemKeyTermsAcceptedAt:      time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			return fmt.Errorf("main: recording scripted terms acceptance: %w", err)
+		}
+		operatorTermsAccepted = true
+		logger.Info("operator terms accepted non-interactively via -accept-terms-version", "version", terms.Version)
+	}
+	if !operatorTermsAccepted && adminAddr == "" {
+		// No admin panel means no web UI at all to click Agree in — refuse
+		// to start rather than silently running ungated (design doc's own
+		// "gates over prompting" extended to this feature: a self-hoster
+		// must make an explicit choice, not get a default neither this
+		// project nor they actually decided).
+		return fmt.Errorf("operator terms not yet accepted — run once with -admin-addr enabled and accept via the admin panel, or pass -accept-terms-version=%s for a scripted deploy", terms.Version)
+	}
+	// If adminAddr is set but terms aren't yet accepted, Master still
+	// starts normally below: the admin panel serves the Agree modal, and
+	// internal/server's own dispatch gate refuses every player message
+	// but terms.accept with operator_terms_not_accepted until the Host
+	// clicks Agree — no separate handshake-time refusal needed here.
 
 	// llmProvider stays nil (narrative rendering disabled) unless enabled
 	// below — Ollama isn't a zero-config default the way SQLite is, so a
@@ -449,7 +483,7 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		logger.Info("push-to-talk transcription enabled", "whisper_url", whisperURL, "model", whisperModel)
 	}
 
-	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events, transcriptionProvider, events, hub)
+	srv := server.New(logger, events, llmProvider, llmModel, authProvider, systemEngineClient, events, policyProvider, imageGenProvider, events, events, events, transcriptionProvider, events, events, hub)
 	if err := srv.WarmUpCombatState(context.Background()); err != nil {
 		logger.Warn("failed to rehydrate persisted combat state", "error", err)
 	}

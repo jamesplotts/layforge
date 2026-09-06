@@ -40,6 +40,40 @@ import { renderCharacterSheetTabs } from "./character-sheet.js";
 
 const PROTOCOL_VERSION = "0.1.0";
 
+// TERMS_VERSION must match master/internal/terms.Version exactly — a
+// mismatch gets a real terms_version_mismatch system.error from Master
+// (see onSystemError), which clears the stored acceptance below and
+// re-shows the modal, so a stale cached copy of this file self-corrects
+// rather than silently treating an old acceptance as still valid.
+const TERMS_VERSION = "2026-09-07";
+const TERMS_STORAGE_KEY = "layforge.termsAcceptedVersion";
+
+function hasAcceptedCurrentTerms() {
+  try {
+    return localStorage.getItem(TERMS_STORAGE_KEY) === TERMS_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+function saveTermsAccepted() {
+  try {
+    localStorage.setItem(TERMS_STORAGE_KEY, TERMS_VERSION);
+  } catch {
+    // Best-effort — a private-browsing/storage-disabled session just
+    // re-shows the modal next time, same as dice.js's own skin
+    // persistence falls back when storage is unavailable.
+  }
+}
+
+function clearAcceptedTerms() {
+  try {
+    localStorage.removeItem(TERMS_STORAGE_KEY);
+  } catch {
+    // best-effort, see saveTermsAccepted
+  }
+}
+
 const state = {
   ws: null,
   wsUrl: "",
@@ -47,6 +81,7 @@ const state = {
   senderId: "",
   characterId: "",
   joined: false,
+  pendingJoinUrl: null,
   pendingInputMessageId: null,
   // oldestLoadedSequence/hasMoreOlder track the "load earlier" cursor —
   // see the History paging section below.
@@ -126,6 +161,9 @@ const el = {
   joinCharacter: document.getElementById("join-character"),
   joinButton: document.getElementById("join-button"),
   joinError: document.getElementById("join-error"),
+  termsModal: document.getElementById("terms-modal"),
+  termsModalAgree: document.getElementById("terms-modal-agree"),
+  termsModalDecline: document.getElementById("terms-modal-decline"),
   chatCampaignLabel: document.getElementById("chat-campaign-label"),
   chatStatus: document.getElementById("chat-status"),
   log: document.getElementById("log"),
@@ -160,6 +198,10 @@ const el = {
 
 el.joinUrl.value = defaultWsUrl();
 el.joinButton.addEventListener("click", onJoinClick);
+el.termsModalAgree.addEventListener("click", onTermsAgree);
+el.termsModalDecline.addEventListener("click", () => {
+  el.termsModal.hidden = true;
+});
 el.safetyFlagButton.addEventListener("click", openSafetyFlagPanel);
 el.safetyFlagCancel.addEventListener("click", closeSafetyFlagPanel);
 el.safetyFlagSend.addEventListener("click", onSafetyFlagSend);
@@ -262,7 +304,25 @@ function onJoinClick() {
   // implemented), so a client-chosen character name is all Master has
   // to identify who's who.
   state.senderId = character;
+
+  if (!hasAcceptedCurrentTerms()) {
+    state.pendingJoinUrl = url;
+    el.termsModal.hidden = false;
+    return;
+  }
   connect(url);
+}
+
+// onTermsAgree fires from the join-screen modal (a fresh join, using
+// state.pendingJoinUrl) as well as never from anywhere else — a
+// previously-accepted browser skips the modal entirely in onJoinClick
+// above, so this is only ever reached via an explicit click.
+function onTermsAgree() {
+  saveTermsAccepted();
+  el.termsModal.hidden = true;
+  const url = state.pendingJoinUrl;
+  state.pendingJoinUrl = null;
+  if (url) connect(url);
 }
 
 function showJoinError(message) {
@@ -304,6 +364,15 @@ function openSocket() {
     send({
       ...newEnvelope("system.connect"),
       payload: { client_kind: "player_web_v1" },
+    });
+    // Reaching openSocket at all means this browser has already agreed
+    // (onJoinClick only calls connect() after hasAcceptedCurrentTerms()
+    // or a fresh onTermsAgree) — send terms.accept once per connection
+    // so Master's own dispatch gate (internal/server/terms.go) actually
+    // unblocks real messages, not just this client's own UI.
+    send({
+      ...newEnvelope("terms.accept"),
+      payload: { version: TERMS_VERSION },
     });
   });
 
@@ -477,6 +546,14 @@ function onJoined() {
 
 function onSystemError(msg) {
   const message = (msg.payload && msg.payload.message) || "An error occurred.";
+  if (msg.payload && msg.payload.code === "terms_version_mismatch") {
+    // This browser's stored acceptance is for a since-changed terms
+    // text — clear it so the next join attempt (a page reload picks up
+    // this file's own updated TERMS_VERSION/modal text) shows the
+    // modal again instead of silently treating the stale acceptance as
+    // still valid.
+    clearAcceptedTerms();
+  }
   appendErrorNote(message);
   const inReplyTo = msg.payload && msg.payload.in_reply_to_message_id;
   if (inReplyTo && inReplyTo === state.pendingInputMessageId) {

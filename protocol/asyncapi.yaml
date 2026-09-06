@@ -111,6 +111,7 @@ channels:
           - $ref: '#/components/messages/SystemConnect'
           - $ref: '#/components/messages/LogHistoryRequest'
           - $ref: '#/components/messages/VehicleImport'
+          - $ref: '#/components/messages/TermsAccept'
 
 components:
   messages:
@@ -1016,6 +1017,26 @@ components:
                     type: string
                     description: e.g. "player_web_v1", or a third-party viewport identifying itself (docs/design.md §4).
                   auth_token:
+                    type: string
+
+    TermsAccept:
+      name: terms.accept
+      messageId: terms_accept
+      title: Accept the current Host/player terms
+      summary: Sent once per connection to accept the current terms version (docs/design.md, internal/terms.Version) — required before any other message type is processed for that connection. Version is echoed back so a stale cached client gets a clear terms_version_mismatch system.error instead of silently succeeding against an outdated text.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: terms.accept
+              payload:
+                type: object
+                required: [version]
+                properties:
+                  version:
                     type: string
 
     SystemSessionState:

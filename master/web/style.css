@@ -406,6 +406,62 @@ button.secondary {
   cursor: pointer;
 }
 
+/* Blocking player disclaimer modal — same fixed-overlay shape as
+   .lightbox above, but a text card rather than an image, and (unlike
+   the combat-map lightbox) never dismissible via a backdrop click —
+   see app.js, which deliberately wires no click handler on
+   #terms-modal .terms-modal-backdrop. */
+.terms-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.terms-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.terms-modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+}
+
+.terms-modal-card h2 {
+  margin: 0;
+}
+
+.terms-modal-text {
+  margin: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.terms-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .note {
   align-self: center;
   color: var(--text-dim);

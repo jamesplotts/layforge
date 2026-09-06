@@ -45,6 +45,7 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "CharacterCreationPrompt_ReturnsTrue", t: MessageTypeCharacterCreationPrompt, want: true},
 		{name: "CharacterCreationAnswer_ReturnsTrue", t: MessageTypeCharacterCreationAnswer, want: true},
 		{name: "CharacterReviewResult_ReturnsTrue", t: MessageTypeCharacterReviewResult, want: true},
+		{name: "TermsAccept_ReturnsTrue", t: MessageTypeTermsAccept, want: true},
 		{name: "UnrecognizedType_ReturnsFalse", t: MessageType("map.room_adjacency"), want: false},
 		{name: "CharacterReviewStatus_ReturnsFalse_NotImplementedYet", t: MessageType("character.review_status"), want: false},
 		{name: "RollAcknowledge_ReturnsFalse_NotImplementedYet", t: MessageType("roll.acknowledge"), want: false},

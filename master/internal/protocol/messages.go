@@ -755,3 +755,16 @@ type VehicleImportedPayload struct {
 
 // VehicleImportedMessage is a vehicle.imported Message.
 type VehicleImportedMessage = Message[VehicleImportedPayload]
+
+// TermsAcceptPayload is the payload of a terms.accept message — a
+// client accepting the current terms.Version (see internal/terms and
+// internal/server's dispatch gate) for this connection. Version is
+// echoed back by the client (rather than assumed) so a stale cached
+// client bundle gets a clear terms_version_mismatch system.error
+// instead of silently "succeeding" against an outdated text.
+type TermsAcceptPayload struct {
+	Version string `json:"version"`
+}
+
+// TermsAcceptMessage is a terms.accept Message.
+type TermsAcceptMessage = Message[TermsAcceptPayload]

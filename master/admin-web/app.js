@@ -36,6 +36,9 @@ const state = {
 const el = {
   tabButtons: document.querySelectorAll(".tab-button"),
   tabPanels: document.querySelectorAll(".tab-panel"),
+  termsModal: document.getElementById("terms-modal"),
+  termsModalText: document.getElementById("terms-modal-text"),
+  termsModalAgree: document.getElementById("terms-modal-agree"),
   campaignSelect: document.getElementById("campaign-select"),
   campaignTableBody: document.getElementById("campaign-table-body"),
   campaignListNote: document.getElementById("campaign-list-note"),
@@ -668,5 +671,29 @@ async function errorText(resp) {
   }
 }
 
+// --- Host/operator terms modal ---
+
+async function loadTerms() {
+  const resp = await fetch("/api/terms");
+  const data = await resp.json();
+  el.termsModalText.textContent = data.operator_text;
+  el.termsModal.hidden = data.accepted;
+}
+
+el.termsModalAgree.addEventListener("click", async () => {
+  el.termsModalAgree.disabled = true;
+  try {
+    const resp = await fetch("/api/terms/accept", { method: "POST" });
+    if (resp.ok) {
+      el.termsModal.hidden = true;
+    } else {
+      el.termsModalAgree.disabled = false;
+    }
+  } catch {
+    el.termsModalAgree.disabled = false;
+  }
+});
+
+loadTerms();
 loadCampaignList();
 loadSystemSettings();

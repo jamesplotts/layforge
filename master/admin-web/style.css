@@ -289,3 +289,57 @@ button.danger {
   color: var(--danger);
   font-size: 13px;
 }
+
+/* Blocking Host/operator terms modal — this UI's own instance of the
+   same fixed-overlay/backdrop/centered-card pattern master/web/style.css
+   already uses for its image lightbox, adapted for a text card instead
+   of an image. No close-via-backdrop-click here (unlike that lightbox):
+   this modal is meant to block, not dismiss. */
+.terms-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.terms-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.terms-modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+}
+
+.terms-modal-card h2 {
+  margin: 0;
+}
+
+.terms-modal-text {
+  margin: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.terms-modal-card button {
+  align-self: flex-end;
+}

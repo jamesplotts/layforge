@@ -32,6 +32,42 @@
     </div>
   </section>
 
+  <!-- Blocking player disclaimer modal (see app.js's showTermsModal/
+       onTermsAgree) — shown before connecting unless this browser has
+       already agreed to the current TERMS_VERSION (localStorage). The
+       text below is a static copy of internal/terms.PlayerText; keep
+       the two in sync by hand when either changes, and bump both
+       terms.Version (Go) and TERMS_VERSION (app.js) together. -->
+  <div id="terms-modal" class="terms-modal" hidden>
+    <div class="terms-modal-backdrop"></div>
+    <div class="terms-modal-card">
+      <h2>Before you join</h2>
+      <pre id="terms-modal-text" class="terms-modal-text">Layforge Player Disclaimer
+
+You're about to join a self-hosted tabletop game run by its own Host —
+not a service operated by the Layforge project itself. Before you
+continue:
+
+1. The Dungeon Master in this game is an AI. Its narration and rulings
+   are generated text — it can be wrong, inconsistent, or produce
+   content the Host didn't intend. It is not a substitute for a human
+   referee's judgment, and nothing it says is guaranteed accurate.
+2. This Host's own instance, configuration, and moderation are entirely
+   their own responsibility, not this project's. Content maturity and
+   house rules are whatever this Host has configured.
+3. Dice results and rules outcomes shown to you are computed
+   server-side and are authoritative for this session, but the overall
+   experience (including AI narration) is provided as-is, with no
+   warranty of any kind.
+
+If you do not agree, do not join this game.</pre>
+      <div class="terms-modal-actions">
+        <button id="terms-modal-decline" type="button" class="secondary">Decline</button>
+        <button id="terms-modal-agree" type="button">I Agree</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Chat screen: narrative scrollback (design doc §4's V1 client),
        history paging, a safety-flag control (§9.2), the dice tray and
        character sidebar below, and push-to-talk (mic-button, §4). -->

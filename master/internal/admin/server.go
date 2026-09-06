@@ -21,6 +21,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
+	"github.com/jamesplotts/layforge/master/internal/terms"
 )
 
 // System-tab setting keys, as stored in store.AdminSettingsStore's
@@ -36,6 +37,15 @@ const (
 	SystemKeySystemEngineAddr = "system_engine_addr"
 	SystemKeyComfyUIURL       = "comfyui_url"
 	SystemKeyComfyUIWorkflow  = "comfyui_workflow_path"
+	// SystemKeyTermsAcceptedVersion/SystemKeyTermsAcceptedAt record the
+	// Host's own acceptance of internal/terms.OperatorText (see
+	// EffectiveSystemSettings' callers and the /api/terms endpoints
+	// below) — not part of systemKeys/systemSettingsDTO, since these
+	// aren't a System-tab setting an operator edits directly, only ever
+	// written by handleAcceptTerms or main.go's -accept-terms-version
+	// scripted-acceptance path.
+	SystemKeyTermsAcceptedVersion = "terms_accepted_version"
+	SystemKeyTermsAcceptedAt      = "terms_accepted_at"
 )
 
 // systemKeys is every recognized System-tab key, in the fixed order the
@@ -162,6 +172,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
 	mux.HandleFunc("PUT /api/system", s.requireSameOrigin(s.handlePutSystem))
 	mux.HandleFunc("POST /api/system/restart", s.requireSameOrigin(s.handleRestart))
+	mux.HandleFunc("GET /api/terms", s.handleGetTerms)
+	mux.HandleFunc("POST /api/terms/accept", s.requireSameOrigin(s.handleAcceptTerms))
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	if s.webDir != "" {
@@ -827,6 +839,78 @@ func (s *Server) handlePutSystem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.saveSystemSettings(r.Context(), dto); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, dto)
+}
+
+// termsDTO is GET /api/terms' and POST /api/terms/accept's shared wire
+// shape. Version/OperatorText are always the current build's
+// terms.Version/terms.OperatorText — a self-hoster can't be shown a
+// stale text even if their SQLite database is old, since these are
+// compiled-in, not stored. Accepted/AcceptedAt reflect whether the
+// stored SystemKeyTermsAcceptedVersion actually matches the current
+// Version (an old acceptance of a since-changed text does not count).
+type termsDTO struct {
+	Version      string `json:"version"`
+	OperatorText string `json:"operator_text"`
+	Accepted     bool   `json:"accepted"`
+	AcceptedAt   string `json:"accepted_at,omitempty"`
+}
+
+// OperatorTermsAccepted reports whether stored (as returned by
+// store.AdminSettingsStore.GetSystemSettings) reflects acceptance of the
+// current terms.Version. Exported so both main.go's boot-time gate and
+// internal/server's dispatch gate share this one comparison rather than
+// each re-deriving it.
+func OperatorTermsAccepted(stored map[string]string) bool {
+	return stored[SystemKeyTermsAcceptedVersion] == terms.Version
+}
+
+func (s *Server) currentTermsDTO(ctx context.Context) (termsDTO, error) {
+	stored, err := s.store.GetSystemSettings(ctx)
+	if err != nil {
+		return termsDTO{}, err
+	}
+	dto := termsDTO{Version: terms.Version, OperatorText: terms.OperatorText}
+	if OperatorTermsAccepted(stored) {
+		dto.Accepted = true
+		dto.AcceptedAt = stored[SystemKeyTermsAcceptedAt]
+	}
+	return dto, nil
+}
+
+// handleGetTerms reports whether the Host has accepted the current
+// terms.Version yet — the admin panel's own first-load check that
+// decides whether to show the blocking Agree modal, and the same
+// condition internal/server's dispatch gate checks before processing
+// any player message (design doc's own "gates over prompting," applied
+// to this feature too: the modal is a UI convenience, this endpoint's
+// underlying stored state is what's actually enforced).
+func (s *Server) handleGetTerms(w http.ResponseWriter, r *http.Request) {
+	dto, err := s.currentTermsDTO(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, dto)
+}
+
+// handleAcceptTerms records the Host's acceptance of the current
+// terms.Version — same-origin-gated like every other mutating admin
+// endpoint (see requireSameOrigin's own doc comment).
+func (s *Server) handleAcceptTerms(w http.ResponseWriter, r *http.Request) {
+	err := s.store.SaveSystemSettings(r.Context(), map[string]string{
+		SystemKeyTermsAcceptedVersion: terms.Version,
+		SystemKeyTermsAcceptedAt:      time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	dto, err := s.currentTermsDTO(r.Context())
+	if err != nil {
 		s.writeError(w, err)
 		return
 	}

@@ -121,6 +121,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
+	"github.com/jamesplotts/layforge/master/internal/terms"
 	"github.com/jamesplotts/layforge/master/internal/transcription"
 )
 
@@ -233,6 +234,19 @@ type Server struct {
 	// mid-restart session is simply gone, and the player starts over.
 	creationSessions   map[string]creationSession
 	creationSessionsMu sync.Mutex
+
+	// adminSettings backs the operator-terms gate (terms.go): dispatch
+	// checks whether the Host has accepted internal/terms.Version via
+	// this same store the admin panel's own /api/terms endpoints read
+	// and write (internal/admin.SystemKeyTermsAcceptedVersion) — never
+	// nil in practice, since main.go always passes the same events value
+	// it hands to every other store.XStore parameter here. Deliberately
+	// store.AdminSettingsStore, not a direct import of package admin
+	// (which would invert the real dependency direction — main.go wires
+	// admin on top of server's own interfaces, not the other way
+	// around); see adminTermsKey*'s own doc comment for the matching
+	// key-name duplication this implies.
+	adminSettings store.AdminSettingsStore
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -273,7 +287,10 @@ type Server struct {
 // package admin can share the same connection registry and push
 // character.review_result to a live player right after a Host's own
 // approve/reject action (design doc §9.4) — never nil in practice.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider, pregenStore store.PregenStore, hub *session.Hub) *Server {
+// adminSettings backs the operator-terms gate (terms.go) — never nil in
+// practice, main.go passes the same events value as every other
+// store.XStore parameter here.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider, pregenStore store.PregenStore, adminSettings store.AdminSettingsStore, hub *session.Hub) *Server {
 	return &Server{
 		logger:           logger,
 		events:           events,
@@ -294,6 +311,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		audioStreams:     make(map[string]*audioStreamBuffer),
 		pregens:          pregenStore,
 		creationSessions: make(map[string]creationSession),
+		adminSettings:    adminSettings,
 	}
 }
 
@@ -447,7 +465,14 @@ func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID, se
 		writeDone <- s.writePump(ctx, conn, client)
 	}()
 
-	readErr := s.readLoop(ctx, conn, campaignID)
+	// cs holds this connection's own in-memory-only state (terms.go's
+	// termsAccepted flag today) — created fresh per connection and never
+	// persisted, since sender_id is entirely client-declared with no
+	// account system behind it (see terms.go's own doc comment for why
+	// that makes a live-connection gate the right trust boundary, not a
+	// sender_id-keyed database record).
+	cs := &connState{}
+	readErr := s.readLoop(ctx, conn, campaignID, cs)
 
 	// Unregister (above, via defer) closes client's outbox once serve
 	// returns, which ends writePump's range loop — but that hasn't run
@@ -478,20 +503,20 @@ func (s *Server) writePump(ctx context.Context, conn *websocket.Conn, client *se
 // transport failure while responding to the sender — a message that's
 // merely malformed or unsupported gets a system.error reply and the loop
 // continues, so one bad message doesn't end the connection.
-func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, campaignID string) error {
+func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, campaignID string, cs *connState) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
 			return fmt.Errorf("reading message: %w", err)
 		}
-		if err := s.dispatch(ctx, conn, campaignID, data); err != nil {
+		if err := s.dispatch(ctx, conn, campaignID, data, cs); err != nil {
 			return err
 		}
 	}
 }
 
 // dispatch decodes one inbound message and routes it by type.
-func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID string, data []byte) error {
+func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID string, data []byte, cs *connState) error {
 	var envelope protocol.Envelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return s.sendError(ctx, conn, campaignID, "", fmt.Errorf("malformed message: %w", err))
@@ -500,7 +525,28 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, verr)
 	}
 
+	// Terms gate (terms.go) — every message but terms.accept itself is
+	// refused until both the Host has accepted internal/terms.Version
+	// (system-wide) and this specific connection has too (see connState's
+	// own doc comment for why that's per-connection, not per-sender_id).
+	if envelope.Type != protocol.MessageTypeTermsAccept {
+		if err := s.checkTermsAccepted(ctx, cs); err != nil {
+			return s.sendErrorCode(ctx, conn, campaignID, err.code, envelope.MessageID, err.err)
+		}
+	}
+
 	switch envelope.Type {
+	case protocol.MessageTypeTermsAccept:
+		var accept protocol.TermsAcceptMessage
+		if err := json.Unmarshal(data, &accept); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed terms.accept payload: %w", err))
+		}
+		if accept.Payload.Version != terms.Version {
+			return s.sendErrorCode(ctx, conn, campaignID, "terms_version_mismatch", envelope.MessageID,
+				fmt.Errorf("terms have been updated (current version %s) — reload and accept again", terms.Version))
+		}
+		cs.termsAccepted = true
+		return nil
 	case protocol.MessageTypeSafetyFlag:
 		var flag protocol.SafetyFlagMessage
 		if err := json.Unmarshal(data, &flag); err != nil {
@@ -1226,8 +1272,16 @@ func (s *Server) eventVisibleTo(ctx context.Context, senderID string, raw json.R
 // writing the rejection itself fails, since that indicates a real
 // transport problem rather than a client mistake.
 func (s *Server) sendError(ctx context.Context, conn *websocket.Conn, campaignID, inReplyTo string, cause error) error {
+	return s.sendErrorCode(ctx, conn, campaignID, "message_rejected", inReplyTo, cause)
+}
+
+// sendErrorCode is sendError generalized to a caller-chosen Code — used
+// wherever a rejection needs a specific machine-readable reason (e.g.
+// terms.go's operator_terms_not_accepted/player_terms_not_accepted/
+// terms_version_mismatch) rather than the generic "message_rejected".
+func (s *Server) sendErrorCode(ctx context.Context, conn *websocket.Conn, campaignID, code, inReplyTo string, cause error) error {
 	msg, err := newMessage(campaignID, protocol.MessageTypeSystemError, protocol.SystemErrorPayload{
-		Code:               "message_rejected",
+		Code:               code,
 		Message:            cause.Error(),
 		InReplyToMessageID: inReplyTo,
 	})

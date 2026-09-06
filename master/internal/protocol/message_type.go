@@ -53,6 +53,11 @@ const (
 	MessageTypeCharacterCreationPrompt   MessageType = "character.creation_prompt"
 	MessageTypeCharacterCreationAnswer   MessageType = "character.creation_answer"
 	MessageTypeCharacterReviewResult     MessageType = "character.review_result"
+	// MessageTypeTermsAccept is sent by a client once per connection to
+	// accept the current terms.Version (see internal/terms and
+	// internal/server's dispatch gate) — required before any other
+	// message type is processed for that connection.
+	MessageTypeTermsAccept MessageType = "terms.accept"
 )
 
 // IsValid reports whether t is one of the message types this build of
@@ -75,7 +80,7 @@ func (t MessageType) IsValid() bool {
 		MessageTypeVehicleImport, MessageTypeVehicleImported,
 		MessageTypeAudioChunk, MessageTypeAudioTranscription,
 		MessageTypeCharacterCreationStart, MessageTypeCharacterCreationPrompt, MessageTypeCharacterCreationAnswer,
-		MessageTypeCharacterReviewResult:
+		MessageTypeCharacterReviewResult, MessageTypeTermsAccept:
 		return true
 	default:
 		return false

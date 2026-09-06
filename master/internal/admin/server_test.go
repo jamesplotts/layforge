@@ -15,6 +15,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/admin"
 	"github.com/jamesplotts/layforge/master/internal/session"
+	"github.com/jamesplotts/layforge/master/internal/terms"
 )
 
 func newTestServer(t *testing.T, restartRequested chan struct{}) (*admin.Server, *httptest.Server) {
@@ -490,6 +491,66 @@ func TestServer_PutSystem_OllamaProviderWithoutAPIKey_Allowed(t *testing.T) {
 	}, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestServer_GetTerms_NotYetAccepted_ReturnsUnaccepted(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/terms", nil, "")
+	var got struct {
+		Version      string `json:"version"`
+		OperatorText string `json:"operator_text"`
+		Accepted     bool   `json:"accepted"`
+		AcceptedAt   string `json:"accepted_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.Version != terms.Version {
+		t.Errorf("Version = %q, want %q", got.Version, terms.Version)
+	}
+	if got.OperatorText == "" {
+		t.Error("OperatorText is empty, want the real disclaimer text")
+	}
+	if got.Accepted {
+		t.Error("Accepted = true, want false before anyone has accepted")
+	}
+	if got.AcceptedAt != "" {
+		t.Errorf("AcceptedAt = %q, want empty before acceptance", got.AcceptedAt)
+	}
+}
+
+func TestServer_PostTermsAccept_ThenGetTerms_ReturnsAccepted(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	postResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/terms/accept", nil, "")
+	if postResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/terms/accept status = %d, want 200", postResp.StatusCode)
+	}
+
+	getResp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/terms", nil, "")
+	var got struct {
+		Accepted   bool   `json:"accepted"`
+		AcceptedAt string `json:"accepted_at"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !got.Accepted {
+		t.Error("Accepted = false, want true after POST /api/terms/accept")
+	}
+	if got.AcceptedAt == "" {
+		t.Error("AcceptedAt is empty, want a real timestamp after acceptance")
+	}
+}
+
+func TestServer_PostTermsAccept_CrossOriginRequest_Rejected(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/terms/accept", nil, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
 	}
 }
 

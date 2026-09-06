@@ -275,6 +275,22 @@
     </section>
   </main>
 
+  <!-- Blocking Host/operator terms modal (see app.js's loadTerms/
+       acceptTerms) — shown on load whenever GET /api/terms reports
+       accepted: false, hidden once the Host clicks Agree. Intentionally
+       has no decline control: not agreeing just leaves this up, since
+       every player message is refused server-side until it's accepted
+       (internal/server's own dispatch gate) regardless of what this
+       page shows. -->
+  <div id="terms-modal" class="terms-modal" hidden>
+    <div class="terms-modal-backdrop"></div>
+    <div class="terms-modal-card">
+      <h2>Before you continue</h2>
+      <pre id="terms-modal-text" class="terms-modal-text"></pre>
+      <button id="terms-modal-agree" type="button">I Agree</button>
+    </div>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>

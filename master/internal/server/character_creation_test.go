@@ -40,7 +40,7 @@ func newTestServerForCreation(t *testing.T, fakeEngine *fakeSystemEngineClient) 
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, systemEngineClient, st, nil, nil, st, st, st, nil, st, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, systemEngineClient, st, nil, nil, st, st, st, nil, st, nil, session.NewHub()).Handler())
 	return ts, st
 }
 
@@ -221,7 +221,7 @@ func TestServe_CreationPregen_NotConfigured_ReturnsSystemError(t *testing.T) {
 	}
 	defer st.Close()
 	// pregens deliberately left nil.
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, nil, st, nil, nil, st, st, st, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, nil, st, nil, nil, st, st, st, nil, nil, nil, session.NewHub()).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-creation-pregen-unconfigured", "player-a")

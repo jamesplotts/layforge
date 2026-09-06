@@ -151,7 +151,11 @@ opt-in, and a listing self-heals/expires on its own if Master stops
 checking in. Narration and the DM tool-use loop can now also talk to a
 hosted LLM provider — Anthropic, OpenAI, OpenRouter, or Z.ai — instead of
 only a self-hosted Ollama server (see Model Providers above); credentials
-for whichever one is configured never leave Master. A
+for whichever one is configured never leave Master. Master now also
+gates on a Host/operator terms acceptance (once, via the admin panel or
+a scripted `-accept-terms-version` flag) and a per-connection player
+disclaimer acceptance before processing any real message — see
+`master/README.md`'s Running section. A
 player's own roll still doesn't apply its own damage outside the DM
 pass, there's no human review step on imported characters (that needs an
 account/operator concept the admin panel doesn't cover yet), and no full markdown
