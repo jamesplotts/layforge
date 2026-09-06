@@ -18,16 +18,42 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+missing=()
 for tool in protoc protoc-gen-go protoc-gen-go-grpc; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
-		echo "generate.sh: required tool '$tool' not found on PATH" >&2
-		echo "  protoc: apt install protobuf-compiler (or your platform's equivalent)" >&2
-		echo "  protoc-gen-go / protoc-gen-go-grpc: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest" >&2
-		echo "                                       go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest" >&2
-		echo "  (ensure \$(go env GOPATH)/bin is on your PATH)" >&2
-		exit 1
+		missing+=("$tool")
 	fi
 done
+
+if [ "${#missing[@]}" -gt 0 ]; then
+	echo "generate.sh: required tool(s) not found on PATH: ${missing[*]}" >&2
+	echo >&2
+	for tool in "${missing[@]}"; do
+		case "$tool" in
+		protoc)
+			echo "  protoc: apt install protobuf-compiler (or your platform's equivalent)" >&2
+			;;
+		protoc-gen-go)
+			# Debian/Ubuntu do package this one (apt install protoc-gen-go),
+			# unlike protoc-gen-go-grpc below — but 'go install' works
+			# everywhere, so it's given as the one portable answer here.
+			echo "  protoc-gen-go: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest" >&2
+			;;
+		protoc-gen-go-grpc)
+			# No apt package for this one on Debian/Ubuntu as of this
+			# writing — 'go install' is the only reliable path. Confirmed
+			# by a real self-hoster hitting exactly this: apt-installing
+			# protoc-gen-go alone (a real, same-named apt package) looked
+			# like it should be enough and wasn't.
+			echo "  protoc-gen-go-grpc: go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest" >&2
+			;;
+		esac
+	done
+	echo >&2
+	echo "  After a 'go install', ensure \$(go env GOPATH)/bin is on your PATH — add" >&2
+	echo "  'export PATH=\"\$PATH:\$(go env GOPATH)/bin\"' to your shell profile if it isn't." >&2
+	exit 1
+fi
 
 protoc \
 	--proto_path=protocol \
