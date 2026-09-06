@@ -188,6 +188,13 @@ type campaignPolicyDTO struct {
 	// either means "no bound in that direction".
 	MinLevel int `json:"min_level"`
 	MaxLevel int `json:"max_level"`
+	// MaxPlayers/RegistryListed/JoinAddress mirror store.CampaignSettings's
+	// own fields of the same name — the optional public listing at
+	// layforge.org (see internal/registry). RegistryListed is the real
+	// opt-in gate; false by default.
+	MaxPlayers     int    `json:"max_players"`
+	RegistryListed bool   `json:"registry_listed"`
+	JoinAddress    string `json:"join_address"`
 }
 
 // campaignSecurityDTO is the Security tab's wire shape. An empty
@@ -383,6 +390,9 @@ func (s *Server) handleGetCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		PriceMultiplier:         settings.PriceMultiplier,
 		MinLevel:                settings.MinLevel,
 		MaxLevel:                settings.MaxLevel,
+		MaxPlayers:              settings.MaxPlayers,
+		RegistryListed:          settings.RegistryListed,
+		JoinAddress:             settings.JoinAddress,
 	})
 }
 
@@ -413,6 +423,14 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 		s.writeErrorMsg(w, http.StatusBadRequest, "min_level must not exceed max_level")
 		return
 	}
+	if dto.MaxPlayers < 0 {
+		s.writeErrorMsg(w, http.StatusBadRequest, "max_players must not be negative")
+		return
+	}
+	if dto.RegistryListed && dto.JoinAddress == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "join_address is required to list this campaign publicly")
+		return
+	}
 
 	current, _, err := s.store.GetCampaignSettings(r.Context(), id)
 	if err != nil {
@@ -426,6 +444,9 @@ func (s *Server) handlePutCampaignPolicy(w http.ResponseWriter, r *http.Request)
 	current.PriceMultiplier = dto.PriceMultiplier
 	current.MinLevel = dto.MinLevel
 	current.MaxLevel = dto.MaxLevel
+	current.MaxPlayers = dto.MaxPlayers
+	current.RegistryListed = dto.RegistryListed
+	current.JoinAddress = dto.JoinAddress
 	if err := s.store.SaveCampaignSettings(r.Context(), id, current); err != nil {
 		s.writeError(w, err)
 		return

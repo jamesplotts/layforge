@@ -39,6 +39,9 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 		PriceMultiplier:         1.5,
 		MinLevel:                3,
 		MaxLevel:                8,
+		MaxPlayers:              6,
+		RegistryListed:          true,
+		JoinAddress:             "wss://myhost.example.com/ws",
 	}
 
 	if err := s.SaveCampaignSettings(ctx, "campaign-1", want); err != nil {
@@ -54,7 +57,8 @@ func TestSQLiteEventStore_SaveAndGetCampaignSettings_RoundTripsAllFields(t *test
 	}
 	if got.PvPPolicy != want.PvPPolicy || got.MaturityTierPrompt != want.MaturityTierPrompt ||
 		got.ImageMaturityTierPrompt != want.ImageMaturityTierPrompt || got.RoomPassword != want.RoomPassword ||
-		got.PriceMultiplier != want.PriceMultiplier || got.MinLevel != want.MinLevel || got.MaxLevel != want.MaxLevel {
+		got.PriceMultiplier != want.PriceMultiplier || got.MinLevel != want.MinLevel || got.MaxLevel != want.MaxLevel ||
+		got.MaxPlayers != want.MaxPlayers || got.RegistryListed != want.RegistryListed || got.JoinAddress != want.JoinAddress {
 		t.Errorf("GetCampaignSettings() = %+v, want %+v", got, want)
 	}
 	if len(got.PvPConsent) != len(want.PvPConsent) {

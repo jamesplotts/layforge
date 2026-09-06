@@ -1642,6 +1642,48 @@ writeup, including the real `sable-ravine` example pack now setting
 `maturity_tier: standard`) as a real, working example of the allowed
 case.
 
+**New**: opt-in integration with `layforge.org`'s public campaign
+directory (see [`../registry/README.md`](../registry/README.md) for
+that standalone service itself). New `master/internal/registry`
+package: a plain `*Client` (no interface — there's exactly one real
+registry implementation Master ever talks to) for the directory's own
+`POST/PUT/DELETE/GET /api/v1/listings` API, and a `HeartbeatLoop` that
+periodically syncs every campaign whose own admin-panel settings opt it
+in. **Nothing is published automatically** — a new `-registry-url` flag
+(empty by default) only enables the *capability*; a specific campaign
+additionally needs its own new `RegistryListed: true` (admin panel
+Campaign tab, default false) with a non-empty `JoinAddress` (the Master
+WebSocket URL a player needs — host-supplied, since Master has no way
+to know its own externally-reachable address; design doc §11's
+"remote-reachable Master" roadmap item is separate, unbuilt work this
+doesn't attempt) before anything about it is ever sent anywhere. A
+third new admin-settable field, `MaxPlayers` (0 = unspecified), joins
+`MinLevel`/`MaxLevel` in the same `campaignPolicyDTO`/`GET|PUT
+/api/campaigns/{id}/policy` endpoint those already live in, for
+consistency with that immediately-preceding pass. Every other field the
+public listing needs already existed: adventure name from a bound
+campaign pack's own `Title` (falling back to the admin panel's
+`DisplayName`, then the raw `campaign_id`), level range from
+`policy.CampaignPolicy`, player count from `CharacterStore.ListCharacters`
+filtered to real player-owned characters (the same count
+`spotlight.go`/`party_roster.go` already compute), password-protected
+from whether `RoomPassword` is set. An archived campaign is never
+published even if `RegistryListed` was left on. The heartbeat loop
+self-heals on a registry restart (a 404 on heartbeat means "the
+registry's in-memory store lost this listing" — re-register, don't
+error out) and deregisters cleanly the moment a campaign's own
+`RegistryListed` flips back off.
+
+**Verified live**: real separate `registry` and `master` processes
+(not `httptest` fakes) — opted a real test campaign in via the real
+admin API, confirmed it appeared in the registry's real
+`GET /api/v1/listings` and in the real browser lobby page within one
+heartbeat interval; confirmed opting back out produced a real
+deregister; confirmed that killing Master ungracefully (no deregister
+call at all) still let the listing expire on its own via the
+registry's TTL once heartbeats stopped arriving — the self-healing
+design's actual failure-mode behavior, not just the happy path.
+
 ## Layout
 
 ```

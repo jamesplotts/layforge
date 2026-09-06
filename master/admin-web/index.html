@@ -107,6 +107,25 @@
         Max Level (an imported character above this level is automatically rejected; blank/0 = no upper bound)
         <input id="max-level" type="text" inputmode="numeric" placeholder="e.g. 5" />
       </label>
+
+      <hr />
+      <p class="panel-hint">
+        Public listing at <a href="https://layforge.org" target="_blank" rel="noopener">layforge.org</a> —
+        opt-in only. Nothing about this campaign is ever sent anywhere unless "List in Public Lobby" below
+        is checked and this Master was started with <code>-registry-url</code> configured.
+      </p>
+      <label>
+        Max Players (shown in the public listing as a capacity; blank/0 = unlimited/not shown)
+        <input id="max-players" type="text" inputmode="numeric" placeholder="e.g. 6" />
+      </label>
+      <label>
+        Join Address (the Master WebSocket URL a player needs to join — shown publicly if listed)
+        <input id="join-address" type="text" placeholder="wss://myhost.example.com/ws" />
+      </label>
+      <label class="checkbox-label">
+        <input id="registry-listed" type="checkbox" />
+        List in Public Lobby (requires Join Address above)
+      </label>
       <button id="campaign-save" type="button">Save</button>
       <span id="campaign-save-status" class="save-status"></span>
 

@@ -50,6 +50,31 @@ type CampaignSettings struct {
 	// convention PriceMultiplier already uses.
 	MinLevel int
 	MaxLevel int
+	// MaxPlayers, RegistryListed, and JoinAddress feed the optional
+	// public campaign directory at layforge.org (see
+	// internal/registry's own doc comment) — none of them are
+	// governance settings the way the fields above are, but they live
+	// here rather than a separate table for the same reason MinLevel/
+	// MaxLevel do: this is already the one per-campaign settings blob
+	// the admin panel reads/writes as a unit.
+	//
+	// MaxPlayers is the host's configured capacity — 0 means
+	// unspecified/unlimited, the same "0 means unset" convention as
+	// PriceMultiplier/MinLevel/MaxLevel.
+	MaxPlayers int
+	// RegistryListed is the actual opt-in gate: even with a registry
+	// configured (-registry-url) and reachable, Master never publishes
+	// anything about a campaign whose own RegistryListed isn't true —
+	// there is no "list everything by default" mode. Defaults to false.
+	RegistryListed bool
+	// JoinAddress is the Master WebSocket URL a prospective player's own
+	// client needs to actually join this campaign (design doc §4's join
+	// screen — "Master WebSocket URL"), host-supplied because Master has
+	// no way to know its own externally-reachable address (design doc
+	// §11's remote-reachability roadmap item is separate, unbuilt work).
+	// A campaign with RegistryListed true but an empty JoinAddress is
+	// simply never heartbeated — see internal/registry's heartbeat loop.
+	JoinAddress string
 }
 
 // CampaignSummary is one row of the admin panel's real campaign list

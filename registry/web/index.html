@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Layforge</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="header">
+    <h1>Layforge</h1>
+    <p class="tagline">A self-hosted, AI-run tabletop RPG platform — you run the table, the DM AI runs the scene.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>What this is</h2>
+      <p>
+        Layforge is a Master/Slave chat-based virtual tabletop: one person
+        (the Host) runs a small server called <strong>Master</strong>, an LLM
+        narrates and referees the session through a real rules engine
+        (dice, checks, spellcasting, turn order — all computed server-side,
+        never left to the model to guess), and players connect from an
+        ordinary web browser. Every host runs their own Master — there is no
+        central Layforge server your game depends on.
+      </p>
+      <p>
+        Source, the design document, and build instructions live on GitHub:
+      </p>
+      <ul class="link-list">
+        <li><a href="https://github.com/jamesplotts/layforge" target="_blank" rel="noopener">github.com/jamesplotts/layforge</a> — Master, the reference web client, and the protocol</li>
+        <li><a href="https://github.com/jamesplotts/opencombatengine" target="_blank" rel="noopener">github.com/jamesplotts/opencombatengine</a> — the open-source SRD 5e-compatible rules engine Master talks to</li>
+      </ul>
+      <p class="note">
+        No prebuilt downloads yet — build from source: clone the repo, then
+        <code>go build ./...</code> from its <code>master/</code> directory
+        (requires Go 1.24+). See the repo's own README for the full setup,
+        including the optional System Engine sidecar.
+      </p>
+    </section>
+
+    <section class="panel">
+      <h2>Open Games</h2>
+      <p class="note">
+        Self-hosted campaigns whose Host has chosen to list them here. A
+        listing tells you what you need to join from your own Layforge web
+        client — it does not create an account or connect you to anything
+        automatically. Listings disappear on their own if a Host's Master
+        stops checking in.
+      </p>
+      <table id="listings-table">
+        <thead>
+          <tr>
+            <th>Adventure</th>
+            <th>Level Range</th>
+            <th>Players</th>
+            <th></th>
+            <th>Join</th>
+          </tr>
+        </thead>
+        <tbody id="listings-body"></tbody>
+      </table>
+      <p id="listings-empty" class="note" hidden>No open games listed right now.</p>
+      <p id="listings-error" class="note error" hidden></p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Layforge is original, SRD 5.1-legal content — no proprietary D&amp;D terms, names, or text. MIT-licensed.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

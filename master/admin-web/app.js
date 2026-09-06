@@ -50,6 +50,9 @@ const el = {
   priceMultiplier: document.getElementById("price-multiplier"),
   minLevel: document.getElementById("min-level"),
   maxLevel: document.getElementById("max-level"),
+  maxPlayers: document.getElementById("max-players"),
+  joinAddress: document.getElementById("join-address"),
+  registryListed: document.getElementById("registry-listed"),
   campaignSave: document.getElementById("campaign-save"),
   campaignPackDir: document.getElementById("campaign-pack-dir"),
   campaignPackCurrent: document.getElementById("campaign-pack-current"),
@@ -301,6 +304,9 @@ async function loadCampaignPolicy(id) {
   el.priceMultiplier.value = data.price_multiplier ? String(data.price_multiplier) : "1.0";
   el.minLevel.value = data.min_level ? String(data.min_level) : "";
   el.maxLevel.value = data.max_level ? String(data.max_level) : "";
+  el.maxPlayers.value = data.max_players ? String(data.max_players) : "";
+  el.joinAddress.value = data.join_address || "";
+  el.registryListed.checked = Boolean(data.registry_listed);
 }
 
 el.campaignSave.addEventListener("click", async () => {
@@ -321,6 +327,15 @@ el.campaignSave.addEventListener("click", async () => {
     setStatus(el.campaignSaveStatus, "Max Level must be a non-negative whole number.", true);
     return;
   }
+  const maxPlayers = parseInt(el.maxPlayers.value, 10);
+  if (el.maxPlayers.value.trim() !== "" && (Number.isNaN(maxPlayers) || maxPlayers < 0)) {
+    setStatus(el.campaignSaveStatus, "Max Players must be a non-negative whole number.", true);
+    return;
+  }
+  if (el.registryListed.checked && !el.joinAddress.value.trim()) {
+    setStatus(el.campaignSaveStatus, "Join Address is required to list this campaign publicly.", true);
+    return;
+  }
   const body = {
     pvp_policy: el.pvpPolicy.value,
     pvp_consent: el.pvpConsent.value.split(",").map((s) => s.trim()).filter(Boolean),
@@ -329,6 +344,9 @@ el.campaignSave.addEventListener("click", async () => {
     price_multiplier: Number.isNaN(priceMultiplier) ? 0 : priceMultiplier,
     min_level: Number.isNaN(minLevel) ? 0 : minLevel,
     max_level: Number.isNaN(maxLevel) ? 0 : maxLevel,
+    max_players: Number.isNaN(maxPlayers) ? 0 : maxPlayers,
+    registry_listed: el.registryListed.checked,
+    join_address: el.joinAddress.value.trim(),
   };
   const resp = await fetch(`/api/campaigns/${encodeURIComponent(state.campaignId)}/policy`, {
     method: "PUT",

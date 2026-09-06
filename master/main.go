@@ -80,6 +80,7 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/maturitytiers"
 	"github.com/jamesplotts/layforge/master/internal/policy"
+	"github.com/jamesplotts/layforge/master/internal/registry"
 	"github.com/jamesplotts/layforge/master/internal/server"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
@@ -104,10 +105,12 @@ func main() {
 	maturityTiersDir := flag.String("maturity-tiers-dir", "", "path to a directory of maturity-tier definitions (design doc §6.5), e.g. maturity-tiers/ at the repo root — one *.md file per tier (id/display_name/rank front matter, prompt-constraint text as the body). Host-authored and trusted like any other host config; Master does not police tier content. Leave empty (today's default) to resolve maturity_tier_prompt only from -campaign-policies/the admin panel, never from a campaign pack's own maturity_tier reference.")
 	whisperURL := flag.String("whisper-url", "", "base URL of a self-hosted Whisper-family transcription server speaking the OpenAI /v1/audio/transcriptions contract (design doc §4), e.g. http://localhost:9000 (faster-whisper-server, openai-whisper-asr-webservice, LocalAI, and similar self-hosted servers all implement this). Leave empty to run without push-to-talk transcription (today's default) — the audio.chunk message then gets a system.error explaining it's unavailable, and the web client's mic button simply has nothing to talk to. Requires -whisper-model.")
 	whisperModel := flag.String("whisper-model", "base", "model name to request from the whisper server (its own \"model\" form field — whichever model size/variant it has loaded); ignored if -whisper-url is empty.")
+	registryURL := flag.String("registry-url", "", "base URL of a layforge.org-style public campaign directory (registry/ in this repo), e.g. https://layforge.org. Leave empty (today's default) to run without any registry integration at all. Even when set, a specific campaign is only ever published if its own admin-panel Campaign tab has \"List in Public Lobby\" checked with a Join Address filled in — this flag alone lists nothing.")
+	registryHeartbeatInterval := flag.Duration("registry-heartbeat-interval", 30*time.Second, "how often to refresh each opted-in campaign's registry listing; ignored if -registry-url is empty. Should stay comfortably under the registry's own TTL (90s by default in registry/main.go) so a slow tick or two doesn't make a listing flicker.")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *registryHeartbeatInterval, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -206,7 +209,7 @@ func defaultAdminWebDir() string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel string, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -438,6 +441,17 @@ func run(addr, dbPath, llmURL, llmModel, webDir, roomPasswordsPath, systemEngine
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// registryURL empty (today's default) means no registry integration
+	// at all — no goroutine, no outbound calls, nothing. Even when set,
+	// HeartbeatLoop itself only ever publishes a campaign whose own
+	// admin-panel settings opt it in (RegistryListed + JoinAddress) —
+	// see internal/registry's own doc comment.
+	if registryURL != "" {
+		heartbeatLoop := registry.NewHeartbeatLoop(registry.NewClient(registryURL), events, events, events, logger)
+		go heartbeatLoop.Run(ctx, registryHeartbeatInterval)
+		logger.Info("public campaign directory integration enabled", "registry_url", registryURL, "heartbeat_interval", registryHeartbeatInterval)
+	}
 
 	serveErr := make(chan error, 1)
 	go func() {

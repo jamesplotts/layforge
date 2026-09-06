@@ -257,6 +257,9 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 		"price_multiplier":           1.5,
 		"min_level":                  3,
 		"max_level":                  8,
+		"max_players":                6,
+		"registry_listed":            true,
+		"join_address":               "wss://myhost.example.com/ws",
 	}, "")
 	if putResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(putResp.Body)
@@ -271,6 +274,9 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 		PriceMultiplier    float64  `json:"price_multiplier"`
 		MinLevel           int      `json:"min_level"`
 		MaxLevel           int      `json:"max_level"`
+		MaxPlayers         int      `json:"max_players"`
+		RegistryListed     bool     `json:"registry_listed"`
+		JoinAddress        string   `json:"join_address"`
 	}
 	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding response: %v", err)
@@ -289,6 +295,37 @@ func TestServer_PutThenGetCampaignPolicy_RoundTrips(t *testing.T) {
 	}
 	if got.MinLevel != 3 || got.MaxLevel != 8 {
 		t.Errorf("MinLevel/MaxLevel = %d/%d, want 3/8", got.MinLevel, got.MaxLevel)
+	}
+	if got.MaxPlayers != 6 {
+		t.Errorf("MaxPlayers = %d, want 6", got.MaxPlayers)
+	}
+	if !got.RegistryListed {
+		t.Error("RegistryListed = false, want true")
+	}
+	if got.JoinAddress != "wss://myhost.example.com/ws" {
+		t.Errorf("JoinAddress = %q, want %q", got.JoinAddress, "wss://myhost.example.com/ws")
+	}
+}
+
+func TestServer_PutCampaignPolicy_RegistryListedWithoutJoinAddress_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/policy", map[string]any{
+		"registry_listed": true,
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_PutCampaignPolicy_NegativeMaxPlayers_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/campaigns/campaign-1/policy", map[string]any{
+		"max_players": -1,
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
 

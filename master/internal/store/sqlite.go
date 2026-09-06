@@ -68,6 +68,9 @@ var initStatements = []string{
 		price_multiplier           REAL NOT NULL DEFAULT 0,
 		min_level                  INTEGER NOT NULL DEFAULT 0,
 		max_level                  INTEGER NOT NULL DEFAULT 0,
+		max_players                INTEGER NOT NULL DEFAULT 0,
+		registry_listed            INTEGER NOT NULL DEFAULT 0,
+		join_address               TEXT NOT NULL DEFAULT '',
 		updated_at                 TEXT NOT NULL
 	);`,
 	`CREATE TABLE IF NOT EXISTS system_settings (
