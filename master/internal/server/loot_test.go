@@ -231,10 +231,14 @@ func TestServe_NarrativePlayerInput_SlowPass_AddCurrency_EngineRejects_ReturnsFa
 	fakeEngine := &fakeSystemEngineClient{
 		addCurrencyResp: &systemenginepb.AddCurrencyResponse{
 			Success: false,
-			Error:   "Cannot add a negative amount of currency.",
+			Error:   "Character has no wallet slot recorded.",
 		},
 	}
-	fakeLLM := toolCallLLM("add_currency", `{"character_id":"actor-char","gold":-5}`)
+	// A valid, in-bounds amount — this test is specifically about the
+	// engine itself rejecting the call for its own reason, distinct from
+	// dmAddCurrency's own amount-bounds gate (see tool_amount_bounds_test.go),
+	// which must never even let this request reach the fake engine.
+	fakeLLM := toolCallLLM("add_currency", `{"character_id":"actor-char","gold":5}`)
 
 	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
 	defer ts.Close()
@@ -246,7 +250,7 @@ func TestServe_NarrativePlayerInput_SlowPass_AddCurrency_EngineRejects_ReturnsFa
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if _, err := sendPlayerInput(ctx, conn, "campaign-add-currency-reject", "player-a", "actor-char", "I lose gold, somehow."); err != nil {
+	if _, err := sendPlayerInput(ctx, conn, "campaign-add-currency-reject", "player-a", "actor-char", "I find some gold."); err != nil {
 		t.Fatalf("sendPlayerInput() error = %v", err)
 	}
 	var bubble protocol.NarrativePlayerBubbleMessage

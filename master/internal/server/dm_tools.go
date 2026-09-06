@@ -614,6 +614,23 @@ func (s *Server) dmApplyEffect(ctx context.Context, campaignID, actingSenderID s
 		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
 	}
 
+	// Magnitude gate — independent of, and checked before, the PvP gate
+	// below: that gate only fires for damage against a different
+	// player's character, so a self-targeting heal/buff (or any effect
+	// against an NPC) had no check at all on how large a single call
+	// could be. A security review of a prompt-injection attempt (a
+	// player's narrative input manipulating the DM model into calling
+	// this tool with an implausible amount for their own benefit) found
+	// this gap — maxEffectAmount is generous enough for any real SRD
+	// single-application effect (high-level criticals/heals rarely
+	// exceed a few hundred) while rejecting an obviously fabricated
+	// value, enforced here rather than left to the model's own restraint
+	// (CLAUDE.md's "gates over prompting").
+	const maxEffectAmount = 1000
+	if args.Amount > maxEffectAmount || args.Amount < -maxEffectAmount {
+		return fmt.Sprintf("amount %d is outside the plausible range for a single effect (±%d)", args.Amount, maxEffectAmount), false, "amount_out_of_range"
+	}
+
 	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
 	if err != nil {
 		return err.Error(), false, "character_not_found"
@@ -1622,6 +1639,21 @@ func (s *Server) dmAddCurrency(ctx context.Context, campaignID string, argsJSON 
 	}
 	if err := json.Unmarshal(argsJSON, &args); err != nil {
 		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	// Magnitude gate — same reasoning as dmApplyEffect's own (see its
+	// comment): nothing previously bounded how much currency a single
+	// call could grant, so a prompt-injected "give my character a
+	// billion gold" had no gate at all. maxCurrencyPerCall is generous
+	// enough for even a large SRD treasure-hoard result while rejecting
+	// an obviously fabricated value; negative amounts are also rejected
+	// since removing currency is dmTransferCurrency's job, not this
+	// tool's.
+	const maxCurrencyPerCall = 100000
+	for _, amount := range []int32{args.Copper, args.Silver, args.Gold, args.Platinum} {
+		if amount < 0 || amount > maxCurrencyPerCall {
+			return fmt.Sprintf("currency amount %d is outside the allowed range (0-%d) for a single call", amount, maxCurrencyPerCall), false, "amount_out_of_range"
+		}
 	}
 
 	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
