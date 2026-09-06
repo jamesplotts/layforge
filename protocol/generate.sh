@@ -40,11 +40,6 @@ if [ "${#missing[@]}" -gt 0 ]; then
 			echo "  protoc-gen-go: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest" >&2
 			;;
 		protoc-gen-go-grpc)
-			# No apt package for this one on Debian/Ubuntu as of this
-			# writing — 'go install' is the only reliable path. Confirmed
-			# by a real self-hoster hitting exactly this: apt-installing
-			# protoc-gen-go alone (a real, same-named apt package) looked
-			# like it should be enough and wasn't.
 			echo "  protoc-gen-go-grpc: go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest" >&2
 			;;
 		esac
@@ -55,9 +50,36 @@ if [ "${#missing[@]}" -gt 0 ]; then
 	exit 1
 fi
 
+# Debian/Ubuntu DO package protoc-gen-go-grpc (apt install protoc-gen-go-grpc)
+# — but that package has been observed generating an older interface shape
+# (a named SystemEngine_StreamEventsClient type) than this project's pinned
+# grpc-go version (see master/go.mod) expects, which uses the newer generic
+# streaming-client interfaces (grpc.ServerStreamingClient[T]) instead, and
+# the symptom is a confusing internal/systemenginepb compile error minutes
+# later, not an error here. Reproduced for real on a Debian trixie box with
+# both an OS-packaged and a 'go install'ed copy on PATH — the OS one
+# happened to resolve first. Rather than just warn about PATH order,
+# explicitly point protoc at the 'go install'ed copy (via --plugin, which
+# overrides protoc's own PATH-based plugin lookup) whenever one exists in
+# $(go env GOPATH)/bin, regardless of which copy a bare PATH search would
+# have found — this makes generation correct even when an OS package
+# shadows the right binary, not just correct if the user's PATH happens to
+# be ordered right today.
+gopath_bin="$(go env GOPATH 2>/dev/null)/bin"
+go_plugin="$(command -v protoc-gen-go)"
+if [ -x "$gopath_bin/protoc-gen-go" ]; then
+	go_plugin="$gopath_bin/protoc-gen-go"
+fi
+grpc_plugin="$(command -v protoc-gen-go-grpc)"
+if [ -x "$gopath_bin/protoc-gen-go-grpc" ]; then
+	grpc_plugin="$gopath_bin/protoc-gen-go-grpc"
+fi
+
 protoc \
 	--proto_path=protocol \
 	--proto_path=protocol/third_party \
+	--plugin="protoc-gen-go=$go_plugin" \
+	--plugin="protoc-gen-go-grpc=$grpc_plugin" \
 	--go_out=master --go_opt=module=github.com/jamesplotts/layforge/master \
 	--go-grpc_out=master --go-grpc_opt=module=github.com/jamesplotts/layforge/master \
 	system_engine.proto
