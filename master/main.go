@@ -73,6 +73,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -214,6 +215,29 @@ func defaultAdminWebDir() string {
 		return "admin-web"
 	}
 	return filepath.Join(filepath.Dir(exe), "admin-web")
+}
+
+// listenURL turns a listener bind address (e.g. ":8080", "0.0.0.0:8080",
+// "127.0.0.1:8090") into a real http:// URL a self-hoster can open
+// directly, rather than making them work out "which host do I actually
+// type for this" from a bare addr — most terminals also render an
+// http:// string as a clickable link, so this doubles as "here's
+// something to click," not just "here's the address." An empty host, or
+// the literal all-interfaces addresses "0.0.0.0"/"::", is shown as
+// "localhost" instead — none of those are themselves valid to put in a
+// browser's address bar. addr that doesn't even parse as host:port
+// (shouldn't happen for anything actually passed to http.Server, but
+// this must never panic on a log line) falls back to using it verbatim.
+func listenURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr + "/"
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/"
 }
 
 // run opens the event store, starts the HTTP/WebSocket listener, and
@@ -538,12 +562,12 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("master listening", "addr", addr)
+		logger.Info("master listening", "addr", addr, "url", listenURL(addr))
 		serveErr <- httpServer.ListenAndServe()
 	}()
 	if adminHTTPServer != nil {
 		go func() {
-			logger.Info("admin panel listening", "addr", adminAddr)
+			logger.Info("admin panel listening", "addr", adminAddr, "url", listenURL(adminAddr))
 			// Not fed into serveErr: the admin panel is a convenience,
 			// same as -web-dir — a failure to bind it (e.g. the port's
 			// already in use) shouldn't take down the player-facing
