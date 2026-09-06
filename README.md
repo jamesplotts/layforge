@@ -58,12 +58,21 @@ a registry, so removing it is just deleting what you created:
 1. Stop the running process (`Ctrl+C`, or `sudo systemctl stop
    layforge-master`/disable it if you set it up as a service — see
    below).
-2. Delete the cloned directory (`rm -rf layforge`). This removes the
+2. **Back up `layforge.db` first if you want to keep anything** — every
+   campaign, character sheet, and adventure event Master has ever
+   recorded lives in that one SQLite file (design doc §10), along with
+   the admin panel's own settings. It defaults to sitting inside the
+   working directory you ran `go run .`/the compiled binary from, so
+   the next step deletes it right along with everything else, with no
+   separate confirmation and no recovering it afterward. Copy it
+   somewhere first (`cp layforge.db ~/layforge-backup.db`) if that data
+   matters to you, or open it with `sqlite3 layforge.db` to export
+   specific tables.
+3. Delete the cloned directory (`rm -rf layforge`). This removes the
    binary, the generated `master/internal/systemenginepb/` stubs, the
-   web client assets, and `layforge.db` itself, since it defaults to
-   living inside the working directory you ran `go run .`/the compiled
-   binary from. If you pointed `-db`, `-web-dir`, or `-admin-web-dir` at
-   a path outside the clone, remove those separately too.
+   web client assets, and `layforge.db` itself (per the warning just
+   above). If you pointed `-db`, `-web-dir`, or `-admin-web-dir` at a
+   path outside the clone, remove those separately too.
 
 That's the whole self-hosted footprint — no admin-panel data, campaign
 state, or credentials live anywhere else.
