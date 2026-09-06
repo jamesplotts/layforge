@@ -91,6 +91,8 @@ const el = {
   sysLLMURL: document.getElementById("sys-llm-url"),
   sysLLMModel: document.getElementById("sys-llm-model"),
   sysLLMAPIKey: document.getElementById("sys-llm-api-key"),
+  testLLMButton: document.getElementById("test-llm-button"),
+  testLLMStatus: document.getElementById("test-llm-status"),
   sysSystemEngineAddr: document.getElementById("sys-system-engine-addr"),
   sysComfyUIURL: document.getElementById("sys-comfyui-url"),
   sysComfyUIWorkflow: document.getElementById("sys-comfyui-workflow"),
@@ -692,6 +694,49 @@ function systemSettingsBody() {
     comfyui_workflow_path: el.sysComfyUIWorkflow.value,
   };
 }
+
+function resetLLMTestState() {
+  el.testLLMButton.classList.remove("test-success", "test-failure");
+  setStatus(el.testLLMStatus, "");
+}
+
+// Editing any of the four tested fields invalidates the last result —
+// a stale green/red no longer reflects what's actually in the form.
+for (const field of [el.sysLLMProvider, el.sysLLMURL, el.sysLLMModel, el.sysLLMAPIKey]) {
+  field.addEventListener("input", resetLLMTestState);
+  field.addEventListener("change", resetLLMTestState);
+}
+
+el.testLLMButton.addEventListener("click", async () => {
+  el.testLLMButton.disabled = true;
+  el.testLLMButton.classList.remove("test-success", "test-failure");
+  setStatus(el.testLLMStatus, "Testing…");
+  try {
+    const resp = await fetch("/api/system/test-llm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        llm_provider: el.sysLLMProvider.value,
+        llm_url: el.sysLLMURL.value,
+        llm_model: el.sysLLMModel.value,
+        llm_api_key: el.sysLLMAPIKey.value,
+      }),
+    });
+    if (!resp.ok) {
+      el.testLLMButton.classList.add("test-failure");
+      setStatus(el.testLLMStatus, `Failed: ${await errorText(resp)}`, true);
+      return;
+    }
+    const data = await resp.json();
+    el.testLLMButton.classList.add("test-success");
+    setStatus(el.testLLMStatus, `Connected — model replied: ${data.response}`);
+  } catch (err) {
+    el.testLLMButton.classList.add("test-failure");
+    setStatus(el.testLLMStatus, `Failed: ${err.message}`, true);
+  } finally {
+    el.testLLMButton.disabled = false;
+  }
+});
 
 el.systemSave.addEventListener("click", async () => {
   setStatus(el.systemSaveStatus, "Saving…");

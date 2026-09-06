@@ -17,6 +17,8 @@
   --accent-text: #0c0e14;
   --danger: #ff6b6b;
   --danger-bg: #3a1c1c;
+  --success: #4ade80;
+  --success-bg: #16321f;
 }
 
 * {
@@ -282,6 +284,28 @@ button.secondary {
 button.danger {
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+/* "Test Connection" result state — reset to plain button.secondary
+   styling the moment any of the four LLM fields it tested change
+   (app.js), since a stale green/red no longer reflects the form. */
+button.test-success {
+  background: var(--success-bg);
+  color: var(--success);
+  border-color: var(--success);
+}
+
+button.test-failure {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.llm-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
 .system-actions {

@@ -303,6 +303,17 @@
         LLM API Key (required for every provider except Ollama — never sent to players)
         <input id="sys-llm-api-key" type="password" autocomplete="off" placeholder="sk-..." />
       </label>
+      <!-- Tries the provider/URL/model/key currently sitting in the
+           fields above, unsaved — a real completion call
+           (POST /api/system/test-llm), not just a reachability ping —
+           so a typo shows up before "Save & Restart" disconnects every
+           connected player. Turns green/red based on the last result;
+           editing any of the four fields above resets it to neutral,
+           since a stale result no longer reflects what's in the form. -->
+      <div class="llm-test-row">
+        <button id="test-llm-button" type="button" class="secondary">Test Connection</button>
+        <span id="test-llm-status" class="save-status"></span>
+      </div>
       <label>
         System Engine Address
         <input id="sys-system-engine-addr" type="text" placeholder="localhost:5265" />

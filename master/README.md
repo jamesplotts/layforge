@@ -1840,6 +1840,25 @@ generate → save → bind round trip against real infrastructure:
   (e.g. `\i`) inside its stringified payload — `escapeInvalidJSONBackslashes`
   repairs that specific, confirmed-deterministic mistake before giving up.
 
+**New**: a "Test Connection" button on the System tab, next to the LLM
+fields (`POST /api/system/test-llm`) — real first-use feedback that a
+typo shouldn't only surface after "Save & Restart" has already
+disconnected every connected player. It builds a throwaway
+`llm.Provider` from whatever's currently sitting in the four LLM form
+fields (not the already-active, already-saved one main.go constructed
+at boot) and makes one real, minimal completion call against it, with
+its own short 30-second timeout — deliberately not
+`llm.DefaultProviderTimeout`'s 8 minutes, since a connectivity check is
+meant to be quick. The button itself turns green (a real reply came
+back) or red (with the actual error) rather than just showing status
+text, and resets to neutral the moment any of the four tested fields
+change, since a stale result no longer reflects the form. **Live-verified**
+against the real LAN Ollama server: a correct config returns
+`{"ok":true,"response":"OK"}`; an unreachable host and a missing
+required field each surface the real underlying error (a connection
+failure, or `llm: ollama provider requires a base URL`) rather than a
+generic failure message.
+
 ## Layout
 
 ```

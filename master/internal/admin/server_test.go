@@ -510,6 +510,115 @@ func TestServer_PutSystem_OllamaProviderWithoutAPIKey_Allowed(t *testing.T) {
 	}
 }
 
+// fakeOllamaServer mimics Ollama's own POST /api/chat contract — used to
+// exercise handleTestLLM's real llm.NewProvider->OllamaProvider->real
+// HTTP call path against a hermetic server, the same style
+// internal/llm's own tests already use, rather than mocking
+// llm.Provider directly (this endpoint deliberately constructs its own
+// ad-hoc, not-yet-saved provider from the request body, so there's no
+// injection point for a fake Provider to substitute in even if we
+// wanted one).
+func fakeOllamaServer(t *testing.T, respond func(w http.ResponseWriter)) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			t.Errorf("unexpected request path %q, want /api/chat", r.URL.Path)
+		}
+		respond(w)
+	}))
+}
+
+func TestServer_TestLLM_RealSuccessfulCall_ReturnsOK(t *testing.T) {
+	fake := fakeOllamaServer(t, func(w http.ResponseWriter) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"content": "OK"},
+			"done":    true,
+		})
+	})
+	defer fake.Close()
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/system/test-llm", map[string]any{
+		"llm_provider": "ollama", "llm_url": fake.URL, "llm_model": "test-model",
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	var got struct {
+		OK       bool   `json:"ok"`
+		Response string `json:"response"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !got.OK || got.Response != "OK" {
+		t.Errorf("got = %+v, want ok=true response=OK", got)
+	}
+}
+
+func TestServer_TestLLM_ProviderCallFails_ReturnsBadGatewayWithDetail(t *testing.T) {
+	fake := fakeOllamaServer(t, func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer fake.Close()
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/system/test-llm", map[string]any{
+		"llm_provider": "ollama", "llm_url": fake.URL, "llm_model": "test-model",
+	}, "")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", resp.StatusCode)
+	}
+	var got struct {
+		Error string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.Error == "" {
+		t.Error("error message is empty, want a real detail for the Host")
+	}
+}
+
+func TestServer_TestLLM_OllamaMissingURL_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/system/test-llm",
+		map[string]any{"llm_provider": "ollama"}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_TestLLM_NonOllamaMissingAPIKey_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/system/test-llm",
+		map[string]any{"llm_provider": "openai"}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_TestLLM_UnrecognizedProvider_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/system/test-llm",
+		map[string]any{"llm_provider": "bogus"}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_TestLLM_CrossOriginRequest_Rejected(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/system/test-llm",
+		map[string]any{"llm_provider": "ollama", "llm_url": "http://localhost:11434"}, "http://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
 func TestServer_GetTerms_NotYetAccepted_ReturnsUnaccepted(t *testing.T) {
 	_, httpSrv := newTestServer(t, nil)
 

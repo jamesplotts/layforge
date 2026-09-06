@@ -193,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
 	mux.HandleFunc("PUT /api/system", s.requireSameOrigin(s.handlePutSystem))
 	mux.HandleFunc("POST /api/system/restart", s.requireSameOrigin(s.handleRestart))
+	mux.HandleFunc("POST /api/system/test-llm", s.requireSameOrigin(s.handleTestLLM))
 	mux.HandleFunc("GET /api/terms", s.handleGetTerms)
 	mux.HandleFunc("POST /api/terms/accept", s.requireSameOrigin(s.handleAcceptTerms))
 	mux.HandleFunc("GET /api/health", s.handleHealth)
@@ -496,6 +497,78 @@ func validateSystemSettings(dto systemSettingsDTO) string {
 		return "llm_api_key is required for every llm_provider except ollama"
 	}
 	return ""
+}
+
+// testLLMRequestDTO is POST /api/system/test-llm's request body — the
+// candidate LLM settings currently sitting in the System tab's form,
+// not necessarily saved yet. Deliberately its own small type rather
+// than reusing systemSettingsDTO: this endpoint only cares about these
+// four fields, not the tab's other, unrelated settings.
+type testLLMRequestDTO struct {
+	LLMProvider string `json:"llm_provider"`
+	LLMURL      string `json:"llm_url"`
+	LLMModel    string `json:"llm_model"`
+	LLMAPIKey   string `json:"llm_api_key"`
+}
+
+type testLLMResponseDTO struct {
+	OK bool `json:"ok"`
+	// Response is the model's actual reply text — shown back to the
+	// Host as extra, concrete confidence that a real completion
+	// happened, not just that the HTTP call didn't error.
+	Response string `json:"response"`
+}
+
+// testLLMTimeout bounds handleTestLLM's own call — much shorter than
+// llm.DefaultProviderTimeout (a real generation can legitimately run
+// for minutes; a connectivity check is meant to be quick, and a Host
+// clicking "Test Connection" shouldn't wait minutes to find out a typo
+// broke it).
+const testLLMTimeout = 30 * time.Second
+
+// handleTestLLM builds a throwaway llm.Provider from the request body
+// (not s.llmProvider — that's the already-active, already-saved
+// provider main.go constructed at boot; this endpoint exists
+// specifically to try out *unsaved* System-tab form values before
+// committing to "Save & Restart") and makes one real, minimal
+// completion call against it.
+func (s *Server) handleTestLLM(w http.ResponseWriter, r *http.Request) {
+	var dto testLLMRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+
+	kind := llm.ProviderKind(dto.LLMProvider)
+	if kind == "" {
+		kind = llm.ProviderKindOllama
+	}
+	if !kind.IsValid() {
+		s.writeErrorMsg(w, http.StatusBadRequest, "llm_provider must be one of: ollama, anthropic, openai, openrouter, zai")
+		return
+	}
+	if kind != llm.ProviderKindOllama && dto.LLMAPIKey == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "llm_api_key is required for every llm_provider except ollama")
+		return
+	}
+
+	provider, err := llm.NewProvider(llm.ProviderConfig{Kind: kind, BaseURL: dto.LLMURL, APIKey: dto.LLMAPIKey})
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), testLLMTimeout)
+	defer cancel()
+	resp, err := provider.Complete(ctx, llm.CompletionRequest{
+		Model:      dto.LLMModel,
+		UserPrompt: "Reply with only the single word: OK",
+	})
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadGateway, "test failed: "+err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, testLLMResponseDTO{OK: true, Response: resp.Text})
 }
 
 // campaignSummaryDTO is one row of the campaign list's wire shape —

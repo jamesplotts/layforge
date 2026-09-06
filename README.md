@@ -55,6 +55,45 @@ confirmed `go run .`-specific quirk — see master/README.md's own
 "go run . caveat") — it almost certainly didn't; check
 `http://localhost:8080/` before assuming something broke.
 
+## Building a Real Binary
+
+`go run .` is fine for a first look, but it recompiles on every
+invocation and its self-restart behavior is confusing (see the caveat
+just above) — build an actual binary instead for anything beyond a
+quick test:
+
+```
+cd master
+go build -o master .
+./master
+```
+
+This produces a single static executable (`master/master`) with no
+runtime dependency beyond what you explicitly configure (an Ollama
+server, a System Engine sidecar, etc. — all optional). It looks for its
+`web`/`admin-web` directories next to itself, so keep those two folders
+alongside the binary if you move it elsewhere:
+
+```
+cp -r master/master master/web master/admin-web /wherever/you/want/
+cd /wherever/you/want/
+./master
+```
+
+Cross-compiling for another platform is standard Go — no special flags
+this project needs beyond the usual `GOOS`/`GOARCH`:
+
+```
+GOOS=linux GOARCH=amd64 go build -o master-linux-amd64 .
+GOOS=darwin GOARCH=arm64 go build -o master-darwin-arm64 .
+GOOS=windows GOARCH=amd64 go build -o master-windows-amd64.exe .
+```
+
+For a real, always-on deployment (not just running it in a terminal),
+see [`registry/README.md`](registry/README.md#real-deployment-layforgeorg)
+for a working systemd-unit example — the same pattern applies to
+`master`, not just `registry/`.
+
 ## Uninstalling
 
 Master is a single static binary plus plain files on disk — nothing in
