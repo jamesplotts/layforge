@@ -49,6 +49,12 @@ Then open `http://localhost:8080/`. See
 ComfyUI endpoints, room passwords, the admin panel, and what each
 optional dependency unlocks.
 
+If you use the admin panel's "Save & Restart" while still running via
+`go run .`, your terminal will look like the server died (a real,
+confirmed `go run .`-specific quirk — see master/README.md's own
+"go run . caveat") — it almost certainly didn't; check
+`http://localhost:8080/` before assuming something broke.
+
 ## Uninstalling
 
 Master is a single static binary plus plain files on disk — nothing in

@@ -430,6 +430,25 @@ the same argv (not `syscall.Exec`, which would skip the cleanup Master's
 shutdown path already does). See `main.go`'s package doc comment for a
 systemd `KillMode` caveat this self-restart interacts with.
 
+**`go run .` caveat, confirmed by a real self-hoster hitting it**: under
+`go run .` (Quick Start's own recommended way to try Master), a real
+restart genuinely happens and the new process genuinely picks up the
+saved settings — but the terminal makes it *look* like the server died.
+`os.Executable()` under `go run .` resolves to a throwaway
+`go-build.../exe/master` temp binary, not something you built yourself;
+the self-restart spawns a fresh process from that same temp path, then
+the original process exits cleanly — which makes the `go run` wrapper
+itself think its one job finished and hand the shell back a prompt,
+even though the replacement process it just spawned is still alive and
+listening, just detached from that terminal's job control. If "Save &
+Restart" seems to have killed your server, check
+`http://localhost:8080/` (or wherever `-addr`/`-admin-addr` point)
+before assuming something broke — it's very likely still there. Build a
+real binary (`go build -o master . && ./master`) instead of `go run .`
+if you plan to use System-tab settings/restart regularly; a compiled
+binary's self-restart behaves exactly as you'd expect, no hidden
+detachment.
+
 **Fixed**: `run()` now actually calls `GetSystemSettings` at boot and
 merges it over the CLI-flag-seeded values (`admin.EffectiveSystemSettings`,
 shared with `handleGetSystem`'s own display logic) before constructing
