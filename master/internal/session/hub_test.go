@@ -157,3 +157,118 @@ func TestHub_SendToSender_UnknownSender_NoOp(t *testing.T) {
 	// Must not panic or block.
 	h.SendToSender("campaign-1", "nobody-registered", []byte("hello"))
 }
+
+func TestHub_Kick_ConnectedSender_InvokesCloserAndReturnsTrue(t *testing.T) {
+	h := session.NewHub()
+	c := h.Register("campaign-1", "player-a")
+	var invoked bool
+	h.SetCloser(c, func() { invoked = true })
+
+	if !h.Kick("campaign-1", "player-a") {
+		t.Fatal("Kick() = false, want true for a connected sender")
+	}
+	if !invoked {
+		t.Error("closer was not invoked")
+	}
+}
+
+func TestHub_Kick_NoMatchingSender_ReturnsFalseWithoutInvokingAnyCloser(t *testing.T) {
+	h := session.NewHub()
+	c := h.Register("campaign-1", "player-a")
+	var invoked bool
+	h.SetCloser(c, func() { invoked = true })
+
+	if h.Kick("campaign-1", "nobody-registered") {
+		t.Error("Kick() = true, want false for a sender with no connections")
+	}
+	if invoked {
+		t.Error("closer was invoked for a non-matching sender")
+	}
+}
+
+func TestHub_Kick_ClientWithNoCloserSet_SkippedWithoutPanic(t *testing.T) {
+	h := session.NewHub()
+	h.Register("campaign-1", "player-a") // SetCloser never called
+
+	if h.Kick("campaign-1", "player-a") {
+		t.Error("Kick() = true, want false when no closer was ever set")
+	}
+}
+
+func TestHub_Kick_MultipleConnectionsSameSender_InvokesAllClosers(t *testing.T) {
+	h := session.NewHub()
+	tab1 := h.Register("campaign-1", "player-a")
+	tab2 := h.Register("campaign-1", "player-a")
+	var tab1Invoked, tab2Invoked bool
+	h.SetCloser(tab1, func() { tab1Invoked = true })
+	h.SetCloser(tab2, func() { tab2Invoked = true })
+
+	if !h.Kick("campaign-1", "player-a") {
+		t.Fatal("Kick() = false, want true")
+	}
+	if !tab1Invoked || !tab2Invoked {
+		t.Errorf("tab1Invoked = %v, tab2Invoked = %v, want both true", tab1Invoked, tab2Invoked)
+	}
+}
+
+func TestHub_Kick_DoesNotHoldLockWhileCloserRuns(t *testing.T) {
+	h := session.NewHub()
+	c := h.Register("campaign-1", "player-a")
+	unblock := make(chan struct{})
+	h.SetCloser(c, func() { <-unblock })
+	defer close(unblock)
+
+	kickDone := make(chan struct{})
+	go func() {
+		h.Kick("campaign-1", "player-a")
+		close(kickDone)
+	}()
+
+	// Give the goroutine a moment to enter the (blocked) closer.
+	time.Sleep(50 * time.Millisecond)
+
+	registerDone := make(chan struct{})
+	go func() {
+		h.Register("campaign-2", "player-b")
+		close(registerDone)
+	}()
+
+	select {
+	case <-registerDone:
+	case <-time.After(time.Second):
+		t.Fatal("Register blocked while Kick's closer was still running — Kick must not hold the lock during closer invocation")
+	}
+
+	select {
+	case <-kickDone:
+		t.Fatal("Kick returned before its blocked closer was unblocked")
+	default:
+	}
+}
+
+func TestHub_ConnectedSenders_ReturnsDistinctSortedSenderIDs(t *testing.T) {
+	h := session.NewHub()
+	h.Register("campaign-1", "player-b")
+	h.Register("campaign-1", "player-a")
+	h.Register("campaign-1", "player-a") // second tab, same sender
+	h.Register("campaign-2", "player-c") // different campaign
+
+	got := h.ConnectedSenders("campaign-1")
+	want := []string{"player-a", "player-b"}
+	if len(got) != len(want) {
+		t.Fatalf("ConnectedSenders() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ConnectedSenders()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestHub_ConnectedSenders_NoClients_ReturnsNil(t *testing.T) {
+	h := session.NewHub()
+
+	if got := h.ConnectedSenders("nobody-here"); got != nil {
+		t.Errorf("ConnectedSenders() = %v, want nil", got)
+	}
+}

@@ -245,6 +245,19 @@
 
     <section class="tab-panel" data-tab="characters" hidden>
       <p class="panel-hint">
+        Players with a live connection to this campaign right now. Kicking one disconnects
+        them immediately — it isn't a ban, they can rejoin like any other player.
+      </p>
+      <table id="connected-players-table" class="campaign-table">
+        <thead>
+          <tr>
+            <th>Sender ID</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="connected-players-table-body"></tbody>
+      </table>
+      <p class="panel-hint">
         Characters a player has imported into this campaign (design doc §9.4) — Master's own
         automatic review (a deterministic campaign level-range check, then the DM AI's own
         balance judgment) already ran on each of these; approving or rejecting here always

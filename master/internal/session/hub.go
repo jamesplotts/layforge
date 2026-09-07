@@ -10,7 +10,10 @@
 // package server owns decoding/encoding and the actual network I/O.
 package session
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // outboxSize is how many pending broadcast messages a Client's mailbox
 // buffers before Hub.Broadcast starts dropping messages to it rather
@@ -27,6 +30,11 @@ type Client struct {
 	campaignID string
 	senderID   string
 	outbox     chan []byte
+	// close is invoked by Hub.Kick to forcibly end this client's
+	// underlying connection — nil until SetCloser is called (every real
+	// production connection sets one immediately after Register; a test
+	// Client that never calls SetCloser is simply skipped by Kick).
+	close func()
 }
 
 // Outbox returns the channel Hub delivers broadcast messages to. It is
@@ -133,4 +141,71 @@ func (h *Hub) SendToSender(campaignID, sender string, payload []byte) {
 		default:
 		}
 	}
+}
+
+// SetCloser attaches the function Hub.Kick invokes to forcibly end c's
+// underlying connection. Package session has no transport dependency
+// (see this file's own package doc comment) — the closer is an opaque
+// callback the owner (package server) supplies, typically closing that
+// connection's own real network connection. Safe to call at any point
+// after Register.
+func (h *Hub) SetCloser(c *Client, close func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c.close = close
+}
+
+// Kick signals every currently-registered connection for sender in
+// campaignID to close, via whichever closer each was given (a
+// connection with no closer set — SetCloser never called — is skipped,
+// not panicked on). Returns true if at least one connection was
+// signaled. Kicking is not itself Unregister: the owning connection's
+// own read loop notices the close, returns, and its existing deferred
+// Unregister runs exactly as it does for any other disconnect — Kick
+// never touches h.rooms directly.
+//
+// Closers are collected under h.mu but invoked after releasing it — a
+// real close can perform its own close handshake and block for a
+// timeout; holding h.mu for that long would stall Broadcast/
+// SendToSender/Register for every other campaign on the whole process,
+// the same class of problem Broadcast's own drop-if-full design already
+// avoids for slow deliveries.
+func (h *Hub) Kick(campaignID, senderID string) bool {
+	h.mu.Lock()
+	var closers []func()
+	for c := range h.rooms[campaignID] {
+		if c.senderID == senderID && c.close != nil {
+			closers = append(closers, c.close)
+		}
+	}
+	h.mu.Unlock()
+
+	for _, close := range closers {
+		close()
+	}
+	return len(closers) > 0
+}
+
+// ConnectedSenders returns the distinct sender_ids with at least one
+// live connection registered under campaignID, sorted for a stable
+// admin-UI listing (a sender with multiple open connections/tabs
+// appears once). Returns nil, not an error, for a campaign with no
+// registered clients.
+func (h *Hub) ConnectedSenders(campaignID string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	seen := make(map[string]struct{})
+	for c := range h.rooms[campaignID] {
+		seen[c.senderID] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	senders := make([]string, 0, len(seen))
+	for s := range seen {
+		senders = append(senders, s)
+	}
+	sort.Strings(senders)
+	return senders
 }

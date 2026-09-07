@@ -190,6 +190,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/campaigns/{id}/pregens/{pregenId}", s.requireSameOrigin(s.handleDeletePregen))
 	mux.HandleFunc("GET /api/campaigns/{id}/characters", s.handleListCharacters)
 	mux.HandleFunc("PUT /api/campaigns/{id}/characters/{characterId}/review", s.requireSameOrigin(s.handleReviewCharacter))
+	mux.HandleFunc("GET /api/campaigns/{id}/players", s.handleListConnectedPlayers)
+	mux.HandleFunc("POST /api/campaigns/{id}/players/{senderId}/kick", s.requireSameOrigin(s.handleKickPlayer))
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
 	mux.HandleFunc("PUT /api/system", s.requireSameOrigin(s.handlePutSystem))
 	mux.HandleFunc("POST /api/system/restart", s.requireSameOrigin(s.handleRestart))
@@ -1013,7 +1015,7 @@ func (s *Server) handleReviewCharacter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.hub != nil && character.OwnerID != "" {
-		msg, err := newReviewResultMessage(campaignID, protocol.CharacterReviewResultPayload{
+		msg, err := newAdminMessage(campaignID, protocol.MessageTypeCharacterReviewResult, protocol.CharacterReviewResultPayload{
 			CharacterID: character.ID,
 			Status:      string(status),
 			Reason:      dto.Reason,
@@ -1033,27 +1035,98 @@ func (s *Server) handleReviewCharacter(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// newReviewResultMessage builds a character.review_result Message —
-// package server's own newMessage helper isn't exported, and this is
-// the only message package admin ever originates, so a small
-// self-contained builder here is simpler than exporting a shared one
-// for a single caller.
-func newReviewResultMessage(campaignID string, payload protocol.CharacterReviewResultPayload) (protocol.Message[protocol.CharacterReviewResultPayload], error) {
+// newAdminMessage builds a Message of the given type — package server's
+// own newMessage helper isn't exported, and admin package originates
+// only a couple of message types directly (character.review_result,
+// system.error for a kicked player), so a small self-contained generic
+// builder here is simpler than exporting a shared one just for admin's
+// two callers.
+func newAdminMessage[T any](campaignID string, msgType protocol.MessageType, payload T) (protocol.Message[T], error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return protocol.Message[protocol.CharacterReviewResultPayload]{}, errors.New("admin: generating message id failed")
+		return protocol.Message[T]{}, errors.New("admin: generating message id failed")
 	}
-	return protocol.Message[protocol.CharacterReviewResultPayload]{
+	return protocol.Message[T]{
 		Envelope: protocol.Envelope{
 			ProtocolVersion: protocol.CurrentProtocolVersion,
 			MessageID:       hex.EncodeToString(b[:]),
 			Timestamp:       time.Now().UTC(),
 			SenderID:        "master",
 			CampaignID:      campaignID,
-			Type:            protocol.MessageTypeCharacterReviewResult,
+			Type:            msgType,
 		},
 		Payload: payload,
 	}, nil
+}
+
+// connectedPlayersDTO is the response body of GET
+// /api/campaigns/{id}/players.
+type connectedPlayersDTO struct {
+	SenderIDs []string `json:"sender_ids"`
+}
+
+// handleListConnectedPlayers reports which sender_ids currently have a
+// live connection to campaignID (internal/session.Hub's live
+// registration state) — distinct from handleListCharacters, which
+// reports persisted characters regardless of whether their owner is
+// online right now. Used by the admin panel's Characters tab to
+// populate the Kick action's target list.
+func (s *Server) handleListConnectedPlayers(w http.ResponseWriter, r *http.Request) {
+	campaignID := r.PathValue("id")
+	var senderIDs []string
+	if s.hub != nil {
+		senderIDs = s.hub.ConnectedSenders(campaignID)
+	}
+	s.writeJSON(w, http.StatusOK, connectedPlayersDTO{SenderIDs: senderIDs})
+}
+
+// kickPlayerResultDTO is the response body of POST
+// /api/campaigns/{id}/players/{senderId}/kick.
+type kickPlayerResultDTO struct {
+	Kicked bool `json:"kicked"`
+}
+
+// kickNotificationDelay is how long handleKickPlayer waits after
+// queuing the kicked player's notification before forcibly closing
+// their connection — just enough for the write pump to actually flush
+// it first. There is no shared completion signal between SendToSender
+// (an async channel send) and Kick (a synchronous close) to wait on
+// instead, and this is a rare, explicit, Host-triggered action rather
+// than a hot path, so a short fixed delay is the simplest correct fix.
+var kickNotificationDelay = 200 * time.Millisecond
+
+// handleKickPlayer forcibly disconnects senderId's live connection(s)
+// to campaignID, if any (design doc §3.3's Host-operator capabilities;
+// removing pvp_with_consent left "the Host removes a disruptive player"
+// as the real lever instead of a per-player consent list). Not a ban:
+// nothing here prevents senderId from reconnecting and rejoining —
+// there is no account system in this repo to ban against (§9.4). A
+// senderId with no live connection is reported as Kicked: false, not
+// an error — the Host may simply be clicking a stale row.
+func (s *Server) handleKickPlayer(w http.ResponseWriter, r *http.Request) {
+	campaignID := r.PathValue("id")
+	senderID := r.PathValue("senderId")
+
+	if s.hub == nil {
+		s.writeJSON(w, http.StatusOK, kickPlayerResultDTO{Kicked: false})
+		return
+	}
+
+	msg, err := newAdminMessage(campaignID, protocol.MessageTypeSystemError, protocol.SystemErrorPayload{
+		Code:    "kicked_by_host",
+		Message: "You have been removed from this campaign by the host.",
+	})
+	if err != nil {
+		s.logger.Warn("failed to build kick notification", "error", err, "campaign_id", campaignID, "sender_id", senderID)
+	} else if payload, err := json.Marshal(msg); err != nil {
+		s.logger.Warn("failed to marshal kick notification", "error", err, "campaign_id", campaignID, "sender_id", senderID)
+	} else {
+		s.hub.SendToSender(campaignID, senderID, payload)
+	}
+
+	time.Sleep(kickNotificationDelay)
+
+	s.writeJSON(w, http.StatusOK, kickPlayerResultDTO{Kicked: s.hub.Kick(campaignID, senderID)})
 }
 
 func (s *Server) handleGetSystem(w http.ResponseWriter, r *http.Request) {

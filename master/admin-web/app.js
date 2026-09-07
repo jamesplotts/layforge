@@ -81,6 +81,7 @@ const el = {
   pregenSave: document.getElementById("pregen-save"),
   pregenSaveStatus: document.getElementById("pregen-save-status"),
   characterTableBody: document.getElementById("character-table-body"),
+  connectedPlayersTableBody: document.getElementById("connected-players-table-body"),
   campaignSaveStatus: document.getElementById("campaign-save-status"),
   roomPassword: document.getElementById("room-password"),
   securitySave: document.getElementById("security-save"),
@@ -311,7 +312,14 @@ el.campaignSelect.addEventListener("change", () => selectCampaign(el.campaignSel
 async function selectCampaign(id) {
   state.campaignId = id;
   el.campaignSelect.value = id;
-  await Promise.all([loadCampaignPolicy(id), loadCampaignSecurity(id), loadCampaignPack(id), loadPregens(id), loadCharacters(id)]);
+  await Promise.all([
+    loadCampaignPolicy(id),
+    loadCampaignSecurity(id),
+    loadCampaignPack(id),
+    loadPregens(id),
+    loadCharacters(id),
+    loadConnectedPlayers(id),
+  ]);
 }
 
 // --- Campaign tab ---
@@ -643,6 +651,54 @@ async function reviewCharacter(campaignId, characterId, status) {
     return;
   }
   await loadCharacters(campaignId);
+}
+
+async function loadConnectedPlayers(id) {
+  const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/players`);
+  const data = await resp.json();
+  const senderIds = (data && data.sender_ids) || [];
+
+  el.connectedPlayersTableBody.innerHTML = "";
+  if (senderIds.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 2;
+    cell.className = "note";
+    cell.textContent = "No players currently connected.";
+    row.appendChild(cell);
+    el.connectedPlayersTableBody.appendChild(row);
+    return;
+  }
+  for (const senderId of senderIds) {
+    const row = document.createElement("tr");
+
+    const senderCell = document.createElement("td");
+    senderCell.textContent = senderId;
+    row.appendChild(senderCell);
+
+    const kickCell = document.createElement("td");
+    const kickButton = document.createElement("button");
+    kickButton.type = "button";
+    kickButton.className = "secondary";
+    kickButton.textContent = "Kick";
+    kickButton.addEventListener("click", () => kickPlayer(id, senderId));
+    kickCell.appendChild(kickButton);
+    row.appendChild(kickCell);
+
+    el.connectedPlayersTableBody.appendChild(row);
+  }
+}
+
+async function kickPlayer(campaignId, senderId) {
+  if (!confirm(`Disconnect "${senderId}" from this campaign now? They can rejoin afterward.`)) return;
+  const resp = await fetch(
+    `/api/campaigns/${encodeURIComponent(campaignId)}/players/${encodeURIComponent(senderId)}/kick`,
+    { method: "POST" },
+  );
+  if (!resp.ok) {
+    window.alert(`Failed: ${await errorText(resp)}`);
+  }
+  await loadConnectedPlayers(campaignId);
 }
 
 // --- Security tab ---

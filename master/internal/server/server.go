@@ -450,10 +450,38 @@ func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, cam
 // authenticated as at handshake time (its system.connect message) —
 // registered with the Hub so a later Hub.SendToSender can target this
 // connection specifically (design doc §9's per-player fog-of-war sends,
-// internal/server/combat_map.go).
+// internal/server/combat_map.go), and given a closer so a later
+// Hub.Kick (the admin panel's "kick this player" action) can forcibly
+// end it. The closer uses CloseNow, not the graceful Close
+// rejectHandshake uses — unlike rejectHandshake, which runs before
+// readLoop's goroutine even exists, a kick always races a real blocked
+// conn.Read on that other goroutine, and CloseNow (not a close
+// handshake that itself waits on a peer response the blocked reader
+// would otherwise have to receive) is coder/websocket's documented way
+// to abort a connection out from under a concurrent read. It still
+// unblocks readLoop's pending conn.Read and lets the rest of this
+// function's normal shutdown path run unchanged.
 func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID, senderID string) error {
 	client := s.hub.Register(campaignID, senderID)
-	defer s.hub.Unregister(client)
+	s.hub.SetCloser(client, func() {
+		conn.CloseNow()
+	})
+	// unregister is exactly-once (Hub.Unregister panics on a double
+	// call) and invoked from two places: eagerly right after readLoop
+	// ends below, and via defer as a safety net if this function
+	// returns some other way (e.g. a panic unwinding past the eager
+	// call — see internal/server/server.go's own panic-recovery
+	// convention, CLAUDE.md's Go error-handling section). It cannot be
+	// left solely to the defer: Unregister is what closes client's
+	// outbox, which is the only thing that ends writePump's blocking
+	// range over Outbox() once there's nothing left to write — a defer
+	// that only fires when serve returns, while serve is itself blocked
+	// waiting for writePump to finish below, is a real deadlock, not
+	// just a delay: readLoop has already ended, but nothing will ever
+	// unblock writePump to report back on writeDone.
+	var unregisterOnce sync.Once
+	unregister := func() { unregisterOnce.Do(func() { s.hub.Unregister(client) }) }
+	defer unregister()
 
 	writeDone := make(chan error, 1)
 	go func() {
@@ -474,10 +502,10 @@ func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID, se
 	cs := &connState{}
 	readErr := s.readLoop(ctx, conn, campaignID, cs)
 
-	// Unregister (above, via defer) closes client's outbox once serve
-	// returns, which ends writePump's range loop — but that hasn't run
-	// yet at this point, so wait for it now rather than returning (and
-	// letting the caller close conn) while it might still be writing.
+	// See unregister's own doc comment above: this eager call (not just
+	// the deferred safety net) is what lets writePump actually exit.
+	unregister()
+
 	writeErr := <-writeDone
 
 	if readErr != nil {

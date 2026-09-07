@@ -1858,6 +1858,43 @@ required field each surface the real underlying error (a connection
 failure, or `llm: ollama provider requires a base URL`) rather than a
 generic failure message.
 
+**New**: the admin panel's Characters tab now lists everyone with a
+live connection to the campaign (`GET /api/campaigns/{id}/players`),
+each with a Kick button (`POST
+/api/campaigns/{id}/players/{senderId}/kick`) — replacing
+`pvp_with_consent`'s per-player opt-in list, removed the same session,
+with a lever that actually matches the problem: removing a disruptive
+player rather than pre-declaring who's allowed to fight whom. Kicking
+sends the player a `system.error` (`kicked_by_host`) before forcibly
+closing their connection, then reports whether anyone was actually
+connected to kick — a stale row isn't an error. This is a live boot,
+not a ban: `master/web/app.js` already reconnects with exponential
+backoff after any disconnect, so a kicked player can simply rejoin;
+there's no account system in this repo yet to ban against (design doc
+§9.4). Required real new plumbing, not just a route: `internal/session.
+Hub` had no way to forcibly end a specific connection before this
+(`Unregister` was only ever called by a connection's own owning
+goroutine) — `Hub.SetCloser`/`Hub.Kick` add that, deliberately
+collecting matching closers under the Hub's mutex but invoking them
+*after* releasing it, since a real close can block briefly and
+shouldn't stall `Broadcast`/`SendToSender` for every other campaign
+while it does.
+
+**Also fixed along the way**: live-testing this against a real running
+Master (two real WebSocket connections, kick one, watch the other)
+found `serve()` had a pre-existing deadlock affecting *every*
+disconnect, not just a kicked one — `Hub.Unregister` was only ever
+deferred until `serve()` itself returned, but `serve()` can't return
+until `writePump` reports back, and `writePump`'s own blocking read
+over an idle `Outbox()` never notices a dead connection unless a new
+message happens to be queued to it. A disconnected player's sender_id
+could stay listed as "connected" (in `Hub.ConnectedSenders`, and
+therefore this feature's own player list) indefinitely. `serve` now
+calls `Unregister` immediately once its read loop ends — which is also
+what unblocks `writePump`'s idle wait — keeping the deferred call only
+as a panic-safety net, guarded by a `sync.Once` so it still never runs
+twice.
+
 ## Layout
 
 ```
