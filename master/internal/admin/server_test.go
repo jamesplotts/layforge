@@ -915,14 +915,17 @@ func TestServer_GenerateCampaignPack_ModelDidNotCallTool_ReturnsBadGatewayWithDe
 
 // TestServer_GenerateCampaignPack_MalformedFrontMatter_ReturnsFilesWithValidationError
 // covers a real, live-observed model quirk: one generated file's YAML
-// front matter had a syntax mistake (an unquoted colon inside a
-// string value), which would previously discard the entire multi-
-// minute generation with only an error message — the Host must still
-// get the files back for review/editing instead.
+// front matter had a syntax mistake, which would previously discard the
+// entire multi-minute generation with only an error message — the Host
+// must still get the files back for review/editing instead. Uses an
+// unclosed quote specifically (not the "unquoted colon in a scalar
+// value" quirk — campaignpack.Generate auto-repairs that one now, see
+// generate.go's repairUnquotedColonInScalarValues) so this still
+// exercises a genuinely unfixed parse failure.
 func TestServer_GenerateCampaignPack_MalformedFrontMatter_ReturnsFilesWithValidationError(t *testing.T) {
 	provider := &fakeLLMProvider{response: writePackToolCallResponse(t, map[string]string{
 		"campaign.md":        "---\nid: haunted-lighthouse\n---\nA storm-battered lighthouse.\n",
-		"npcs/tide-witch.md": "---\nid: tide-witch\nvoice: she speaks in half-finished sentences: trailing off\n---\nThe tide witch.\n",
+		"npcs/tide-witch.md": "---\nid: tide-witch\nvoice: \"she speaks in half-finished sentences\n---\nThe tide witch.\n",
 	})}
 	_, httpSrv := newTestServerWithLLM(t, provider)
 

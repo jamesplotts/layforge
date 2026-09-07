@@ -524,3 +524,72 @@ func TestGenerateSideQuest_NonexistentPackDir_ReturnsError(t *testing.T) {
 		t.Fatal("GenerateSideQuest() error = nil, want an error for a pack dir that doesn't load")
 	}
 }
+
+// TestGenerate_RepairsUnquotedColonInFrontMatterScalars covers a real,
+// live-observed model quirk, confirmed twice independently (an npc's
+// voice field, and a campaign.md chapters[].summary field): the model
+// writes a front-matter scalar value containing an unescaped ": "
+// sequence — e.g. `voice: precise, like a scalpel: not to wound` —
+// which breaks YAML parsing because the embedded colon reads as the
+// start of a nested mapping. Generate must repair this (by quoting the
+// value) rather than surface a validation failure for a mistake this
+// predictable. The scripted response below exercises every case the
+// repair needs to get right in one pass: an unquoted top-level scalar
+// with an embedded colon, the same bug nested under a chapters list
+// item, an already-quoted value that must be left alone, and a colon in
+// the markdown body that must never be touched (bodies aren't YAML).
+func TestGenerate_RepairsUnquotedColonInFrontMatterScalars(t *testing.T) {
+	campaignMD := `---
+id: the-sacrifice
+title: The Price of Dawn
+chapters:
+  - id: the-quest
+    title: The Quest
+    summary: Warden Garrick reveals the full truth: the cost is not optional
+already_quoted: "kept: as-is"
+---
+Body text with a colon: this must survive untouched.
+`
+	npcMD := `---
+id: warden-garrick
+voice: precise, like a scalpel: not to wound but to find the line
+---
+Garrick speaks slowly.
+`
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: campaignMD},
+		{Path: "npcs/warden-garrick.md", Content: npcMD},
+	})}
+
+	got, err := campaignpack.Generate(context.Background(), provider, "test-model", campaignpack.GenerateRequest{
+		Description: "A test.", MinLevel: 1, MaxLevel: 3,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	for _, f := range got {
+		full := filepath.Join(dir, f.Path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(full, []byte(f.Content), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+
+	pack, err := campaignpack.LoadPack(dir)
+	if err != nil {
+		t.Fatalf("LoadPack() error = %v (repaired pack should parse via the real loader)", err)
+	}
+	if !strings.Contains(pack.Overview, "Body text with a colon: this must survive untouched.") {
+		t.Errorf("Overview = %q, want the body's own colon left untouched", pack.Overview)
+	}
+	if len(pack.Chapters) != 1 || !strings.Contains(pack.Chapters[0].Summary, "the full truth: the cost is not optional") {
+		t.Errorf("Chapters = %+v, want the nested summary's embedded colon preserved after repair", pack.Chapters)
+	}
+	if len(pack.NPCs) != 1 || !strings.Contains(pack.NPCs[0].Voice, "like a scalpel: not to wound") {
+		t.Errorf("NPCs = %+v, want the voice field's embedded colon preserved after repair", pack.NPCs)
+	}
+}

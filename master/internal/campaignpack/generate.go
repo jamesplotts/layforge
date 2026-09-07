@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
@@ -265,7 +266,82 @@ func generateFiles(ctx context.Context, provider llm.Provider, model, systemProm
 		return nil, fmt.Errorf("campaignpack: model did not generate content (no %s tool call)", writePackToolName)
 	}
 
-	return parseGeneratedFiles(toolCall.Arguments)
+	files, err := parseGeneratedFiles(toolCall.Arguments)
+	if err != nil {
+		return nil, err
+	}
+	for i := range files {
+		files[i].Content = repairUnquotedColonInScalarValues(files[i].Content)
+	}
+	return files, nil
+}
+
+// yamlKeyValueLine matches a YAML "key: value" line, optionally nested
+// under a list item ("- key: value") — the shape every real front-matter
+// field in this package's generated files takes. Capture groups: 1 =
+// leading whitespace/dash prefix, 2 = the key, 3 = the value.
+var yamlKeyValueLine = regexp.MustCompile(`^(\s*(?:-\s+)?)([A-Za-z_][A-Za-z0-9_]*):[ \t](.+)$`)
+
+// repairUnquotedColonInScalarValues fixes a real, live-observed model
+// quirk confirmed independently twice (an npc's voice field, and a
+// campaign.md chapters[].summary field): a front-matter scalar value
+// containing an unescaped ": " sequence — e.g. "voice: precise, like a
+// scalpel: not to wound" — which breaks YAML parsing, since the
+// embedded colon reads as the start of a nested mapping rather than
+// part of the value. Only touches lines inside the front-matter block
+// (between the first and second "---" delimiters) — the markdown body
+// isn't YAML and a colon there is always fine as-is. Only touches a
+// value that isn't already quoted and isn't a block-scalar/flow-
+// collection indicator (>, |, [, {) — deliberately narrow, the same
+// "only repair the specific confirmed failure shape" restraint
+// escapeInvalidJSONBackslashes already documents. Quoting a value that
+// didn't strictly need it is harmless (a quoted YAML scalar with no
+// special characters is identical to the unquoted form), so this errs
+// toward fixing rather than under-matching.
+func repairUnquotedColonInScalarValues(content string) string {
+	lines := strings.Split(content, "\n")
+	delimitersSeen := 0
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "---" {
+			delimitersSeen++
+			continue
+		}
+		if delimitersSeen != 1 {
+			continue // before the front matter, or past it into the body
+		}
+		m := yamlKeyValueLine.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		prefix, key, value := m[1], m[2], m[3]
+		if !needsColonRepair(value) {
+			continue
+		}
+		lines[i] = prefix + key + ": " + quoteYAMLScalar(value)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// needsColonRepair reports whether value is an unquoted, non-block-
+// scalar YAML value containing an embedded ": " (or a trailing ":")
+// that would break parsing if left as-is.
+func needsColonRepair(value string) bool {
+	if value == "" {
+		return false
+	}
+	switch value[0] {
+	case '"', '\'', '>', '|', '[', '{':
+		return false
+	}
+	return strings.Contains(value, ": ") || strings.HasSuffix(value, ":")
+}
+
+// quoteYAMLScalar wraps value in a double-quoted YAML scalar, escaping
+// the two characters that would otherwise break out of it.
+func quoteYAMLScalar(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }
 
 // validateSupplementalFiles checks the shape required of any generation

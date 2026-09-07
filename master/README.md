@@ -1958,6 +1958,22 @@ know, what's going on" question) against the real LAN Ollama server and
 confirmed the DM now calls `list_npcs`/`list_encounters` before
 narrating.
 
+**Also fixed**: re-ran the same live scenario that originally surfaced
+chapters' repetition bug (`campaignpack.Generate` against "The
+Sacrifice") through the new chapter-scoped pipeline — no repetition
+this time, but a new instance of a previously-seen model quirk turned
+up in a field the earlier fix hadn't touched: `chapters[].summary`'s
+front-matter value contained an unescaped `": "`, breaking YAML
+parsing the same way an npc's `voice` field once did. Rather than wait
+for a third field to hit the same bug, `generate.go` now runs a real
+repair pass (`repairUnquotedColonInScalarValues`) over every generated
+file's front matter — quoting any unquoted scalar value containing an
+embedded colon — before returning it, the same "recover from a
+confirmed, predictable model mistake" precedent
+`escapeInvalidJSONBackslashes` already set. Scoped to the front-matter
+block only (between the `---` delimiters); a colon in the markdown body
+is always left untouched.
+
 ## Layout
 
 ```
