@@ -1974,6 +1974,21 @@ confirmed, predictable model mistake" precedent
 block only (between the `---` delimiters); a colon in the markdown body
 is always left untouched.
 
+**Also fixed**: comparing Ollama against a real Z.ai-served
+Anthropic-compatible model (`-llm-provider anthropic -llm-url
+https://api.z.ai/api/anthropic/v1`) for the same generation found
+`internal/llm.AnthropicProvider`'s `max_tokens` (a fixed 4096) too
+small for that model — it spends a real, variable amount of budget on
+an internal "thinking" block before any actual output, and a full
+campaign-pack generation call (a large structured tool-call response)
+got cut off entirely rather than truncated gracefully. Raised to
+32000, confirmed comfortably within every current real Claude model's
+own 64K-128K synchronous output ceiling too (no beta header needed),
+so this isn't a Z.ai-only workaround. Re-ran the exact same generation
+request afterward: 12 files, no validation error, no repetition,
+legally clean — a real usable pack, at real usable quality, from a
+second independent model on the first attempt with the fix applied.
+
 ## Layout
 
 ```

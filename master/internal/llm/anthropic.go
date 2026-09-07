@@ -18,9 +18,21 @@ import (
 const anthropicAPIVersion = "2023-06-01"
 
 // anthropicMaxTokens is a fixed value for the required (no server-side
-// default) max_tokens field. Not yet operator-configurable — nothing so
-// far has needed that; would be a small additive flag if it ever does.
-const anthropicMaxTokens = 4096
+// default) max_tokens field. Raised from an original 4096 after a real
+// failure confirmed live: a Z.ai-served Anthropic-compatible model
+// (glm-4.6, actually a "glm-5.3-flash" per its own response — Z.ai's
+// endpoint appears to alias/route the requested model name) spends a
+// substantial, variable amount of its own budget on an internal
+// "thinking" content block before any real output, and a full campaign-
+// pack generation call — a large structured tool-call response, not
+// just prose — was cut off entirely (llm: model returned an empty
+// completion) at 4096. 32000 is comfortably within every current real
+// Claude model's own synchronous Messages API ceiling too (64K-128K,
+// no beta header required, confirmed against Anthropic's own docs), so
+// this isn't a Z.ai-only workaround. Not yet operator-configurable —
+// would be a small additive flag if a caller ever needs to tune it
+// per-request rather than raise the shared ceiling.
+const anthropicMaxTokens = 32000
 
 // AnthropicProvider is a Provider backed by Anthropic's Messages API
 // (https://docs.anthropic.com/en/api/messages). Its wire shape genuinely
