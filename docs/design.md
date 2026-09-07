@@ -157,13 +157,18 @@ Directory-based, markdown + YAML front matter, consistent with the maturity-tier
 ```
 campaign.md          — front matter: title, level range, tone/style tags,
                         pvp_policy, maturity_tier, shared_knowledge policy,
-                        lines/veils, contributor/author, content_warnings
+                        lines/veils, contributor/author, content_warnings,
+                        chapters (optional — id/title/level_range/summary)
                       — body: overview/hooks
-locations/*.md        — front matter: id, connections
+locations/*.md        — front matter: id, connections, chapter (optional),
+                        side_quest (optional)
                       — body: description
-npcs/*.md             — front matter: id, stat-block ref, voice/mannerism data
+npcs/*.md             — front matter: id, stat-block ref, voice/mannerism data,
+                        chapter (optional), side_quest (optional)
                       — body: personality
-encounters/*.md       — pre-authored or generated set-pieces
+encounters/*.md       — pre-authored or generated set-pieces; front matter
+                        also carries chapter/side_quest (optional) and
+                        min_players/max_players (optional)
 state.json             — mutable session state (flags, party location,
                           discoveries) — kept separate from static content
                           so campaign packs stay clean/diffable in git
@@ -171,6 +176,8 @@ state.json             — mutable session state (flags, party location,
 
 - One-line prompts ("run a level 1-3 Keep on the Borderlands-style adventure") are handled by having the DM **generate** a full campaign package of this same shape before play begins, rather than improvising ungrounded. This is the fix for long-session continuity drift — facts get committed to structured data instead of re-improvised each time they're referenced.
 - Generated (and any repo-shipped example) content must be original, tone/genre-inspired only — never reproducing actual published module text, named NPCs, or stat blocks from copyrighted material. This constraint applies to what ships in the public repo and to default generation behavior; it does not restrict what a self-hoster privately types into their own campaign files.
+- **Chapters** are an optional, lightweight grouping — a `chapters` outline in `campaign.md` (a short list of id/title/level_range/summary entries), with individual location/npc/encounter files opting in via their own `chapter` field. Not a directory structure: a pack using chapters keeps the same flat `locations/`/`npcs/`/`encounters/` layout as one that doesn't. Roughly one level's worth of content per chapter is the sizing convention (about what it takes a party to earn a level) — a heuristic for generation and Host planning, not something Master enforces mechanically. Generation is deliberately scoped small: the initial AI generation produces the outline plus only the first chapter's content; later chapters are generated separately, once the party is actually approaching them, both because a Host doesn't need the whole campaign authored up front and because a single very long generation call was found to degenerate into repetitive output (confirmed live) — smaller, separate calls per chapter avoid that.
+- **Side quests** are the same tagging mechanism used for a different purpose: a short, self-contained 1-2 encounter side adventure (`side_quest` field instead of `chapter`), independent of chapter progression, sized via `min_players`/`max_players` on the encounter — the concrete need being a Host whose table is short a player some session, who wants something the rest can play without disrupting or spoiling the ongoing campaign's real chapters. Neither field is mechanically enforced; a pack using neither (like `campaign-packs/sable-ravine`) is exactly as valid as one that uses both.
 
 ### 6.5 Maturity Tiers
 Extensible, not a fixed enum — same front-matter + body pattern as other content:

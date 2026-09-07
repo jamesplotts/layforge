@@ -60,3 +60,65 @@ func WriteAndValidate(root, slug string, files []GeneratedFile) (string, error) 
 	}
 	return dir, nil
 }
+
+// AddFilesAndValidate writes files into the already-existing pack
+// directory dir (GenerateChapter/GenerateSideQuest's output, once a
+// Host has reviewed it), then re-validates the whole merged pack via
+// LoadPack — the same real-parser bar WriteAndValidate holds a
+// brand-new pack to. On any failure (a disallowed path, campaign.md
+// among files, or the merged pack failing to parse), this call undoes
+// only what it itself did — restoring a file's prior content if it
+// overwrote one, removing it if it didn't — and never touches anything
+// else already in dir. That's a deliberately different rollback from
+// WriteAndValidate's "delete the whole directory," which is only safe
+// there because that directory didn't exist before the call.
+func AddFilesAndValidate(dir string, files []GeneratedFile) error {
+	for _, f := range files {
+		if f.Path == "campaign.md" {
+			return fmt.Errorf("campaignpack: campaign.md already exists in this pack and cannot be added")
+		}
+		if !allowedGeneratedFilePath.MatchString(f.Path) {
+			return fmt.Errorf("campaignpack: disallowed generated file path %q", f.Path)
+		}
+	}
+
+	type writtenFile struct {
+		full            string
+		hadOriginal     bool
+		originalContent []byte
+	}
+	var written []writtenFile
+	rollback := func() {
+		for _, w := range written {
+			if w.hadOriginal {
+				_ = os.WriteFile(w.full, w.originalContent, 0o644)
+			} else {
+				_ = os.Remove(w.full)
+			}
+		}
+	}
+
+	for _, f := range files {
+		full := filepath.Join(dir, f.Path)
+		wf := writtenFile{full: full}
+		if original, err := os.ReadFile(full); err == nil {
+			wf.hadOriginal = true
+			wf.originalContent = original
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			rollback()
+			return fmt.Errorf("campaignpack: creating directory for %s: %w", f.Path, err)
+		}
+		if err := os.WriteFile(full, []byte(f.Content), 0o644); err != nil {
+			rollback()
+			return fmt.Errorf("campaignpack: writing %s: %w", f.Path, err)
+		}
+		written = append(written, wf)
+	}
+
+	if _, err := LoadPack(dir); err != nil {
+		rollback()
+		return fmt.Errorf("campaignpack: pack does not parse after adding new content: %w", err)
+	}
+	return nil
+}

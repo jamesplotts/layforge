@@ -48,10 +48,30 @@ type Pack struct {
 	ContentWarnings   []string
 	// Overview is campaign.md's markdown body.
 	Overview string
+	// Chapters is campaign.md's optional chapter outline (design doc
+	// §6.4) — each entry is roughly one level's worth of main-line
+	// content, a sizing heuristic for generation and Host planning, not
+	// something Master enforces mechanically. Empty for a pack that
+	// doesn't use chapters (e.g. campaign-packs/sable-ravine), which
+	// must keep loading exactly as it did before this field existed.
+	Chapters []Chapter
 
 	Locations  []Location
 	NPCs       []NPC
 	Encounters []Encounter
+}
+
+// Chapter is one entry in campaign.md's optional chapters outline — a
+// lightweight grouping identity, not a directory: individual location/
+// npc/encounter files opt into a chapter via their own Chapter field
+// rather than living under a chapter-specific subdirectory, so a pack
+// using chapters keeps the same flat locations/npcs/encounters layout
+// as one that doesn't.
+type Chapter struct {
+	ID         string
+	Title      string
+	LevelRange string
+	Summary    string
 }
 
 // Location is one locations/*.md file.
@@ -62,6 +82,15 @@ type Location struct {
 	// gates movement against (design doc's own committed content
 	// already authors this graph; nothing here invents it).
 	Connections []string
+	// Chapter is the id of the Pack.Chapters entry this location
+	// belongs to, or empty if it isn't chapter-scoped (e.g. a hub
+	// location usable throughout the campaign). See SideQuest — a
+	// location is expected to set at most one of the two.
+	Chapter string
+	// SideQuest is the id of a short, self-contained side adventure
+	// this location belongs to, independent of chapter progression —
+	// or empty if it's part of the main campaign instead.
+	SideQuest string
 	// Body is the location's markdown description.
 	Body string
 }
@@ -72,6 +101,9 @@ type NPC struct {
 	Location     string
 	StatBlockRef string
 	Voice        string
+	// Chapter/SideQuest mirror Location's own fields of the same name.
+	Chapter   string
+	SideQuest string
 	// Body is the NPC's markdown personality/background description.
 	Body string
 }
@@ -81,6 +113,15 @@ type Encounter struct {
 	ID       string
 	Location string
 	Involves []string
+	// Chapter/SideQuest mirror Location's own fields of the same name.
+	Chapter   string
+	SideQuest string
+	// MinPlayers/MaxPlayers are an optional, informational sizing hint
+	// for a table that isn't at full strength (design doc §6.4) — 0
+	// means unset/no constraint. Never mechanically enforced; the
+	// DM/Host decides what to run.
+	MinPlayers int
+	MaxPlayers int
 	// Body is the encounter's markdown description.
 	Body string
 }

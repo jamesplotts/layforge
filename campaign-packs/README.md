@@ -21,6 +21,14 @@ requirement — it isn't exempt just because a human didn't type it
 directly. See `master/README.md`'s own Status section for how this
 was live-verified.
 
+A pack may also, optionally, organize its content into **chapters**
+(roughly one level's worth of content each) and **side quests** (short,
+self-contained 1-2 encounter diversions independent of chapter
+progression, sized via `min_players`/`max_players` — for a table that's
+short a player some session). Neither is required — `sable-ravine/`
+below uses neither and is exactly as valid a pack as one that uses
+both. See design doc §6.4 for the field shapes.
+
 ## `sable-ravine/`
 
 The first pack committed here: a short, original level 1–3 frontier

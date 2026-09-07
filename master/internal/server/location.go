@@ -33,17 +33,17 @@ func campaignPackTools() []llm.Tool {
 	return []llm.Tool{
 		{
 			Name:        "list_locations",
-			Description: "Get the real, full list of every location in this campaign's bound pack — id, which other locations it connects to, whether the party has discovered it, and whether the party has claimed it as a land holding. Call this before narrating what's reachable from here, or before travel_to, so you're describing the real map, not inventing one.",
+			Description: "Get the real, full list of every location in this campaign's bound pack — id, which other locations it connects to, whether the party has discovered it, whether the party has claimed it as a land holding, and (if set) which chapter or self-contained side_quest it belongs to. Call this before narrating what's reachable from here, or before travel_to, so you're describing the real map, not inventing one.",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
 		{
 			Name:        "list_npcs",
-			Description: "Get the real, full list of every NPC pre-authored in this campaign's bound pack — id, home location, a reference stat block to build them from (e.g. \"SRD Veteran\") if you need to create_npc a mechanical record for them, and their real voice/personality notes. Call this before inventing an NPC on the spot for a location you're narrating — check whether one already exists here first.",
+			Description: "Get the real, full list of every NPC pre-authored in this campaign's bound pack — id, home location, a reference stat block to build them from (e.g. \"SRD Veteran\") if you need to create_npc a mechanical record for them, their real voice/personality notes, and (if set) which chapter or self-contained side_quest they belong to. Call this before inventing an NPC on the spot for a location you're narrating — check whether one already exists here first.",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
 		{
 			Name:        "list_encounters",
-			Description: "Get the real, full list of every pre-authored encounter in this campaign's bound pack — id, the location it's set at, which pre-authored NPCs it involves, and its full real setup/trigger text (checks, conditions, what happens). Call this when the party reaches a location that might have one, so you run what was actually authored rather than improvising a generic fight.",
+			Description: "Get the real, full list of every pre-authored encounter in this campaign's bound pack — id, the location it's set at, which pre-authored NPCs it involves, its full real setup/trigger text (checks, conditions, what happens), and (if set) which chapter it belongs to or which self-contained side_quest it is, plus a min/max player count. Encounters tagged with a side_quest are self-contained diversions independent of the main chapters — check the player-count fields before choosing what to run, especially if the table is short a player tonight. Call this when the party reaches a location that might have one, so you run what was actually authored rather than improvising a generic fight.",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
 		{
@@ -212,6 +212,8 @@ func (s *Server) dmListLocations(ctx context.Context, campaignID string) (string
 			"discovered":  state.Discovered,
 			"claimed":     state.ClaimedByParty,
 			"claim_note":  state.ClaimNote,
+			"chapter":     loc.Chapter,
+			"side_quest":  loc.SideQuest,
 		})
 	}
 
@@ -241,6 +243,8 @@ func (s *Server) dmListNPCs(ctx context.Context, campaignID string) (string, boo
 			"stat_block_ref": npc.StatBlockRef,
 			"voice":          npc.Voice,
 			"description":    npc.Body,
+			"chapter":        npc.Chapter,
+			"side_quest":     npc.SideQuest,
 		})
 	}
 
@@ -269,6 +273,10 @@ func (s *Server) dmListEncounters(ctx context.Context, campaignID string) (strin
 			"location":    enc.Location,
 			"involves":    enc.Involves,
 			"description": enc.Body,
+			"chapter":     enc.Chapter,
+			"side_quest":  enc.SideQuest,
+			"min_players": enc.MinPlayers,
+			"max_players": enc.MaxPlayers,
 		})
 	}
 

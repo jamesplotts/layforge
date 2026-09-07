@@ -1895,6 +1895,36 @@ what unblocks `writePump`'s idle wait — keeping the deferred call only
 as a panic-safety net, guarded by a `sync.Once` so it still never runs
 twice.
 
+**New**: campaign packs can now optionally be organized into
+**chapters** and **side quests** (design doc §6.4) — `internal/campaignpack.Chapter`,
+plus a `Chapter`/`SideQuest` field on `Location`/`NPC`/`Encounter` and
+`MinPlayers`/`MaxPlayers` on `Encounter`. Purely additive: a pack using
+neither, like `campaign-packs/sable-ravine`, loads identically to
+before. Motivated by two things at once — live-testing AI generation
+against a real adventure prompt found a single tool call generating an
+entire ~35KB pack in one continuous decode degenerates into repetitive
+prose in its last (and most important) file; and a real DM's own
+experience that content naturally chunks by level (roughly the amount
+of play it takes a party to earn one) suggested chunked generation was
+also just the right shape for the content itself. `campaignpack.Generate`'s
+initial call is now scoped to the outline plus only the first chapter's
+content, not the whole campaign — `GenerateChapter`/`GenerateSideQuest`
+generate more into an already-saved pack later, each its own smaller,
+targeted call. `AddFilesAndValidate` (`write.go`) merges new files into
+an existing pack directory the same real-`LoadPack` way `WriteAndValidate`
+gates a brand-new one, but rolls back only what it itself wrote — never
+the pack's pre-existing content, including restoring a file to its
+original bytes if the new call happened to overwrite one and then failed
+validation. `POST /api/campaign-packs/generate`/`save` gained an optional
+`mode` field (`"chapter"`/`"side_quest"`) rather than new routes, reusing
+the existing "review before committing" flow. `list_locations`/`list_npcs`/
+`list_encounters` surface the new fields to the DM model, with
+`list_encounters`' own description pointing it at `min_players`/
+`max_players` specifically for a table that's short a player.
+Backend-only so far — the admin-web UI still only has the original
+full-pack generation flow; a "generate next chapter"/"generate a side
+quest" UI is follow-up work, not yet built.
+
 ## Layout
 
 ```

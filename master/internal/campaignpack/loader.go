@@ -39,6 +39,12 @@ func LoadPack(dir string) (Pack, error) {
 		Veils             []string `yaml:"veils"`
 		Author            string   `yaml:"author"`
 		ContentWarnings   []string `yaml:"content_warnings"`
+		Chapters          []struct {
+			ID         string `yaml:"id"`
+			Title      string `yaml:"title"`
+			LevelRange string `yaml:"level_range"`
+			Summary    string `yaml:"summary"`
+		} `yaml:"chapters"`
 	}
 	overview, err := frontmatter.Parse(campaignBytes, &campaignFrontMatter)
 	if err != nil {
@@ -63,6 +69,14 @@ func LoadPack(dir string) (Pack, error) {
 		ContentWarnings:   campaignFrontMatter.ContentWarnings,
 		Overview:          overview,
 	}
+	for _, c := range campaignFrontMatter.Chapters {
+		pack.Chapters = append(pack.Chapters, Chapter{
+			ID:         c.ID,
+			Title:      c.Title,
+			LevelRange: c.LevelRange,
+			Summary:    c.Summary,
+		})
+	}
 
 	locationFiles, err := sortedMarkdownFiles(filepath.Join(dir, "locations"))
 	if err != nil {
@@ -76,6 +90,8 @@ func LoadPack(dir string) (Pack, error) {
 		var frontMatter struct {
 			ID          string   `yaml:"id"`
 			Connections []string `yaml:"connections"`
+			Chapter     string   `yaml:"chapter"`
+			SideQuest   string   `yaml:"side_quest"`
 		}
 		body, err := frontmatter.Parse(data, &frontMatter)
 		if err != nil {
@@ -87,6 +103,8 @@ func LoadPack(dir string) (Pack, error) {
 		pack.Locations = append(pack.Locations, Location{
 			ID:          frontMatter.ID,
 			Connections: frontMatter.Connections,
+			Chapter:     frontMatter.Chapter,
+			SideQuest:   frontMatter.SideQuest,
 			Body:        body,
 		})
 	}
@@ -105,6 +123,8 @@ func LoadPack(dir string) (Pack, error) {
 			Location     string `yaml:"location"`
 			StatBlockRef string `yaml:"stat_block_ref"`
 			Voice        string `yaml:"voice"`
+			Chapter      string `yaml:"chapter"`
+			SideQuest    string `yaml:"side_quest"`
 		}
 		body, err := frontmatter.Parse(data, &frontMatter)
 		if err != nil {
@@ -118,6 +138,8 @@ func LoadPack(dir string) (Pack, error) {
 			Location:     frontMatter.Location,
 			StatBlockRef: frontMatter.StatBlockRef,
 			Voice:        frontMatter.Voice,
+			Chapter:      frontMatter.Chapter,
+			SideQuest:    frontMatter.SideQuest,
 			Body:         body,
 		})
 	}
@@ -132,9 +154,13 @@ func LoadPack(dir string) (Pack, error) {
 			return Pack{}, fmt.Errorf("campaignpack: reading %s: %w", path, err)
 		}
 		var frontMatter struct {
-			ID       string   `yaml:"id"`
-			Location string   `yaml:"location"`
-			Involves []string `yaml:"involves"`
+			ID         string   `yaml:"id"`
+			Location   string   `yaml:"location"`
+			Involves   []string `yaml:"involves"`
+			Chapter    string   `yaml:"chapter"`
+			SideQuest  string   `yaml:"side_quest"`
+			MinPlayers int      `yaml:"min_players"`
+			MaxPlayers int      `yaml:"max_players"`
 		}
 		body, err := frontmatter.Parse(data, &frontMatter)
 		if err != nil {
@@ -144,10 +170,14 @@ func LoadPack(dir string) (Pack, error) {
 			return Pack{}, fmt.Errorf("campaignpack: %s front matter has no id", path)
 		}
 		pack.Encounters = append(pack.Encounters, Encounter{
-			ID:       frontMatter.ID,
-			Location: frontMatter.Location,
-			Involves: frontMatter.Involves,
-			Body:     body,
+			ID:         frontMatter.ID,
+			Location:   frontMatter.Location,
+			Involves:   frontMatter.Involves,
+			Chapter:    frontMatter.Chapter,
+			SideQuest:  frontMatter.SideQuest,
+			MinPlayers: frontMatter.MinPlayers,
+			MaxPlayers: frontMatter.MaxPlayers,
+			Body:       body,
 		})
 	}
 

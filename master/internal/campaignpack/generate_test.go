@@ -217,6 +217,33 @@ func TestGenerate_StringEncodedFilesWithInvalidEscape_StillParses(t *testing.T) 
 	}
 }
 
+// TestGenerate_SystemPromptScopesToOutlinePlusFirstChapterOnly is the
+// regression test for the actual repetition fix (live-testing "The
+// Sacrifice" found a single-shot whole-pack generation degenerates into
+// repetitive prose in its last file) — Generate's system prompt must
+// instruct the model to produce the chapters outline but fully author
+// only the first chapter's content, not the whole campaign in one call.
+func TestGenerate_SystemPromptScopesToOutlinePlusFirstChapterOnly(t *testing.T) {
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: validCampaignMD()},
+	})}
+
+	_, err := campaignpack.Generate(context.Background(), provider, "test-model", campaignpack.GenerateRequest{
+		Description: "A haunted lighthouse.", MinLevel: 1, MaxLevel: 3,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	prompt := provider.lastReq.SystemPrompt
+	if !strings.Contains(prompt, "chapters") {
+		t.Errorf("SystemPrompt does not mention chapters: %s", prompt)
+	}
+	if !strings.Contains(prompt, "first chapter") {
+		t.Errorf("SystemPrompt does not scope generation to the first chapter only: %s", prompt)
+	}
+}
+
 func TestGenerate_ProviderError_Propagates(t *testing.T) {
 	provider := &fakeLLMProvider{err: errors.New("boom")}
 
@@ -269,5 +296,231 @@ func TestGenerate_WellFormedResult_ActuallyLoadsViaTheRealParser(t *testing.T) {
 	}
 	if len(pack.Locations) != 2 || len(pack.NPCs) != 1 || len(pack.Encounters) != 1 {
 		t.Errorf("pack = %+v, want 2 locations, 1 npc, 1 encounter", pack)
+	}
+}
+
+// --- GenerateChapter ---
+
+// existingPackWithChapters builds a real, valid on-disk pack (two
+// chapters, one already-authored location/npc in chapter-1) for
+// GenerateChapter/GenerateSideQuest tests that need genuine existing-pack
+// context to read via LoadPack, not a hand-built Pack value.
+func existingPackWithChapters(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "campaign.md"), `---
+id: the-sunken-vault
+title: The Sunken Vault
+level_range: "1-6"
+chapters:
+  - id: chapter-1
+    title: "The Flooded Gate"
+    level_range: "1-2"
+    summary: "The party finds the vault's entrance underwater."
+  - id: chapter-2
+    title: "The Drowned Halls"
+    level_range: "2-4"
+    summary: "The party explores the vault's flooded interior."
+---
+An ancient vault, sealed beneath a lake, is finally surfacing.
+`)
+	if err := os.Mkdir(filepath.Join(dir, "locations"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "locations", "lake-shore.md"), "---\nid: lake-shore\nchapter: chapter-1\n---\nThe muddy shore of the lake.\n")
+	if err := os.Mkdir(filepath.Join(dir, "npcs"), 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "npcs", "diver-nessa.md"), "---\nid: diver-nessa\nlocation: lake-shore\nchapter: chapter-1\n---\nA local diver who knows the lake.\n")
+	return dir
+}
+
+func TestGenerateChapter_SendsExistingPremiseAndChapterContext(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "locations/flooded-tunnel.md", Content: "---\nid: flooded-tunnel\nchapter: chapter-2\n---\nA tunnel, half full of black water.\n"},
+	})}
+
+	_, err := campaignpack.GenerateChapter(context.Background(), provider, "test-model", campaignpack.GenerateChapterRequest{
+		ExistingPackDir: dir,
+		ChapterID:       "chapter-2",
+	})
+	if err != nil {
+		t.Fatalf("GenerateChapter() error = %v", err)
+	}
+
+	prompt := provider.lastReq.UserPrompt
+	for _, want := range []string{"The Sunken Vault", "The Drowned Halls", "chapter-2", "lake-shore", "diver-nessa"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("UserPrompt = %q, want it to contain %q", prompt, want)
+		}
+	}
+}
+
+func TestGenerateChapter_UnknownChapterID_ReturnsError(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "locations/somewhere.md", Content: "---\nid: somewhere\n---\nSomewhere.\n"},
+	})}
+
+	_, err := campaignpack.GenerateChapter(context.Background(), provider, "test-model", campaignpack.GenerateChapterRequest{
+		ExistingPackDir: dir,
+		ChapterID:       "chapter-does-not-exist",
+	})
+	if err == nil {
+		t.Fatal("GenerateChapter() error = nil, want an error for an unknown chapter id")
+	}
+}
+
+func TestGenerateChapter_NonexistentPackDir_ReturnsError(t *testing.T) {
+	provider := &fakeLLMProvider{response: writePackToolCall(t, nil)}
+
+	_, err := campaignpack.GenerateChapter(context.Background(), provider, "test-model", campaignpack.GenerateChapterRequest{
+		ExistingPackDir: "/nonexistent/pack/dir",
+		ChapterID:       "chapter-1",
+	})
+	if err == nil {
+		t.Fatal("GenerateChapter() error = nil, want an error for a pack dir that doesn't load")
+	}
+}
+
+func TestGenerateChapter_ReturnsFilesFromToolCall(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	want := []campaignpack.GeneratedFile{
+		{Path: "locations/flooded-tunnel.md", Content: "---\nid: flooded-tunnel\nchapter: chapter-2\n---\nA tunnel.\n"},
+		{Path: "encounters/the-guardian.md", Content: "---\nid: the-guardian\nchapter: chapter-2\n---\nSomething guards the tunnel.\n"},
+	}
+	provider := &fakeLLMProvider{response: writePackToolCall(t, want)}
+
+	got, err := campaignpack.GenerateChapter(context.Background(), provider, "test-model", campaignpack.GenerateChapterRequest{
+		ExistingPackDir: dir,
+		ChapterID:       "chapter-2",
+	})
+	if err != nil {
+		t.Fatalf("GenerateChapter() error = %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len(files) = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("files[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestGenerateChapter_ResponseIncludesCampaignMD_ReturnsError(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: validCampaignMD()},
+	})}
+
+	_, err := campaignpack.GenerateChapter(context.Background(), provider, "test-model", campaignpack.GenerateChapterRequest{
+		ExistingPackDir: dir,
+		ChapterID:       "chapter-2",
+	})
+	if err == nil {
+		t.Fatal("GenerateChapter() error = nil, want an error when the model re-includes campaign.md")
+	}
+}
+
+func TestGenerateChapter_NoFiles_ReturnsError(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCall(t, nil)}
+
+	_, err := campaignpack.GenerateChapter(context.Background(), provider, "test-model", campaignpack.GenerateChapterRequest{
+		ExistingPackDir: dir,
+		ChapterID:       "chapter-2",
+	})
+	if err == nil {
+		t.Fatal("GenerateChapter() error = nil, want an error (empty files)")
+	}
+}
+
+// --- GenerateSideQuest ---
+
+func TestGenerateSideQuest_SendsPremiseDescriptionAndPlayerCount(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "encounters/lost-cart.md", Content: "---\nid: lost-cart\nside_quest: sq-lost-cart\nmin_players: 1\nmax_players: 3\n---\nA merchant's cart is stuck in the mud.\n"},
+	})}
+
+	_, err := campaignpack.GenerateSideQuest(context.Background(), provider, "test-model", campaignpack.GenerateSideQuestRequest{
+		ExistingPackDir: dir,
+		Description:     "A quick roadside distraction for a short-handed party.",
+		MaxPlayers:      3,
+	})
+	if err != nil {
+		t.Fatalf("GenerateSideQuest() error = %v", err)
+	}
+
+	prompt := provider.lastReq.UserPrompt
+	for _, want := range []string{"The Sunken Vault", "A quick roadside distraction for a short-handed party.", "3"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("UserPrompt = %q, want it to contain %q", prompt, want)
+		}
+	}
+}
+
+func TestGenerateSideQuest_ReturnsFilesFromToolCall(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	want := []campaignpack.GeneratedFile{
+		{Path: "encounters/lost-cart.md", Content: "---\nid: lost-cart\nside_quest: sq-lost-cart\nmin_players: 1\nmax_players: 3\n---\nA merchant's cart is stuck in the mud.\n"},
+	}
+	provider := &fakeLLMProvider{response: writePackToolCall(t, want)}
+
+	got, err := campaignpack.GenerateSideQuest(context.Background(), provider, "test-model", campaignpack.GenerateSideQuestRequest{
+		ExistingPackDir: dir,
+		Description:     "A quick roadside distraction.",
+		MaxPlayers:      3,
+	})
+	if err != nil {
+		t.Fatalf("GenerateSideQuest() error = %v", err)
+	}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("files = %+v, want %+v", got, want)
+	}
+}
+
+func TestGenerateSideQuest_ResponseIncludesCampaignMD_ReturnsError(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: validCampaignMD()},
+	})}
+
+	_, err := campaignpack.GenerateSideQuest(context.Background(), provider, "test-model", campaignpack.GenerateSideQuestRequest{
+		ExistingPackDir: dir,
+		Description:     "A quick roadside distraction.",
+		MaxPlayers:      3,
+	})
+	if err == nil {
+		t.Fatal("GenerateSideQuest() error = nil, want an error when the model re-includes campaign.md")
+	}
+}
+
+func TestGenerateSideQuest_NoFiles_ReturnsError(t *testing.T) {
+	dir := existingPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCall(t, nil)}
+
+	_, err := campaignpack.GenerateSideQuest(context.Background(), provider, "test-model", campaignpack.GenerateSideQuestRequest{
+		ExistingPackDir: dir,
+		Description:     "A quick roadside distraction.",
+		MaxPlayers:      3,
+	})
+	if err == nil {
+		t.Fatal("GenerateSideQuest() error = nil, want an error (empty files)")
+	}
+}
+
+func TestGenerateSideQuest_NonexistentPackDir_ReturnsError(t *testing.T) {
+	provider := &fakeLLMProvider{response: writePackToolCall(t, nil)}
+
+	_, err := campaignpack.GenerateSideQuest(context.Background(), provider, "test-model", campaignpack.GenerateSideQuestRequest{
+		ExistingPackDir: "/nonexistent/pack/dir",
+		Description:     "A quick roadside distraction.",
+		MaxPlayers:      3,
+	})
+	if err == nil {
+		t.Fatal("GenerateSideQuest() error = nil, want an error for a pack dir that doesn't load")
 	}
 }

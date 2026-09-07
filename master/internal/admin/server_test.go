@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/admin"
+	"github.com/jamesplotts/layforge/master/internal/campaignpack"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/terms"
@@ -1034,6 +1035,188 @@ func TestServer_SaveCampaignPack_CrossOriginRequest_Rejected(t *testing.T) {
 		map[string]any{"slug": "x", "files": []map[string]any{{"path": "campaign.md", "content": "x"}}}, "http://evil.example")
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// existingSavedPackWithChapters builds a real, valid on-disk pack (via
+// campaignpack.WriteAndValidate, not a hand-rolled fixture) with a
+// two-chapter outline and one already-authored chapter-1 location —
+// the base fixture for Mode "chapter"/"side_quest" round-trip tests,
+// which operate on an already-saved pack_dir rather than creating one.
+func existingSavedPackWithChapters(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	dir, err := campaignpack.WriteAndValidate(root, "the-sunken-vault", []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: `---
+id: the-sunken-vault
+title: The Sunken Vault
+chapters:
+  - id: chapter-1
+    title: "The Flooded Gate"
+    level_range: "1-2"
+    summary: "The party finds the vault's entrance underwater."
+  - id: chapter-2
+    title: "The Drowned Halls"
+    level_range: "2-4"
+    summary: "The party explores the vault's flooded interior."
+---
+An ancient vault, sealed beneath a lake, is finally surfacing.
+`},
+		{Path: "locations/lake-shore.md", Content: "---\nid: lake-shore\nchapter: chapter-1\n---\nThe muddy shore.\n"},
+	})
+	if err != nil {
+		t.Fatalf("WriteAndValidate() error = %v", err)
+	}
+	return dir
+}
+
+func TestServer_GenerateCampaignPack_ChapterMode_ReturnsFilesTaggedWithChapter(t *testing.T) {
+	packDir := existingSavedPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCallResponse(t, map[string]string{
+		"locations/flooded-tunnel.md": "---\nid: flooded-tunnel\nchapter: chapter-2\n---\nA flooded tunnel.\n",
+		"encounters/the-guardian.md":  "---\nid: the-guardian\nchapter: chapter-2\n---\nSomething guards the tunnel.\n",
+	})}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate", map[string]any{
+		"mode": "chapter", "pack_dir": packDir, "chapter_id": "chapter-2",
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Files []struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		} `json:"files"`
+		ValidationError string `json:"validation_error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.ValidationError != "" {
+		t.Errorf("ValidationError = %q, want empty (merges cleanly with the existing pack)", got.ValidationError)
+	}
+	if len(got.Files) != 2 {
+		t.Errorf("len(Files) = %d, want 2", len(got.Files))
+	}
+}
+
+func TestServer_GenerateCampaignPack_ChapterMode_MissingPackDir_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServerWithLLM(t, &fakeLLMProvider{})
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate", map[string]any{
+		"mode": "chapter", "chapter_id": "chapter-2",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (pack_dir is required)", resp.StatusCode)
+	}
+}
+
+func TestServer_GenerateCampaignPack_SideQuestMode_ReturnsFiles(t *testing.T) {
+	packDir := existingSavedPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCallResponse(t, map[string]string{
+		"encounters/lost-cart.md": "---\nid: lost-cart\nside_quest: sq-lost-cart\nmin_players: 1\nmax_players: 3\n---\nA cart stuck in the mud.\n",
+	})}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate", map[string]any{
+		"mode": "side_quest", "pack_dir": packDir, "description": "A quick roadside distraction.", "max_players": 3,
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Files           []struct{ Path, Content string }
+		ValidationError string `json:"validation_error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.ValidationError != "" {
+		t.Errorf("ValidationError = %q, want empty", got.ValidationError)
+	}
+}
+
+func TestServer_GenerateCampaignPack_InvalidMode_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServerWithLLM(t, &fakeLLMProvider{})
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate", map[string]any{
+		"mode": "not-a-real-mode",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestServer_SaveCampaignPack_ChapterMode_MergesIntoExistingPackDir is
+// the real end-to-end round trip the plan calls for: generate a chapter
+// via a fake LLM provider, save it, then confirm via LoadPack (loaded
+// straight from disk, not through another endpoint) that the merged
+// pack genuinely has both the pre-existing and the new content.
+func TestServer_SaveCampaignPack_ChapterMode_MergesIntoExistingPackDir(t *testing.T) {
+	packDir := existingSavedPackWithChapters(t)
+	provider := &fakeLLMProvider{response: writePackToolCallResponse(t, map[string]string{
+		"locations/flooded-tunnel.md": "---\nid: flooded-tunnel\nchapter: chapter-2\n---\nA flooded tunnel.\n",
+	})}
+	_, httpSrv := newTestServerWithLLM(t, provider)
+
+	genResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/generate", map[string]any{
+		"mode": "chapter", "pack_dir": packDir, "chapter_id": "chapter-2",
+	}, "")
+	var generated struct {
+		Files []struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(genResp.Body).Decode(&generated); err != nil {
+		t.Fatalf("decoding generate response: %v", err)
+	}
+
+	saveResp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/save", map[string]any{
+		"mode": "chapter", "pack_dir": packDir, "files": generated.Files,
+	}, "")
+	if saveResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(saveResp.Body)
+		t.Fatalf("save status = %d, body = %s", saveResp.StatusCode, body)
+	}
+
+	pack, err := campaignpack.LoadPack(packDir)
+	if err != nil {
+		t.Fatalf("LoadPack() error = %v", err)
+	}
+	if pack.ID != "the-sunken-vault" {
+		t.Errorf("pack.ID = %q, want the-sunken-vault (pre-existing content must survive)", pack.ID)
+	}
+	if len(pack.Locations) != 2 {
+		t.Errorf("len(Locations) = %d, want 2 (1 pre-existing + 1 new)", len(pack.Locations))
+	}
+}
+
+func TestServer_SaveCampaignPack_ChapterMode_MissingPackDir_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServerWithLLM(t, &fakeLLMProvider{})
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/save", map[string]any{
+		"mode":  "chapter",
+		"files": []map[string]any{{"path": "locations/x.md", "content": "---\nid: x\n---\nx\n"}},
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (pack_dir is required)", resp.StatusCode)
+	}
+}
+
+func TestServer_SaveCampaignPack_InvalidMode_ReturnsBadRequest(t *testing.T) {
+	_, httpSrv := newTestServerWithLLM(t, &fakeLLMProvider{})
+
+	resp := doJSON(t, http.MethodPost, httpSrv.URL+"/api/campaign-packs/save", map[string]any{
+		"mode":  "not-a-real-mode",
+		"files": []map[string]any{{"path": "campaign.md", "content": "x"}},
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
 

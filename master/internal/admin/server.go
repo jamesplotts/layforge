@@ -281,12 +281,22 @@ type generatedFileDTO struct {
 
 // generateCampaignPackRequestDTO is POST /api/campaign-packs/generate's
 // request body. Slug is optional — a description-derived one is used
-// when omitted (see handleGenerateCampaignPack).
+// when omitted (see handleGenerateCampaignPack). Mode selects which of
+// campaignpack's three Generate* functions gets called: "" (default)
+// generates a brand-new pack from Description/MinLevel/MaxLevel/Slug;
+// "chapter" generates one more chapter into the already-saved pack at
+// PackDir (ChapterID required); "side_quest" generates a short,
+// self-contained side adventure into the pack at PackDir (Description
+// and MaxPlayers apply, MinLevel/MaxLevel/Slug are ignored).
 type generateCampaignPackRequestDTO struct {
 	Description string `json:"description"`
 	MinLevel    int    `json:"min_level"`
 	MaxLevel    int    `json:"max_level"`
 	Slug        string `json:"slug"`
+	Mode        string `json:"mode"`
+	PackDir     string `json:"pack_dir"`
+	ChapterID   string `json:"chapter_id"`
+	MaxPlayers  int    `json:"max_players"`
 }
 
 type generateCampaignPackResponseDTO struct {
@@ -304,10 +314,15 @@ type generateCampaignPackResponseDTO struct {
 
 // saveCampaignPackRequestDTO is POST /api/campaign-packs/save's request
 // body — the Host's (possibly hand-edited, after reviewing a generate
-// response) final file set.
+// response) final file set. Mode mirrors generateCampaignPackRequestDTO's
+// own field: "" (default) writes Files as a brand-new pack under Slug;
+// "chapter"/"side_quest" merges Files into the already-saved pack at
+// PackDir instead (Slug is ignored).
 type saveCampaignPackRequestDTO struct {
-	Slug  string             `json:"slug"`
-	Files []generatedFileDTO `json:"files"`
+	Slug    string             `json:"slug"`
+	Files   []generatedFileDTO `json:"files"`
+	Mode    string             `json:"mode"`
+	PackDir string             `json:"pack_dir"`
 }
 
 type saveCampaignPackResponseDTO struct {
@@ -317,12 +332,15 @@ type saveCampaignPackResponseDTO struct {
 	PackDir string `json:"pack_dir"`
 }
 
-// handleGenerateCampaignPack calls the configured LLM once
-// (campaignpack.Generate) and validates the result in a throwaway temp
-// directory before ever returning it — catching a malformed generation
-// immediately rather than letting the Host review something that would
-// fail to bind anyway. Nothing is written to the real campaign-packs
-// root here; see handleSaveCampaignPack for that.
+// handleGenerateCampaignPack calls the configured LLM once and
+// validates the result in a throwaway temp directory before ever
+// returning it — catching a malformed generation immediately rather
+// than letting the Host review something that would fail to bind or
+// merge anyway. Nothing is written to the real campaign pack here; see
+// handleSaveCampaignPack for that. dto.Mode selects which of the three
+// underlying flows runs: handleGenerateFullPack ("") creates a new
+// pack; handleGenerateSupplementalPack ("chapter"/"side_quest")
+// generates more content into an already-saved one.
 func (s *Server) handleGenerateCampaignPack(w http.ResponseWriter, r *http.Request) {
 	if s.llmProvider == nil {
 		s.writeErrorMsg(w, http.StatusBadRequest, "no LLM provider is configured on this Master — set one up on the System tab first")
@@ -333,6 +351,18 @@ func (s *Server) handleGenerateCampaignPack(w http.ResponseWriter, r *http.Reque
 		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
+
+	switch dto.Mode {
+	case "":
+		s.handleGenerateFullPack(w, r, dto)
+	case "chapter", "side_quest":
+		s.handleGenerateSupplementalPack(w, r, dto)
+	default:
+		s.writeErrorMsg(w, http.StatusBadRequest, `invalid mode: want "", "chapter", or "side_quest"`)
+	}
+}
+
+func (s *Server) handleGenerateFullPack(w http.ResponseWriter, r *http.Request, dto generateCampaignPackRequestDTO) {
 	if strings.TrimSpace(dto.Description) == "" {
 		s.writeErrorMsg(w, http.StatusBadRequest, "description is required")
 		return
@@ -376,49 +406,131 @@ func (s *Server) handleGenerateCampaignPack(w http.ResponseWriter, r *http.Reque
 	}
 	_ = os.RemoveAll(tempDir)
 
-	respFiles := make([]generatedFileDTO, len(files))
-	for i, f := range files {
-		respFiles[i] = generatedFileDTO{Path: f.Path, Content: f.Content}
+	s.writeJSON(w, http.StatusOK, generateCampaignPackResponseDTO{Slug: slug, Files: toFileDTOs(files), ValidationError: validationError})
+}
+
+// handleGenerateSupplementalPack handles Mode == "chapter" or
+// "side_quest": generating more content into an already-saved pack
+// (campaignpack.GenerateChapter/GenerateSideQuest), pre-validated
+// against a scratch copy of the existing pack directory so a Host finds
+// out immediately whether the result merges cleanly — the same
+// "review before committing" behavior handleGenerateFullPack gives a
+// brand-new pack, without ever touching the real pack directory until
+// handleSaveCampaignPack is called.
+func (s *Server) handleGenerateSupplementalPack(w http.ResponseWriter, r *http.Request, dto generateCampaignPackRequestDTO) {
+	if dto.PackDir == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "pack_dir is required")
+		return
 	}
-	s.writeJSON(w, http.StatusOK, generateCampaignPackResponseDTO{Slug: slug, Files: respFiles, ValidationError: validationError})
+
+	var files []campaignpack.GeneratedFile
+	var err error
+	switch dto.Mode {
+	case "chapter":
+		if dto.ChapterID == "" {
+			s.writeErrorMsg(w, http.StatusBadRequest, "chapter_id is required")
+			return
+		}
+		files, err = campaignpack.GenerateChapter(r.Context(), s.llmProvider, s.llmModel, campaignpack.GenerateChapterRequest{
+			ExistingPackDir: dto.PackDir,
+			ChapterID:       dto.ChapterID,
+		})
+	case "side_quest":
+		if strings.TrimSpace(dto.Description) == "" {
+			s.writeErrorMsg(w, http.StatusBadRequest, "description is required")
+			return
+		}
+		files, err = campaignpack.GenerateSideQuest(r.Context(), s.llmProvider, s.llmModel, campaignpack.GenerateSideQuestRequest{
+			ExistingPackDir: dto.PackDir,
+			Description:     dto.Description,
+			MaxPlayers:      dto.MaxPlayers,
+		})
+	}
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadGateway, "generation failed: "+err.Error())
+		return
+	}
+
+	var validationError string
+	tempDir, err := os.MkdirTemp("", "layforge-campaign-pack-preview-*")
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	if copyErr := os.CopyFS(tempDir, os.DirFS(dto.PackDir)); copyErr != nil {
+		_ = os.RemoveAll(tempDir)
+		s.writeError(w, copyErr)
+		return
+	}
+	if addErr := campaignpack.AddFilesAndValidate(tempDir, files); addErr != nil {
+		validationError = addErr.Error()
+	}
+	_ = os.RemoveAll(tempDir)
+
+	s.writeJSON(w, http.StatusOK, generateCampaignPackResponseDTO{Files: toFileDTOs(files), ValidationError: validationError})
+}
+
+func toFileDTOs(files []campaignpack.GeneratedFile) []generatedFileDTO {
+	out := make([]generatedFileDTO, len(files))
+	for i, f := range files {
+		out[i] = generatedFileDTO{Path: f.Path, Content: f.Content}
+	}
+	return out
 }
 
 // handleSaveCampaignPack persists the Host's (possibly hand-edited)
-// reviewed file set for real, under s.campaignPacksDir — see
-// campaignpack.WriteAndValidate for the sandboxing and real-parser
-// validation this depends on. The returned pack_dir is meant to be
-// handed straight to the existing PUT /api/campaigns/{id}/pack by the
-// admin-web UI, not bound here.
+// reviewed file set for real. dto.Mode == "" (default) writes Files as
+// a brand-new pack under s.campaignPacksDir/Slug via
+// campaignpack.WriteAndValidate; "chapter"/"side_quest" instead merges
+// Files into the already-saved pack at dto.PackDir via
+// campaignpack.AddFilesAndValidate — see each for the sandboxing and
+// real-parser validation this depends on. The returned pack_dir is
+// meant to be handed straight to the existing PUT
+// /api/campaigns/{id}/pack by the admin-web UI, not bound here.
 func (s *Server) handleSaveCampaignPack(w http.ResponseWriter, r *http.Request) {
-	if s.campaignPacksDir == "" {
-		s.writeErrorMsg(w, http.StatusBadRequest, "no campaign-packs directory is configured on this Master")
-		return
-	}
 	var dto saveCampaignPackRequestDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
 		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
-		return
-	}
-	if dto.Slug == "" {
-		s.writeErrorMsg(w, http.StatusBadRequest, "slug is required")
 		return
 	}
 	if len(dto.Files) == 0 {
 		s.writeErrorMsg(w, http.StatusBadRequest, "files is required and must not be empty")
 		return
 	}
-
 	files := make([]campaignpack.GeneratedFile, len(dto.Files))
 	for i, f := range dto.Files {
 		files[i] = campaignpack.GeneratedFile{Path: f.Path, Content: f.Content}
 	}
 
-	dir, err := campaignpack.WriteAndValidate(s.campaignPacksDir, dto.Slug, files)
-	if err != nil {
-		s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
-		return
+	switch dto.Mode {
+	case "":
+		if s.campaignPacksDir == "" {
+			s.writeErrorMsg(w, http.StatusBadRequest, "no campaign-packs directory is configured on this Master")
+			return
+		}
+		if dto.Slug == "" {
+			s.writeErrorMsg(w, http.StatusBadRequest, "slug is required")
+			return
+		}
+		dir, err := campaignpack.WriteAndValidate(s.campaignPacksDir, dto.Slug, files)
+		if err != nil {
+			s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusOK, saveCampaignPackResponseDTO{PackDir: dir})
+	case "chapter", "side_quest":
+		if dto.PackDir == "" {
+			s.writeErrorMsg(w, http.StatusBadRequest, "pack_dir is required")
+			return
+		}
+		if err := campaignpack.AddFilesAndValidate(dto.PackDir, files); err != nil {
+			s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusOK, saveCampaignPackResponseDTO{PackDir: dto.PackDir})
+	default:
+		s.writeErrorMsg(w, http.StatusBadRequest, `invalid mode: want "", "chapter", or "side_quest"`)
 	}
-	s.writeJSON(w, http.StatusOK, saveCampaignPackResponseDTO{PackDir: dir})
 }
 
 // pregenDTO is the Pregens tab's wire shape (design doc §9.4) — ID is
