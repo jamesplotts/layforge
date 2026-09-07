@@ -210,6 +210,10 @@ Player input (typed or voice-transcribed) describing character action/dialogue i
 - **Two separate beats, not one LLM call:**
   1. Fast pass: render the player's own stated action/dialogue in-character prose (can use a cheaper/faster model). Streamed to the room quickly so the player isn't staring at a blank screen.
   2. Slower pass: DM/NPC reaction, using full campaign context — this is where the expensive/high-quality model call belongs.
+- **The slower pass is itself two further beats, not one LLM call**, for the same reason as the split above — live-testing found a single conversation offering every tool at once (mechanical, world-state, and read-only lore, all alongside the narration instructions) let the model skip straight to narration without ever checking real pack content:
+  1. Mechanics pass: resolve whatever the action requires — checks, spells, combat, inventory, currency, travel, stashing (§8's mechanical/state-changing tool categories) — using the full mechanical toolset. Its own final text reply is never shown to anyone; only a digest of what it did carries forward.
+  2. Narration pass: write the actual prose, given what the mechanics pass resolved. Offered only the read-only lore lookups, `narrate_privately`, and `generate_scene_image` — nothing else competing for its attention is what makes it actually reach for those tools when relevant, not a stronger instruction. This is the pass players' narration ends up coming from.
+  This costs a minimum of two model round-trips per turn instead of one, even when nothing mechanical needs resolving — a deliberate trade for a structural fix over a prompting fix.
 - Character voice/mannerism data (speech patterns, tone) lives as data on or adjacent to the character sheet — the system engine's or a joined "narrative persona" record — so the transform renders consistently rather than generically.
 - Raw player input is stored alongside the rendered bubble (for edit/regenerate, campaign log, debugging) even though only the rendered version displays.
 - Player can regenerate or edit their own bubble after the fact rather than gating every message behind a pre-broadcast confirmation (protects flow/pacing).
@@ -223,10 +227,10 @@ Player input (typed or voice-transcribed) describing character action/dialogue i
 Generalization of "DM calls out to OpenCombatEngine" into the standard function-calling / MCP-style tool pattern, so the system engine is one tool provider among several rather than special-cased plumbing.
 
 Example tool categories:
-- System engine tools (`resolve_check`, `apply_effect`, `get_character_status`, etc.)
+- System engine tools (`resolve_check`, `apply_effect`, `get_character_status`, etc.) — mechanics pass (§7).
 - Rules/SRD lookup
-- Procedural generation (NPC, treasure, encounter)
-- Campaign-notes retrieval (RAG over the static campaign-pack content)
+- Procedural generation (NPC, treasure, encounter) — mechanics pass; `create_npc` requires a fresh `get_character_schema` call in the same pass first, rather than trusting the model to already know the engine's real field shape (found necessary via live testing).
+- Campaign-notes retrieval (RAG over the static campaign-pack content) — realized today as read-only lookups (`list_locations`/`list_npcs`/`list_encounters`/`list_vehicles`) over the bound campaign pack's static content, not an actual RAG index; narration pass only, and — unlike the state-changing tools in the same categories (`travel_to`, `stash_item`, vehicle acquisition) — these never call the system engine, so they work even when one isn't configured.
 
 Every tool call/result is logged with: caller (DM vs. specific player action), args, any model-provided reasoning/justification, success/failure + reason code. This is both a debugging aid and the data source for features like spotlight-balance tracking (see §9.6) and session history.
 

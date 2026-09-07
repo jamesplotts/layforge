@@ -15,24 +15,39 @@ import (
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 )
 
-// vehicleTools returns the DM tools for tracking real mounts/carts/
-// wagons/ships — off-site possessions' other named half, alongside the
-// stash tools in location.go (design doc §6.4's "off-site possessions
-// (mounts, stashes)"). A vehicle here is never a character/creature
-// record, even for an animal mount: this package only tracks who has it
-// and where it is, not mechanical stats. A mount that needs real combat
-// stats (AC, HP, speed) is still created as an ordinary character via
-// create_npc/FromJson, same as any other creature — these tools exist
-// for the thing the character/creature schema has no concept of at all.
-// Gated in dm_slow_pass.go the same way campaignPackTools() is (needs a
-// bound campaign pack for location_id to mean anything).
-func vehicleTools() []llm.Tool {
+// vehicleLoreTools returns the DM's read-only tool for tracking real
+// mounts/carts/wagons/ships — offered only to the narration pass
+// (dm_slow_pass.go), never the mechanics pass: list_vehicles is a pure
+// store read, no state change. See vehicleStateTools below for the
+// three that actually change vehicle state. A vehicle here is never a
+// character/creature record, even for an animal mount: this package
+// only tracks who has it and where it is, not mechanical stats — see
+// vehicleStateTools' own doc comment for the full reasoning.
+func vehicleLoreTools() []llm.Tool {
 	return []llm.Tool{
 		{
 			Name:        "list_vehicles",
 			Description: "Get the real, full list of every vehicle (mount, cart, wagon, ship, etc.) that exists for this campaign — id, name, type, and whether it's currently traveling with the party or stabled/docked at a specific location. Call this before narrating what the party has access to, rather than inventing one.",
 			Parameters:  json.RawMessage(`{"type": "object", "properties": {}}`),
 		},
+	}
+}
+
+// vehicleStateTools returns the DM tools that change state for real
+// mounts/carts/wagons/ships — off-site possessions' other named half,
+// alongside the stash tools in location.go (design doc §6.4's
+// "off-site possessions (mounts, stashes)"). Offered only to the
+// mechanics pass (dm_slow_pass.go). A vehicle here is never a
+// character/creature record, even for an animal mount: this package
+// only tracks who has it and where it is, not mechanical stats. A
+// mount that needs real combat stats (AC, HP, speed) is still created
+// as an ordinary character via create_npc/FromJson, same as any other
+// creature — these tools exist for the thing the character/creature
+// schema has no concept of at all. Gated in dm_slow_pass.go on
+// s.vehicles alone, independent of the system-engine gate dmTools()
+// uses — these are pure store operations, no engine RPC involved.
+func vehicleStateTools() []llm.Tool {
+	return []llm.Tool{
 		{
 			Name:        "acquire_vehicle",
 			Description: "Create a real new vehicle (bought, built, found, given) — starts traveling with the party. Requires the party to actually be somewhere (travel_to first).",

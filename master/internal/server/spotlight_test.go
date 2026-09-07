@@ -92,7 +92,7 @@ func TestServe_NarrativePlayerInput_SlowPass_SpotlightBalance_NeverSpokenCharact
 		runTurnAndWait(ctx, t, conn, "campaign-spotlight-never", "player-a", "char-a", "I press onward.")
 	}
 
-	content := userMessageContent(t, fakeLLM.callAt(t, 5)) // 3 turns * 2 calls (fast, slow) - 1
+	content := userMessageContent(t, fakeLLM.callAt(t, 8)) // 3 turns * 3 calls (fast, mechanics, narration) - 1, the last turn's narration pass
 	if !strings.Contains(content, "Spotlight balance") {
 		t.Fatalf("slow pass user content = %q, want it to include a Spotlight balance section", content)
 	}
@@ -130,7 +130,7 @@ func TestServe_NarrativePlayerInput_SlowPass_SpotlightBalance_PreviouslyActiveCh
 	runTurnAndWait(ctx, t, conn, "campaign-spotlight-count", "player-a", "char-a", "I act.")
 	runTurnAndWait(ctx, t, conn, "campaign-spotlight-count", "player-a", "char-a", "I act.")
 
-	content := userMessageContent(t, fakeLLM.callAt(t, 9)) // 5 turns * 2 calls - 1
+	content := userMessageContent(t, fakeLLM.callAt(t, 14)) // 5 turns * 3 calls (fast/mechanics/narration) - 1, the narration pass
 	if !strings.Contains(content, "- char-b: 3 turn(s) since their last turn") {
 		t.Errorf("slow pass user content = %q, want char-b flagged with 3 turns since their last turn", content)
 	}
@@ -149,7 +149,7 @@ func TestServe_NarrativePlayerInput_SlowPass_SpotlightBalance_OnlyOnePlayerChara
 
 	runTurnAndWait(ctx, t, conn, "campaign-spotlight-solo", "player-a", "char-a", "I act alone.")
 
-	content := userMessageContent(t, fakeLLM.callAt(t, 1))
+	content := userMessageContent(t, fakeLLM.callAt(t, 2)) // narration pass (0=fast, 1=mechanics, 2=narration)
 	if strings.Contains(content, "Spotlight balance") {
 		t.Errorf("slow pass user content = %q, want no Spotlight balance section with only one player character", content)
 	}
@@ -174,7 +174,7 @@ func TestServe_NarrativePlayerInput_SlowPass_SpotlightBalance_AlternatingTurns_F
 	// last turn" is real information the soft signal is right to
 	// surface every time — it's only ever silent when the same
 	// character goes twice in a row.
-	content := userMessageContent(t, fakeLLM.callAt(t, 3)) // 2 turns * 2 calls - 1, char-b's own turn
+	content := userMessageContent(t, fakeLLM.callAt(t, 5)) // 2 turns * 3 calls - 1, char-b's own turn's narration pass
 	if !strings.Contains(content, "- char-a: 1 turn(s) since their last turn") {
 		t.Errorf("slow pass user content = %q, want char-a flagged with 1 turn since their last turn", content)
 	}
@@ -199,7 +199,7 @@ func TestServe_NarrativePlayerInput_SlowPass_SpotlightBalance_NPCExcluded(t *tes
 
 	runTurnAndWait(ctx, t, conn, "campaign-spotlight-npc", "player-a", "char-a", "I act.")
 
-	content := userMessageContent(t, fakeLLM.callAt(t, 1))
+	content := userMessageContent(t, fakeLLM.callAt(t, 2)) // narration pass (0=fast, 1=mechanics, 2=narration)
 	if strings.Contains(content, "Spotlight balance") {
 		t.Errorf("slow pass user content = %q, want no Spotlight balance section — the only other character is an NPC, not a player", content)
 	}

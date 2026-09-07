@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -508,5 +509,328 @@ func TestServe_NarrativePlayerInput_SlowPass_StartCombatFails_ClaimsTurnOrderAny
 	defer shortCancel()
 	if _, _, err := readEnvelopeType(shortCtx, conn); err == nil {
 		t.Fatal("expected no narrative.dm_prose after start_combat failed and the model claimed turn order anyway, but a message arrived")
+	}
+}
+
+// The tests below prove the actual point of splitting the slow pass into
+// a mechanics pass and a narration pass (dm_slow_pass.go's own package
+// doc comment): each pass only ever sees the tools it should, the
+// mechanics pass's own text is never broadcast, the narration pass can
+// genuinely ground itself in real pack content before narrating, and
+// lore tools now work without a system engine configured at all.
+
+func TestServe_NarrativePlayerInput_SlowPass_MechanicsPass_HasNoLoreOrNarrationTools(t *testing.T) {
+	policies := map[string]policy.CampaignPolicy{
+		"campaign-pass-split-mechanics": {PvPPolicy: policy.PvPPolicyPveOnly, SharedKnowledge: policy.SharedKnowledgeStrict},
+	}
+	fakeImg := &fakeImageGenProvider{imageURL: "http://localhost:8188/view?filename=scene.png"}
+	fakeLLM := &fakeLLMProvider{response: llm.CompletionResponse{Text: "The scene continues."}}
+	ts, st := newTestServerWithLLMSystemEngineImageGenAndPolicy(t, fakeLLM, nil, fakeImg, policy.NewJSONFileProvider(policies))
+	defer ts.Close()
+	bindPack(t, st, "campaign-pass-split-mechanics")
+	seedCharacter(t, st, "char-a", "campaign-pass-split-mechanics", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-pass-split-mechanics", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-pass-split-mechanics", "player-a", "char-a", "I look around."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
+	}
+
+	mechanicsCall := fakeLLM.callAt(t, 1)
+	forbidden := []string{"list_locations", "list_npcs", "list_encounters", "list_vehicles", "narrate_privately", "generate_scene_image"}
+	for _, tool := range mechanicsCall.Tools {
+		for _, f := range forbidden {
+			if tool.Name == f {
+				t.Errorf("mechanics pass Tools includes %q, want it offered only to the narration pass", f)
+			}
+		}
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_HasNoMechanicalTools(t *testing.T) {
+	policies := map[string]policy.CampaignPolicy{
+		"campaign-pass-split-narration": {PvPPolicy: policy.PvPPolicyPveOnly, SharedKnowledge: policy.SharedKnowledgeStrict},
+	}
+	fakeEngine := &fakeSystemEngineClient{}
+	fakeLLM := &fakeLLMProvider{response: llm.CompletionResponse{Text: "The scene continues."}}
+	ts, st := newTestServerWithLLMSystemEngineImageGenAndPolicy(t, fakeLLM, fakeEngine, nil, policy.NewJSONFileProvider(policies))
+	defer ts.Close()
+	bindPack(t, st, "campaign-pass-split-narration")
+	seedCharacter(t, st, "char-a", "campaign-pass-split-narration", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-pass-split-narration", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-pass-split-narration", "player-a", "char-a", "I look around."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
+	}
+
+	narrationCall := fakeLLM.callAt(t, 2)
+	forbidden := []string{
+		"resolve_check", "apply_effect", "cast_spell", "melee_attack", "ranged_attack", "offhand_attack",
+		"grapple", "shove", "equip_item", "unequip_item", "receive_item", "discard_item", "give_item",
+		"generate_loot", "add_currency", "transfer_currency", "get_available_actions", "get_character_status",
+		"start_combat", "advance_turn", "end_combat", "generate_combat_map", "get_character_schema", "create_npc",
+		"check_item_price", "list_vendor_inventory", "vendor_sell_item", "vendor_buy_item",
+		"travel_to", "stash_item", "retrieve_item", "stash_currency", "retrieve_currency", "claim_location",
+		"acquire_vehicle", "stable_vehicle", "take_vehicle",
+	}
+	for _, tool := range narrationCall.Tools {
+		for _, f := range forbidden {
+			if tool.Name == f {
+				t.Errorf("narration pass Tools includes %q, want it offered only to the mechanics pass", f)
+			}
+		}
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_NarrationPass_CanCallListNpcsBeforeNarrating
+// is the actual fix this split exists for: given a scripted response
+// where the narration pass itself calls list_npcs before settling on
+// narration, prove the whole pipeline actually supports that — the tool
+// call reaches callDMTool, a real tool.result broadcasts, and the
+// model's subsequent narration is what gets shown to players.
+func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_CanCallListNpcsBeforeNarrating(t *testing.T) {
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Kestrel asks around."}, // fast pass
+			{Text: "ok"},                   // mechanics pass: nothing to resolve
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "list_npcs", Arguments: json.RawMessage(`{}`)}}}, // narration pass: check real lore first
+			{Text: "Kestrel learns of Captain Orlen Vashti, the garrison's own commander."},                  // narration pass: final narration
+		},
+	}
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, nil)
+	defer ts.Close()
+	bindPack(t, st, "campaign-narration-lore")
+	seedCharacter(t, st, "char-a", "campaign-narration-lore", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-narration-lore", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-narration-lore", "player-a", "char-a", "Who do we know around here?"); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	var sawToolResult bool
+	var toolResult protocol.ToolResultMessage
+	var prose protocol.NarrativeDmProseMessage
+	for i := 0; i < 10; i++ {
+		typ, data, err := readEnvelopeType(ctx, conn)
+		if err != nil {
+			t.Fatalf("reading message %d error = %v", i, err)
+		}
+		if typ == protocol.MessageTypeToolResult {
+			sawToolResult = true
+			if err := json.Unmarshal(data, &toolResult); err != nil {
+				t.Fatalf("unmarshaling tool.result error = %v", err)
+			}
+		}
+		if typ == protocol.MessageTypeNarrativeDmProse {
+			if err := json.Unmarshal(data, &prose); err != nil {
+				t.Fatalf("unmarshaling narrative.dm_prose error = %v", err)
+			}
+			break
+		}
+	}
+	if !sawToolResult || toolResult.Payload.ToolName != "list_npcs" {
+		t.Fatalf("sawToolResult=%v toolResult=%+v, want a real list_npcs tool.result", sawToolResult, toolResult)
+	}
+	if !toolResult.Payload.Success {
+		t.Error("tool.result Success = false, want true")
+	}
+	if prose.Payload.Text != "Kestrel learns of Captain Orlen Vashti, the garrison's own commander." {
+		t.Errorf("narrative.dm_prose Text = %q, want the real narration", prose.Payload.Text)
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_MechanicsPassOwnText_NeverBroadcast
+// proves the mechanics pass's own final text is discarded regardless of
+// how narration-shaped it looks — only the separate narration pass's
+// output is ever broadcast.
+func TestServe_NarrativePlayerInput_SlowPass_MechanicsPassOwnText_NeverBroadcast(t *testing.T) {
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Kestrel nods."}, // fast pass
+			{Text: "Kestrel draws her sword and strikes true, dealing a mighty blow."}, // mechanics pass's own (discarded) text
+			{Text: "Kestrel considers her next move quietly."},                         // narration pass: the real narration
+		},
+	}
+	ts, _ := newTestServerWithLLMAndSystemEngine(t, fakeLLM, nil)
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-mechanics-discarded", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-mechanics-discarded", "player-a", "char-a", "I think."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var prose protocol.NarrativeDmProseMessage
+	if err := wsjson.Read(ctx, conn, &prose); err != nil {
+		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
+	}
+	if prose.Payload.Text != "Kestrel considers her next move quietly." {
+		t.Errorf("narrative.dm_prose Text = %q, want only the narration pass's text, never the mechanics pass's own discarded text", prose.Payload.Text)
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_NarrationPass_ReceivesMechanicsTranscript
+// proves mechanicsTranscriptText actually reaches the narration pass's
+// own context, so it can narrate consistently with what really happened.
+func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_ReceivesMechanicsTranscript(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{
+		resolveCheckResp: &systemenginepb.ResolveCheckResponse{
+			Success: true,
+			Outcome: &systemenginepb.Outcome{Total: 17, ResultSummary: "resolved", Rolls: []*systemenginepb.DieRoll{{Sides: 20, Result: 14, Label: "d20"}}},
+		},
+	}
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Kestrel leaps."}, // fast pass
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "resolve_check", Arguments: json.RawMessage(`{"character_id":"char-1","check_type":"ability_check","ability":"Dexterity"}`)}}}, // mechanics pass
+			{Text: "ok"},                             // mechanics pass termination
+			{Text: "Kestrel clears the gap easily."}, // narration pass
+		},
+	}
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "char-1", "campaign-transcript", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-transcript", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-transcript", "player-a", "char-1", "I leap the gap."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	// resolve_check triggers roll.request/roll.result as a shared table
+	// event (design doc §8) before narrative.dm_prose arrives — drain
+	// generically by type, same as
+	// TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAndDmProse
+	// above, rather than assuming a fixed message count.
+	var prose protocol.NarrativeDmProseMessage
+	for i := 0; i < 10; i++ {
+		typ, data, err := readEnvelopeType(ctx, conn)
+		if err != nil {
+			t.Fatalf("reading message %d error = %v", i, err)
+		}
+		if typ == protocol.MessageTypeNarrativeDmProse {
+			if err := json.Unmarshal(data, &prose); err != nil {
+				t.Fatalf("unmarshaling narrative.dm_prose error = %v", err)
+			}
+			break
+		}
+	}
+
+	narrationCall := fakeLLM.callAt(t, 3)
+	userContent := userMessageContent(t, narrationCall)
+	if !strings.Contains(userContent, "resolve_check") || !strings.Contains(userContent, "17") {
+		t.Errorf("narration pass user content = %q, want a rendering of the mechanics pass's resolve_check result (total 17)", userContent)
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_CampaignPackLoreTools_AvailableWithoutSystemEngine
+// proves the genuine new capability this split unlocks: list_locations/
+// list_npcs/list_encounters never called a system-engine RPC, so unlike
+// campaignPackStateTools they don't need one configured at all.
+func TestServe_NarrativePlayerInput_SlowPass_CampaignPackLoreTools_AvailableWithoutSystemEngine(t *testing.T) {
+	fakeLLM := &fakeLLMProvider{
+		responses: []llm.CompletionResponse{
+			{Text: "Kestrel asks around."}, // fast pass
+			{Text: "ok"},                   // mechanics pass: no system engine, nothing to resolve
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "list_locations", Arguments: json.RawMessage(`{}`)}}}, // narration pass: real lore check, no system engine needed
+			{Text: "Kestrel takes stock of the ravine and the keep beyond."},                                      // narration pass: final narration
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st, err := store.OpenSQLiteEventStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
+	}
+	defer st.Close()
+	// Deliberately no system engine client — proving campaignPackLoreTools
+	// (unlike campaignPackStateTools) never needed one.
+	ts := httptest.NewServer(server.New(logger, st, fakeLLM, "test-model", nil, nil, st, nil, nil, st, st, st, nil, nil, nil, session.NewHub()).Handler())
+	defer ts.Close()
+	bindPack(t, st, "campaign-lore-no-engine")
+	seedCharacter(t, st, "char-a", "campaign-lore-no-engine", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-lore-no-engine", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-lore-no-engine", "player-a", "char-a", "What do we know of this place?"); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	var sawToolResult bool
+	var toolResult protocol.ToolResultMessage
+	var prose protocol.NarrativeDmProseMessage
+	for i := 0; i < 10; i++ {
+		typ, data, err := readEnvelopeType(ctx, conn)
+		if err != nil {
+			t.Fatalf("reading message %d error = %v", i, err)
+		}
+		if typ == protocol.MessageTypeToolResult {
+			sawToolResult = true
+			if err := json.Unmarshal(data, &toolResult); err != nil {
+				t.Fatalf("unmarshaling tool.result error = %v", err)
+			}
+		}
+		if typ == protocol.MessageTypeNarrativeDmProse {
+			if err := json.Unmarshal(data, &prose); err != nil {
+				t.Fatalf("unmarshaling narrative.dm_prose error = %v", err)
+			}
+			break
+		}
+	}
+	if !sawToolResult || toolResult.Payload.ToolName != "list_locations" {
+		t.Fatalf("sawToolResult=%v toolResult=%+v, want a successful list_locations call with no system engine configured", sawToolResult, toolResult)
+	}
+	if !toolResult.Payload.Success {
+		t.Error("tool.result Success = false, want true — list_locations never needed a system engine")
 	}
 }

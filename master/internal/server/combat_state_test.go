@@ -175,12 +175,14 @@ func TestCombatState_EndCombat_DeletesSnapshot(t *testing.T) {
 	fakeEngine := startCombatFakeEngine()
 	fakeLLM := &fakeLLMProvider{
 		responses: []llm.CompletionResponse{
-			{Text: "Kestrel draws steel."},
-			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b"]}`)}}},
-			{Text: "Roll for initiative!"},
-			{Text: "Kestrel sheathes her blade."},
-			{ToolCalls: []llm.ToolCall{{ID: "call_2", Name: "end_combat", Arguments: json.RawMessage(`{}`)}}},
-			{Text: "The fight is over."},
+			{Text: "Kestrel draws steel."}, // turn 1 fast pass
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b"]}`)}}}, // turn 1 mechanics pass
+			{Text: "ok"},                          // turn 1 mechanics pass termination (discarded)
+			{Text: "Roll for initiative!"},        // turn 1 narration pass
+			{Text: "Kestrel sheathes her blade."}, // turn 2 fast pass
+			{ToolCalls: []llm.ToolCall{{ID: "call_2", Name: "end_combat", Arguments: json.RawMessage(`{}`)}}}, // turn 2 mechanics pass
+			{Text: "ok"},                 // turn 2 mechanics pass termination (discarded)
+			{Text: "The fight is over."}, // turn 2 narration pass
 		},
 	}
 	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
@@ -237,9 +239,10 @@ func TestCombatState_SecondServerSharingStore_RehydratesAndCanAdvanceTurn(t *tes
 	fakeEngine := startCombatFakeEngine()
 	fakeLLM := &fakeLLMProvider{
 		responses: []llm.CompletionResponse{
-			{Text: "Kestrel draws steel."},
-			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b"]}`)}}},
-			{Text: "Roll for initiative!"},
+			{Text: "Kestrel draws steel."}, // fast pass
+			{ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "start_combat", Arguments: json.RawMessage(`{"character_ids":["char-a","char-b"]}`)}}}, // mechanics pass
+			{Text: "ok"},                   // mechanics pass termination (discarded)
+			{Text: "Roll for initiative!"}, // narration pass
 		},
 	}
 	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
@@ -283,6 +286,7 @@ func TestCombatState_SecondServerSharingStore_RehydratesAndCanAdvanceTurn(t *tes
 	fakeLLM.responses = append(fakeLLM.responses,
 		llm.CompletionResponse{Text: "Char-b acts."},
 		llm.CompletionResponse{ToolCalls: []llm.ToolCall{{ID: "call_2", Name: "advance_turn", Arguments: json.RawMessage(`{}`)}}},
+		llm.CompletionResponse{Text: "ok"}, // mechanics pass termination (discarded)
 		llm.CompletionResponse{Text: "Kestrel's turn comes around."},
 	)
 	if _, err := sendPlayerInput(ctx, conn2, "campaign-restart", "player-a", "char-b", "Char-b finishes acting."); err != nil {

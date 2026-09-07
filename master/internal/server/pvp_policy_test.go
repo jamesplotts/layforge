@@ -227,11 +227,14 @@ func TestServe_NarrativePlayerInput_SlowPass_MaturityTierPrompt_InjectedIntoSlow
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
 
-	slowPassCall := fakeLLM.callAt(t, 1)
-	if len(slowPassCall.Messages) == 0 || slowPassCall.Messages[0].Role != llm.RoleSystem {
-		t.Fatalf("slow pass call Messages[0] = %+v, want a RoleSystem message first", slowPassCall.Messages)
+	// The maturity constraint only applies to the narration pass (call 2)
+	// now — the mechanics pass (call 1) never produces player-visible
+	// text, so a content constraint on it wouldn't mean anything.
+	narrationPassCall := fakeLLM.callAt(t, 2)
+	if len(narrationPassCall.Messages) == 0 || narrationPassCall.Messages[0].Role != llm.RoleSystem {
+		t.Fatalf("narration pass call Messages[0] = %+v, want a RoleSystem message first", narrationPassCall.Messages)
 	}
-	if !strings.Contains(slowPassCall.Messages[0].Content, constraint) {
-		t.Errorf("slow pass system message = %q, want it to contain the configured maturity constraint %q", slowPassCall.Messages[0].Content, constraint)
+	if !strings.Contains(narrationPassCall.Messages[0].Content, constraint) {
+		t.Errorf("narration pass system message = %q, want it to contain the configured maturity constraint %q", narrationPassCall.Messages[0].Content, constraint)
 	}
 }

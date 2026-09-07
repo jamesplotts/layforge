@@ -223,16 +223,18 @@ func TestServe_NarrativePlayerInput_SlowPass_ImageGenConfigured_ToolIsOffered(t 
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
 
-	slowPassCall := fakeLLM.callAt(t, 1)
+	// call 1 is the mechanics pass (never offered generate_scene_image —
+	// that's a narration-pass tool); call 2 is the narration pass.
+	narrationPassCall := fakeLLM.callAt(t, 2)
 	found := false
-	for _, tool := range slowPassCall.Tools {
+	for _, tool := range narrationPassCall.Tools {
 		if tool.Name == "generate_scene_image" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("slow pass Tools = %+v, want generate_scene_image offered when an imagegen.Provider is configured", slowPassCall.Tools)
+		t.Errorf("narration pass Tools = %+v, want generate_scene_image offered when an imagegen.Provider is configured", narrationPassCall.Tools)
 	}
 }
 
@@ -261,10 +263,14 @@ func TestServe_NarrativePlayerInput_SlowPass_NoImageGenProvider_ToolNotOffered(t
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
 
-	slowPassCall := fakeLLM.callAt(t, 1)
-	for _, tool := range slowPassCall.Tools {
-		if tool.Name == "generate_scene_image" {
-			t.Errorf("slow pass Tools includes generate_scene_image, want it absent when no imagegen.Provider is configured")
+	// Check both passes — neither should ever offer generate_scene_image
+	// when no imagegen.Provider is configured.
+	for _, callIdx := range []int{1, 2} {
+		call := fakeLLM.callAt(t, callIdx)
+		for _, tool := range call.Tools {
+			if tool.Name == "generate_scene_image" {
+				t.Errorf("call %d Tools includes generate_scene_image, want it absent when no imagegen.Provider is configured", callIdx)
+			}
 		}
 	}
 }

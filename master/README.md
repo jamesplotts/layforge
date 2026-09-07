@@ -1925,6 +1925,39 @@ Backend-only so far — the admin-web UI still only has the original
 full-pack generation flow; a "generate next chapter"/"generate a side
 quest" UI is follow-up work, not yet built.
 
+**New**: the DM's slow pass (design doc §7) is now two further beats,
+not one LLM call — a **mechanics pass** (resolve checks/spells/combat/
+inventory/travel using the full mechanical toolset; its own final text
+is discarded, never shown to anyone) followed by a **narration pass**
+(write the actual prose, offered only the read-only lore lookups,
+`narrate_privately`, and `generate_scene_image`). Motivated by a real
+live-testing finding from the chapters/side-quest work above: given an
+open-ended prompt, the DM narrated freely instead of calling
+`list_npcs`/`list_encounters`, inventing a setting instead of using the
+real bound pack — not because the tools weren't offered, but because
+nothing structurally required checking them before narrating. Giving
+narration nothing else to think about is what fixes that; a stronger
+instruction wasn't the fix. `internal/server/location.go`'s
+`campaignPackTools` and `vehicles.go`'s `vehicleTools` each split into
+a state-changing half (mechanics pass, same gates as before) and a
+read-only lore half (narration pass) — the lore half's gate also
+dropped its system-engine requirement in the process, a genuine new
+capability: `list_locations`/`list_npcs`/`list_encounters`/
+`list_vehicles` never called the system engine at all, so they now work
+even when one isn't configured. Paid for deliberately: every turn's
+latency goes from a minimum of one model round-trip to a minimum of
+two, even a turn needing no mechanical resolution at all.
+`dm_slow_pass_test.go`'s own fake-LLM-response sequences needed real
+updates (several assert exact call indices/content); ~10 other test
+files needed one throwaway response inserted per turn where a scripted
+sequence ended in narration, thanks to `fakeLLMProvider`'s
+clamp-to-last-response behavior absorbing most of the migration.
+**Live-verified**: reran the exact scenario that surfaced this
+(join a campaign with a real bound pack, ask an open-ended "who do we
+know, what's going on" question) against the real LAN Ollama server and
+confirmed the DM now calls `list_npcs`/`list_encounters` before
+narrating.
+
 ## Layout
 
 ```
