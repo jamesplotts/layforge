@@ -68,7 +68,7 @@ func run(addr, webDir string, ttl, sweepInterval time.Duration, logger *slog.Log
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {
 			logger.Warn("web directory not found, not serving it", "web_dir", webDir, "error", statErr)
 		} else {
-			mux.Handle("/", http.FileServer(http.Dir(webDir)))
+			mux.Handle("/", revalidateStatic(http.FileServer(http.Dir(webDir))))
 			logger.Info("serving lobby web UI", "web_dir", webDir)
 		}
 	}
@@ -143,6 +143,21 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// revalidateStatic wraps a static file handler so a browser always
+// checks with the server before reusing a cached response. The site's
+// HTML/CSS/JS (and the downloads) change in place at the same paths, and
+// without this a browser heuristically caches them and a plain refresh
+// keeps showing the old version until a hard reload. "no-cache" still
+// lets the response be stored — http.FileServer answers the resulting
+// conditional request with a cheap 304 whenever the file is unchanged,
+// so this costs a round trip's headers, not a re-download.
+func revalidateStatic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
 		next.ServeHTTP(w, r)
 	})
 }

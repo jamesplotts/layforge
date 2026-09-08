@@ -80,8 +80,19 @@ func TestPackTemplateArchive_PresentAndValid(t *testing.T) {
 	}
 }
 
+func TestRevalidateStatic_SetsNoCache(t *testing.T) {
+	rec := httptest.NewRecorder()
+	revalidateStatic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/style.css", nil))
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("Cache-Control = %q, want %q", got, "no-cache")
+	}
+}
+
 func TestStaticFileServer_ServesTheArchives(t *testing.T) {
-	srv := httptest.NewServer(http.FileServer(http.Dir("web")))
+	srv := httptest.NewServer(revalidateStatic(http.FileServer(http.Dir("web"))))
 	defer srv.Close()
 
 	for _, name := range []string{"campaign-pack-library.zip", "campaign-pack-template.zip"} {
