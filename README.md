@@ -276,10 +276,19 @@ registry/          Standalone Go service behind layforge.org — the public
                     campaign directory and project homepage
 protocol/          AsyncAPI spec for the client-facing WebSocket protocol,
                     plus the System Engine gRPC/protobuf contract
-campaign-packs/    Directory-based campaign content (markdown + YAML)
+campaign-packs/    Directory-based campaign content (markdown + YAML) —
+                    sable-ravine/ is a full worked example, TEMPLATE/ an
+                    annotated skeleton to copy
 maturity-tiers/    Content-maturity tier definitions
-docs/              Design document and supporting docs
+docs/              Design document and supporting docs, including
+                    authoring-campaign-packs.md
 ```
+
+To write your own adventure, copy `campaign-packs/TEMPLATE/` and follow
+[`docs/authoring-campaign-packs.md`](docs/authoring-campaign-packs.md).
+Ready-made packs are published at
+[layforge.org](https://layforge.org) and can be pulled straight onto a
+Master from the admin panel's Campaign tab.
 
 ## Related repos
 

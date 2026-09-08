@@ -1,0 +1,11 @@
+{
+  "campaign_pack_id": "template-pack",
+  "note": "Mutable session state, kept separate from the static .md content (design doc §6.4). This is a fresh copy for a new table to start from. The current Master tracks live campaign state in its own store, not by rewriting this file — it documents the shape a pack expects. Replace campaign_pack_id with your slug; add whatever flags your adventure needs.",
+  "discovered_locations": [],
+  "npc_status": {
+    "example-npc": "alive"
+  },
+  "flags": {
+    "example_flag": false
+  }
+}

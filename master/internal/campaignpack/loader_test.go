@@ -17,6 +17,25 @@ import (
 // content this project ships, not just a shape convenient for testing.
 const sableRavineDir = "../../../campaign-packs/sable-ravine"
 
+// templateDir is the committed authoring template (campaign-packs/
+// TEMPLATE/). It must always load, since it's what a pack author copies
+// to start from — see docs/authoring-campaign-packs.md.
+const templateDir = "../../../campaign-packs/TEMPLATE"
+
+func TestLoadPack_AuthoringTemplate_Parses(t *testing.T) {
+	pack, err := campaignpack.LoadPack(templateDir)
+	if err != nil {
+		t.Fatalf("LoadPack(%q) error = %v", templateDir, err)
+	}
+	if pack.ID == "" {
+		t.Error("template pack has an empty ID")
+	}
+	if len(pack.Locations) == 0 || len(pack.NPCs) == 0 || len(pack.Encounters) == 0 {
+		t.Errorf("template should exercise every section: %d locations, %d npcs, %d encounters",
+			len(pack.Locations), len(pack.NPCs), len(pack.Encounters))
+	}
+}
+
 func TestLoadPack_RealSableRavineFixture_ParsesAllContent(t *testing.T) {
 	pack, err := campaignpack.LoadPack(sableRavineDir)
 	if err != nil {
