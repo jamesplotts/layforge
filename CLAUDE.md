@@ -153,11 +153,17 @@ translated** — no proprietary D&D terms, named characters, non-SRD
 monster names, or flavor text, in Go code, comments, test fixtures, or
 anywhere else in this repo. See "Legal / content rules" above.
 
-**Git/PR conventions apply verbatim, language-independent:** branches
-`feature/add-{name}`, `fix/repair-{issue}`, `docs/update-{section}`,
-`test/add-{area}`; commits `type(scope): description` (e.g.
-`feat(master): add websocket handshake`). Use this format for new commits
-in this repo going forward.
+**Commit-message convention applies verbatim, language-independent:**
+`type(scope): description` (e.g. `feat(master): add websocket handshake`).
+Use this format for new commits in this repo going forward.
+
+**Branching:** not required. This is a solo, pre-release project with no
+external contributors, stars, forks, or watchers — commit straight to
+`main` and push. Start a `feature/…` / `fix/…` / `docs/…` branch only
+when the work is genuinely speculative (might be thrown away) or when the
+operator explicitly asks for a PR. The design-doc §12 branch-name scheme
+(`feature/add-{name}` etc.) still applies *if* a branch is used; it just
+isn't the default anymore.
 
 ## Working across the OpenCombatEngine boundary
 
