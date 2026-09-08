@@ -2031,6 +2031,43 @@ ordering). Not built here, flagged rather than assumed: no admin-panel
 view of or way to clear a campaign's raised flags yet — "going forward"
 is currently permanent, which is the safe direction to be wrong in.
 
+**Hardened `campaignpack.Generate`** after a read-through of the first
+AI-generated pack library turned up systemic weaknesses no individual
+pack failed on: `connections:` empty on every location (so `travel_to`
+had no graph), `stat_block_ref` values that aren't SRD 5.1 stat blocks
+("SRD Wizard", "SRD Cleric", "SRD Human Commoner", homebrew notes
+crammed into the field), and no `content_warnings` anywhere despite
+massacre/torture/body-horror content. The generation prompt only ever
+mentioned these in passing. Now:
+
+- All three system prompts (full pack / chapter / side quest) spell out
+  the connection requirement as mandatory and mutual with a worked
+  example, list the 21 SRD 5.1 NPC stat blocks by name (and say to use a
+  specific SRD monster name otherwise — never "SRD Wizard", use SRD
+  Mage), and — for the full-pack prompt — require `content_warnings` and
+  offer `lines`/`veils` for adventures whose content genuinely calls for
+  standing safety limits (the same front-matter fields the safety-tools
+  pass above now reads). `author` default changed from "AI-generated" to
+  "Generated draft — review before use".
+- A real repair pass (`repairStatBlockRefs`, alongside the existing
+  `repairUnquotedColonInScalarValues`) rewrites every `stat_block_ref`
+  toward `"SRD <Name>"`: strips a trailing parenthetical, drops a race
+  prefix, and maps the confirmed-common non-SRD class names onto real
+  ones (Wizard→Mage, Cleric→Priest, Fighter→Veteran, …). Conservative —
+  a name it doesn't recognize (a legitimate SRD monster) is left alone.
+- A real gate (`validateGeneratedLocationGraph`), the "gates over
+  prompting" backstop: a generation with two or more locations and not
+  one connection between them is rejected outright rather than returned,
+  since a fully-disconnected map is unusable, not merely thin. A single
+  isolated location (a real dead-end room) still passes.
+
+Covered by `generate_test.go` (stat-block normalization table,
+disconnected-graph rejection, single-isolated-location allowed, prompt
+content). Not done: no lint/warning surface for the softer
+`involves`-empty case yet — the prompt asks for it and a capable model
+should comply; a disconnected map is the only failure hard enough to
+reject a whole generation over.
+
 ## Layout
 
 ```

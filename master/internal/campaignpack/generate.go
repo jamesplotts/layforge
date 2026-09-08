@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/jamesplotts/layforge/master/internal/frontmatter"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 )
 
@@ -77,11 +78,43 @@ const campaignGenerationSystemPrompt = `You are designing a short, original tabl
 Legal requirement, non-negotiable: everything you write must be original, SRD-legal content only. Never use proprietary Dungeons & Dragons terms, named published characters, or non-SRD monster names; never copy a published module's plot, named locations, or specific text. Tone-inspired is fine — direct reuse is not.
 
 Call write_campaign_pack exactly once. This campaign is organized into chapters, each roughly one level's worth of content (about the amount of play it takes a party to earn a level — a useful size, not a strict rule). Produce:
-- campaign.md: YAML front matter with id (a short lowercase-hyphenated slug), title, level_range (e.g. "1-3"), pvp_policy (one of pve_only, pvp_allowed — default pve_only unless the description implies otherwise), maturity_tier ("standard" unless the description clearly implies otherwise), image_maturity_tier ("family_friendly" unless the description clearly implies otherwise), shared_knowledge ("strict" unless the description implies otherwise), tone (a short list of adjectives), author ("AI-generated"), and chapters — a list of 2-5 entries (id, title, level_range, summary) sketching the whole campaign's arc across the requested level range. Body: a few paragraphs of overview prose plus a "## Hooks" section.
+
+- campaign.md: YAML front matter, then a body of a few paragraphs of overview prose plus a "## Hooks" section. Front-matter fields:
+  - id: a short lowercase-hyphenated slug
+  - title: the campaign title
+  - level_range: a quoted string, e.g. "1-3"
+  - pvp_policy: pve_only or pvp_allowed (default pve_only unless the description implies otherwise)
+  - maturity_tier: "standard" unless the description clearly implies otherwise
+  - image_maturity_tier: "family_friendly" unless the description clearly implies otherwise
+  - shared_knowledge: "strict" unless the description implies otherwise
+  - tone: a short list of adjectives
+  - author: "Generated draft — review before use"
+  - content_warnings: a list of short phrases for anything a player would want warned about (e.g. "combat violence", "undead", "captivity", "body horror"). Always include at least one if there is any violence at all.
+  - lines and veils: OPTIONAL lists of standing safety limits, ONLY when the adventure's content genuinely calls for them (an adventure touching torture, execution of captives, or harm to children should pre-declare these; a straightforward dungeon crawl needs neither). lines are things that must never happen on or off screen; veils are things that may happen off screen but are never described.
+  - chapters: a list of 2-5 entries (id, title, level_range, summary) sketching the whole campaign's arc across the requested level range.
+
 - Then fully author ONLY the first chapter's content (chapters[0]) — later chapters are generated separately, once the party is actually approaching them, so do not write their content now:
-  - locations/*.md (3-5 files): YAML front matter with id, connections (a list of other location ids directly reachable from this one — build a real, traversable graph), chapter set to chapters[0]'s id. Body: a few paragraphs of prose description.
-  - npcs/*.md (2-4 files): YAML front matter with id, location (which location id they're normally found at), stat_block_ref (a plain SRD creature/class type, e.g. "SRD Veteran" or "SRD Commoner" — never a named published monster), voice (a short phrase describing how they speak), chapter set to chapters[0]'s id. Body: a paragraph of personality/motivation.
-  - encounters/*.md (2-3 files): YAML front matter with id, location, involves (a list of the npc ids present), chapter set to chapters[0]'s id. Body: a paragraph describing the situation and how it might unfold.
+
+  - locations/*.md (3-5 files): front matter with:
+    - id
+    - connections: a list of the OTHER location ids in this chapter that a party can travel to directly from here. This is mandatory and it must form a real, connected map — every location lists at least one connection, and connections are mutual (if A lists B, B lists A). A location with an empty connections list is a bug: the party would have no way to reach or leave it. Example: locations/market-square.md has "connections: [north-gate, the-undercroft]" and both north-gate.md and the-undercroft.md list market-square back.
+    - chapter: set to chapters[0]'s id
+    Body: a few paragraphs of prose description.
+
+  - npcs/*.md (2-4 files): front matter with:
+    - id
+    - location: the location id where this NPC is normally found (must match one of the locations above)
+    - stat_block_ref: a quoted string naming the mechanical baseline to build this NPC from, in the exact form "SRD <Name>" and nothing else — no parentheses, no notes, no homebrew instructions in this field (put those in the body). Use one of the SRD 5.1 NPC stat blocks: SRD Acolyte, SRD Archmage, SRD Assassin, SRD Bandit, SRD Bandit Captain, SRD Berserker, SRD Commoner, SRD Cultist, SRD Cult Fanatic, SRD Druid, SRD Gladiator, SRD Guard, SRD Knight, SRD Mage, SRD Noble, SRD Priest, SRD Scout, SRD Spy, SRD Thug, SRD Tribal Warrior, SRD Veteran. For a genuine monster, use a specific SRD 5.1 monster name instead (e.g. "SRD Goblin", "SRD Wolf", "SRD Ogre"). Never a class name that isn't in that NPC list (there is no "SRD Wizard" — use SRD Mage; no "SRD Cleric" — use SRD Priest), and never a race prefix ("SRD Commoner", not "SRD Human Commoner").
+    - voice: a short quoted phrase describing how they speak
+    - chapter: set to chapters[0]'s id
+    Body: a paragraph of personality/motivation.
+
+  - encounters/*.md (2-3 files): front matter with:
+    - id
+    - location: the location id where it happens
+    - involves: a list of the npc ids taking part. If the pack has NPCs, most encounters should involve at least one of them by id — only leave this empty for an encounter that is genuinely just a trap, hazard, or environmental obstacle with no NPC present.
+    - chapter: set to chapters[0]'s id
+    Body: a paragraph describing the situation and how it might unfold.
 
 Every id across every file must be unique and lowercase-hyphenated. Keep the first chapter small and focused — enough for one real short session, not a sprawling setting.`
 
@@ -97,9 +130,9 @@ const chapterGenerationSystemPrompt = `You are extending an existing tabletop RP
 Legal requirement, non-negotiable: everything you write must be original, SRD-legal content only. Never use proprietary Dungeons & Dragons terms, named published characters, or non-SRD monster names; never copy a published module's plot, named locations, or specific text. Tone-inspired is fine — direct reuse is not.
 
 Call write_campaign_pack exactly once with every new file for this chapter only. Do not include campaign.md — that file already exists and is not being changed. Produce:
-- locations/*.md (3-5 new files): YAML front matter with id, connections (may reference already-established location ids too, to keep the whole map connected), chapter set to this chapter's id. Body: a few paragraphs of prose description.
-- npcs/*.md (2-4 new files): YAML front matter with id, location, stat_block_ref (a plain SRD creature/class type — never a named published monster), voice, chapter set to this chapter's id. Body: a paragraph of personality/motivation.
-- encounters/*.md (2-3 new files): YAML front matter with id, location, involves, chapter set to this chapter's id. Body: a paragraph describing the situation and how it might unfold.
+- locations/*.md (3-5 new files): front matter with id; connections (mandatory — a real connected map, every location lists at least one, connections mutual; a new location may and often should connect to an already-established location id to keep the whole campaign map joined); chapter set to this chapter's id. Body: a few paragraphs of prose description.
+- npcs/*.md (2-4 new files): front matter with id; location (an existing or new location id); stat_block_ref as a quoted "SRD <Name>" and nothing else — one of: SRD Acolyte, SRD Archmage, SRD Assassin, SRD Bandit, SRD Bandit Captain, SRD Berserker, SRD Commoner, SRD Cultist, SRD Cult Fanatic, SRD Druid, SRD Gladiator, SRD Guard, SRD Knight, SRD Mage, SRD Noble, SRD Priest, SRD Scout, SRD Spy, SRD Thug, SRD Tribal Warrior, SRD Veteran — or a specific SRD 5.1 monster name (e.g. "SRD Goblin"). Never "SRD Wizard" (use SRD Mage), never "SRD Cleric" (use SRD Priest), never a race prefix. voice as a short quoted phrase; chapter set to this chapter's id. Body: a paragraph of personality/motivation.
+- encounters/*.md (2-3 new files): front matter with id, location, involves (npc ids present — populate it unless the encounter is genuinely just a trap or hazard), chapter set to this chapter's id. Body: a paragraph describing the situation and how it might unfold.
 
 Every new id must be unique — never reuse an id already established in this campaign — and lowercase-hyphenated. Stay consistent with the campaign's established premise and roster: reference existing NPCs/locations where it makes sense, and don't contradict or re-author anything already established.`
 
@@ -114,9 +147,9 @@ const sideQuestGenerationSystemPrompt = `You are writing a short, self-contained
 Legal requirement, non-negotiable: everything you write must be original, SRD-legal content only. Never use proprietary Dungeons & Dragons terms, named published characters, or non-SRD monster names; never copy a published module's plot, named locations, or specific text. Tone-inspired is fine — direct reuse is not.
 
 Call write_campaign_pack exactly once with every file for this side quest. Do not include campaign.md. Produce a small, self-contained set (1-2 encounters, sized to the requested player count):
-- locations/*.md (0-2 new files, only if genuinely needed — reusing an existing location is fine and often better): YAML front matter with id, connections, side_quest set to a new short id for this side quest. Body: a few paragraphs of prose description.
-- npcs/*.md (0-2 new files): YAML front matter with id, location, stat_block_ref (a plain SRD creature/class type — never a named published monster), voice, side_quest set to the same side quest id. Body: a paragraph of personality/motivation.
-- encounters/*.md (1-2 new files): YAML front matter with id, location, involves, side_quest set to the same side quest id, min_players and max_players sized to what was requested. Body: a paragraph describing the situation and how it might unfold.
+- locations/*.md (0-2 new files, only if genuinely needed — reusing an existing location is fine and often better): front matter with id; connections (list the location ids reachable from here — if you add more than one new location, connect them, and connect at least one to an existing location); side_quest set to a new short id for this side quest. Body: a few paragraphs of prose description.
+- npcs/*.md (0-2 new files): front matter with id; location; stat_block_ref as a quoted "SRD <Name>" and nothing else — one of: SRD Acolyte, SRD Archmage, SRD Assassin, SRD Bandit, SRD Bandit Captain, SRD Berserker, SRD Commoner, SRD Cultist, SRD Cult Fanatic, SRD Druid, SRD Gladiator, SRD Guard, SRD Knight, SRD Mage, SRD Noble, SRD Priest, SRD Scout, SRD Spy, SRD Thug, SRD Tribal Warrior, SRD Veteran — or a specific SRD 5.1 monster name. Never "SRD Wizard"/"SRD Cleric"/a race prefix. voice as a short quoted phrase; side_quest set to the same side quest id. Body: a paragraph of personality/motivation.
+- encounters/*.md (1-2 new files): front matter with id, location, involves (the npc ids present — populate it unless it's purely a trap/hazard), side_quest set to the same side quest id, min_players and max_players sized to what was requested. Body: a paragraph describing the situation and how it might unfold.
 
 This must stand entirely on its own: it must not require the full party, must not advance or contradict the main campaign's chapters, and must not assume anything happened that the Host didn't tell you about. Every new id must be unique and lowercase-hyphenated.`
 
@@ -146,6 +179,9 @@ func Generate(ctx context.Context, provider llm.Provider, model string, req Gene
 	}
 	if !hasCampaignMD {
 		return nil, fmt.Errorf("campaignpack: generated pack has no campaign.md")
+	}
+	if err := validateGeneratedLocationGraph(files); err != nil {
+		return nil, err
 	}
 
 	return files, nil
@@ -202,7 +238,14 @@ func GenerateChapter(ctx context.Context, provider llm.Provider, model string, r
 	if err != nil {
 		return nil, err
 	}
-	return validateSupplementalFiles(files)
+	validated, err := validateSupplementalFiles(files)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGeneratedLocationGraph(validated); err != nil {
+		return nil, err
+	}
+	return validated, nil
 }
 
 // GenerateSideQuestRequest describes a short, self-contained side
@@ -236,7 +279,14 @@ func GenerateSideQuest(ctx context.Context, provider llm.Provider, model string,
 	if err != nil {
 		return nil, err
 	}
-	return validateSupplementalFiles(files)
+	validated, err := validateSupplementalFiles(files)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGeneratedLocationGraph(validated); err != nil {
+		return nil, err
+	}
+	return validated, nil
 }
 
 // generateFiles is the shared core behind Generate/GenerateChapter/
@@ -272,6 +322,7 @@ func generateFiles(ctx context.Context, provider llm.Provider, model, systemProm
 	}
 	for i := range files {
 		files[i].Content = repairUnquotedColonInScalarValues(files[i].Content)
+		files[i].Content = repairStatBlockRefs(files[i].Content)
 	}
 	return files, nil
 }
@@ -342,6 +393,160 @@ func quoteYAMLScalar(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	return `"` + escaped + `"`
+}
+
+// srd51ClassSynonyms maps the class names a model reaches for that are
+// NOT SRD 5.1 NPC stat blocks onto the ones that are. Deliberately
+// conservative — only unambiguous swaps. A name not in this map (and not
+// a race prefix) is left alone: it may be a legitimate SRD monster name
+// (SRD Goblin, SRD Wolf, …), which this repair can't and shouldn't
+// enumerate.
+var srd51ClassSynonyms = map[string]string{
+	"wizard":    "Mage",
+	"sorcerer":  "Mage",
+	"warlock":   "Mage",
+	"cleric":    "Priest",
+	"fighter":   "Veteran",
+	"soldier":   "Guard",
+	"rogue":     "Spy",
+	"barbarian": "Berserker",
+	"ranger":    "Scout",
+	"adept":     "Acolyte",
+}
+
+// statBlockRacePrefixes are humanoid-race words a model prepends to a
+// stat block ("SRD Human Commoner") — never part of an SRD stat block
+// name, and stripped only when a real name follows.
+var statBlockRacePrefixes = map[string]bool{
+	"human": true, "elf": true, "elven": true, "dwarf": true, "dwarven": true,
+	"halfling": true, "gnome": true, "gnomish": true, "tiefling": true,
+	"dragonborn": true, "half-elf": true, "half-orc": true,
+}
+
+// canonicalStatBlockRef nudges a generated stat_block_ref value toward
+// the "SRD <Name>" form the pack format expects: it strips surrounding
+// quotes and any trailing parenthetical (models sometimes cram homebrew
+// notes in there — those belong in the NPC body), drops a leading race
+// word, and maps the non-SRD class names in srd51ClassSynonyms onto real
+// SRD 5.1 NPC stat blocks. A value it doesn't recognize comes back
+// trimmed but otherwise unchanged — this repairs the confirmed-common
+// mistakes from live generation (see the campaign-pack library review),
+// it is not a full SRD validator.
+func canonicalStatBlockRef(value string) string {
+	v := strings.TrimSpace(value)
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		v = strings.TrimSpace(v[1 : len(v)-1])
+	}
+	if i := strings.IndexByte(v, '('); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	if v == "" {
+		return strings.TrimSpace(value)
+	}
+
+	// Drop a leading "SRD" / "SRD:" so the rest can be normalized, then
+	// re-add it at the end.
+	name := v
+	if rest, ok := cutPrefixFold(name, "srd:"); ok {
+		name = strings.TrimSpace(rest)
+	} else if rest, ok := cutPrefixFold(name, "srd "); ok {
+		name = strings.TrimSpace(rest)
+	}
+	if name == "" {
+		return strings.TrimSpace(value)
+	}
+
+	words := strings.Fields(name)
+	if len(words) >= 2 && statBlockRacePrefixes[strings.ToLower(words[0])] {
+		words = words[1:]
+	}
+	if len(words) == 1 {
+		if mapped, ok := srd51ClassSynonyms[strings.ToLower(words[0])]; ok {
+			return "SRD " + mapped
+		}
+	}
+	return "SRD " + titleWords(words)
+}
+
+// cutPrefixFold is strings.CutPrefix with a case-insensitive prefix
+// match.
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):], true
+	}
+	return "", false
+}
+
+// titleWords upper-cases the first letter of each space-separated word,
+// lower-casing the rest — "bandit CAPTAIN" -> "Bandit Captain". Avoids
+// the deprecated strings.Title and a text/cases dependency for what is
+// only ever a handful of ASCII stat-block names.
+func titleWords(words []string) string {
+	out := make([]string, len(words))
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		lower := strings.ToLower(w)
+		out[i] = strings.ToUpper(lower[:1]) + lower[1:]
+	}
+	return strings.Join(out, " ")
+}
+
+// repairStatBlockRefs rewrites every stat_block_ref front-matter value
+// in content through canonicalStatBlockRef. Front-matter block only,
+// same delimiter-counting scope as repairUnquotedColonInScalarValues.
+func repairStatBlockRefs(content string) string {
+	lines := strings.Split(content, "\n")
+	delimitersSeen := 0
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "---" {
+			delimitersSeen++
+			continue
+		}
+		if delimitersSeen != 1 {
+			continue
+		}
+		m := yamlKeyValueLine.FindStringSubmatch(line)
+		if m == nil || m[2] != "stat_block_ref" {
+			continue
+		}
+		lines[i] = m[1] + "stat_block_ref: " + quoteYAMLScalar(canonicalStatBlockRef(m[3]))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// validateGeneratedLocationGraph rejects a generation whose location
+// files form no traversable map — two or more locations, none of which
+// lists a single connection. `travel_to` (internal/server/location.go)
+// is only ever legal along a location's real connections, so a
+// fully-disconnected set is unusable at the table, not merely thin. This
+// is the "gates over prompting" backstop for a failure the prompt asks
+// against but every pack in the first generated library still hit: a
+// single isolated location (a legitimate dead-end room) is fine; a whole
+// chapter of them is not.
+func validateGeneratedLocationGraph(files []GeneratedFile) error {
+	locations := 0
+	connected := 0
+	for _, f := range files {
+		if !strings.HasPrefix(f.Path, "locations/") {
+			continue
+		}
+		var fm struct {
+			Connections []string `yaml:"connections"`
+		}
+		if _, err := frontmatter.Parse([]byte(f.Content), &fm); err != nil {
+			continue // a file that won't parse is caught by LoadPack later
+		}
+		locations++
+		if len(fm.Connections) > 0 {
+			connected++
+		}
+	}
+	if locations >= 2 && connected == 0 {
+		return fmt.Errorf("campaignpack: the %d generated locations form no traversable map — every location must list at least one entry in its connections front matter", locations)
+	}
+	return nil
 }
 
 // validateSupplementalFiles checks the shape required of any generation

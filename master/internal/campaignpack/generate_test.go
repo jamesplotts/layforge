@@ -593,3 +593,107 @@ Garrick speaks slowly.
 		t.Errorf("NPCs = %+v, want the voice field's embedded colon preserved after repair", pack.NPCs)
 	}
 }
+
+// twoConnectedLocations is a minimal valid first-chapter location pair —
+// used by tests that need Generate to get past validateGeneratedLocationGraph
+// so they can assert something else.
+func twoConnectedLocations() []campaignpack.GeneratedFile {
+	return []campaignpack.GeneratedFile{
+		{Path: "locations/gate.md", Content: "---\nid: gate\nconnections: [square]\n---\nA gate.\n"},
+		{Path: "locations/square.md", Content: "---\nid: square\nconnections: [gate]\n---\nA square.\n"},
+	}
+}
+
+func TestGenerate_NormalizesStatBlockRefs(t *testing.T) {
+	cases := map[string]string{
+		"seer":     "stat_block_ref: SRD Wizard",
+		"warden":   "stat_block_ref: \"SRD Human Commoner\"",
+		"captain":  "stat_block_ref: SRD Veteran (use SRD Veteran base statistics; add Stealth)",
+		"chief":    "stat_block_ref: SRD Goblin",
+		"acolyte2": "stat_block_ref: cleric",
+	}
+	files := twoConnectedLocations()
+	files = append(files, campaignpack.GeneratedFile{Path: "campaign.md", Content: validCampaignMD()})
+	for id, line := range cases {
+		files = append(files, campaignpack.GeneratedFile{
+			Path:    "npcs/" + id + ".md",
+			Content: "---\nid: " + id + "\nlocation: gate\n" + line + "\n---\nBody.\n",
+		})
+	}
+	provider := &fakeLLMProvider{response: writePackToolCall(t, files)}
+
+	got, err := campaignpack.Generate(context.Background(), provider, "test-model", campaignpack.GenerateRequest{
+		Description: "A test.", MinLevel: 1, MaxLevel: 3,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	want := map[string]string{
+		"npcs/seer.md":     `stat_block_ref: "SRD Mage"`,
+		"npcs/warden.md":   `stat_block_ref: "SRD Commoner"`,
+		"npcs/captain.md":  `stat_block_ref: "SRD Veteran"`,
+		"npcs/chief.md":    `stat_block_ref: "SRD Goblin"`,
+		"npcs/acolyte2.md": `stat_block_ref: "SRD Priest"`,
+	}
+	byPath := map[string]string{}
+	for _, f := range got {
+		byPath[f.Path] = f.Content
+	}
+	for path, wantLine := range want {
+		if !strings.Contains(byPath[path], wantLine) {
+			t.Errorf("%s: want a line %q, got:\n%s", path, wantLine, byPath[path])
+		}
+	}
+}
+
+func TestGenerate_RejectsDisconnectedLocationGraph(t *testing.T) {
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: validCampaignMD()},
+		{Path: "locations/a.md", Content: "---\nid: a\n---\nRoom A.\n"},
+		{Path: "locations/b.md", Content: "---\nid: b\n---\nRoom B.\n"},
+	})}
+
+	_, err := campaignpack.Generate(context.Background(), provider, "test-model", campaignpack.GenerateRequest{
+		Description: "A test.", MinLevel: 1, MaxLevel: 3,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no traversable map") {
+		t.Fatalf("Generate() error = %v, want a disconnected-map rejection", err)
+	}
+}
+
+func TestGenerate_SingleIsolatedLocation_Allowed(t *testing.T) {
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: validCampaignMD()},
+		{Path: "locations/only-room.md", Content: "---\nid: only-room\n---\nThe one room.\n"},
+	})}
+
+	if _, err := campaignpack.Generate(context.Background(), provider, "test-model", campaignpack.GenerateRequest{
+		Description: "A test.", MinLevel: 1, MaxLevel: 3,
+	}); err != nil {
+		t.Fatalf("Generate() error = %v, want a single isolated location to be allowed", err)
+	}
+}
+
+func TestCampaignGenerationSystemPrompt_RequiresTheHardenedFields(t *testing.T) {
+	provider := &fakeLLMProvider{response: writePackToolCall(t, []campaignpack.GeneratedFile{
+		{Path: "campaign.md", Content: validCampaignMD()},
+	})}
+	if _, err := campaignpack.Generate(context.Background(), provider, "test-model", campaignpack.GenerateRequest{
+		Description: "x", MinLevel: 1, MaxLevel: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prompt := provider.lastReq.SystemPrompt
+	for _, want := range []string{
+		"content_warnings",
+		"SRD Mage",   // the allow-list is spelled out
+		"SRD Priest", // ditto
+		"mandatory",  // connections framed as required
+		"connections are mutual",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt missing %q", want)
+		}
+	}
+}
