@@ -215,7 +215,7 @@ func (s *SQLiteEventStore) DeleteCampaign(ctx context.Context, campaignID string
 		return fmt.Errorf("store: checking campaign archived status: %w", err)
 	}
 
-	for _, table := range []string{"characters", "events", "campaign_settings", "campaign_meta", "combat_state"} {
+	for _, table := range []string{"characters", "events", "campaign_settings", "campaign_meta", "combat_state", "safety_flags"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE campaign_id = ?`, campaignID); err != nil {
 			return fmt.Errorf("store: deleting campaign rows from %s: %w", table, err)
 		}

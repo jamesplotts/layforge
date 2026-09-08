@@ -146,6 +146,12 @@ var initStatements = []string{
 		created_at     TEXT NOT NULL
 	);`,
 	`CREATE INDEX IF NOT EXISTS idx_pregens_campaign ON pregens (campaign_id);`,
+	`CREATE TABLE IF NOT EXISTS safety_flags (
+		campaign_id TEXT NOT NULL,
+		topic       TEXT NOT NULL,
+		flagged_at  TEXT NOT NULL,
+		PRIMARY KEY (campaign_id, topic)
+	);`,
 }
 
 // SQLiteEventStore is the SQLite-backed EventStore — Master's

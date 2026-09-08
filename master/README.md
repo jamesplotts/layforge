@@ -1989,6 +1989,48 @@ request afterward: 12 files, no validation error, no repetition,
 legally clean — a real usable pack, at real usable quality, from a
 second independent model on the first attempt with the fix applied.
 
+**New**: design doc §9.2's safety tools now actually constrain
+generation, not just interrupt the scene. `safety.flag` already
+broadcast a `safety.flag_broadcast` to the whole table (sender
+included, sender not named) and still does; what was missing was the
+"injected as a hard constraint into the DM's next generation" half.
+Two sources of standing constraint now feed every narrative pass
+(`safetyConstraintsContextText`, `internal/server/safety.go`):
+
+- **A player's raised flags.** A `safety.flag` carrying a topic is
+  persisted via a new `store.SafetyStore` (`safety_flags` table,
+  `INSERT ... ON CONFLICT DO NOTHING` so re-flagging is a no-op) and
+  accumulates for the life of the campaign — so it survives a Master
+  restart, the same reason `combat_state` does. A topicless flag is
+  still only the interrupt; there's nothing to carry forward. Persist
+  failure is logged, never surfaced — the time-critical interrupt has
+  already happened and the X-card itself must not appear to fail.
+- **The bound campaign pack's `lines:`/`veils:` front matter** (§6.4's
+  "standing constraints from session zero"). `campaignpack.LoadPack`
+  parsed these from day one but nothing read `Pack.Lines`/`Pack.Veils`
+  until now — the same "real reader finally exists" shape as
+  `IItem.Value` / `Pack.NPCs` before their own passes. Read fresh from
+  the pack every turn since they can't change during play.
+
+The combined block leads `slowPassGroundingContext` (before the acting
+character, the roster, the action itself — an absolute limit should be
+read first), and both slow-pass system prompts gained an explicit rule:
+the mechanics pass resolves nothing and creates no NPC that involves
+listed material; the narration pass never narrates, names, or alludes
+to it and instead narrates around it without drawing attention to the
+omission. The lean fast pass gets it too — it can otherwise echo a
+line-crossing detail straight back out of the player's own phrasing.
+`safetyConstraintsContextText` is best-effort/`""` in the same
+never-fail-a-turn-over-optional-context shape `spotlightContextText`/
+`locationContextText` use, but each of its two sources is independent —
+one failing doesn't silently drop the other. Covered by
+`internal/store/sqlite_safety_test.go` (add/list/dedup/scoping) and
+`internal/server/safety_internal_test.go` (each source alone, combined,
+nil-store, topicless-persists-nothing, and the grounding-context
+ordering). Not built here, flagged rather than assumed: no admin-panel
+view of or way to clear a campaign's raised flags yet — "going forward"
+is currently permanent, which is the safe direction to be wrong in.
+
 ## Layout
 
 ```

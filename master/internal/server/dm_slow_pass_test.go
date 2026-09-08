@@ -52,7 +52,7 @@ func newTestServerWithLLMAndSystemEngine(t *testing.T, llmProvider llm.Provider,
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP, nil, st, st, st, nil, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyP, nil, st, st, st, nil, nil, nil, nil, session.NewHub()).Handler())
 	return ts, st
 }
 
@@ -73,7 +73,7 @@ func newTestServerWithLLMSystemEngineAndImageGen(t *testing.T, llmProvider llm.P
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, nil, imageGenProvider, st, st, st, nil, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, nil, imageGenProvider, st, st, st, nil, nil, nil, nil, session.NewHub()).Handler())
 	return ts, st
 }
 
@@ -93,7 +93,7 @@ func newTestServerWithLLMSystemEngineImageGenAndPolicy(t *testing.T, llmProvider
 	if fakeEngine != nil {
 		systemEngineClient = fakeEngine
 	}
-	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyProvider, imageGenProvider, st, st, st, nil, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, st, llmProvider, "test-model", nil, systemEngineClient, st, policyProvider, imageGenProvider, st, st, st, nil, nil, nil, nil, session.NewHub()).Handler())
 	return ts, st
 }
 
@@ -126,7 +126,7 @@ func TestServe_NarrativePlayerInput_SlowPass_NoSystemEngine_OmitsToolsAndBroadca
 	// This test's actual intent is narrower: a deployment with nothing
 	// but an LLM configured gets no tools at all.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, fakeLLM, "test-model", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, fakeLLM, "test-model", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-slow", "player-a")
@@ -788,7 +788,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CampaignPackLoreTools_AvailableWith
 	defer st.Close()
 	// Deliberately no system engine client — proving campaignPackLoreTools
 	// (unlike campaignPackStateTools) never needed one.
-	ts := httptest.NewServer(server.New(logger, st, fakeLLM, "test-model", nil, nil, st, nil, nil, st, st, st, nil, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, st, fakeLLM, "test-model", nil, nil, st, nil, nil, st, st, st, nil, nil, nil, nil, session.NewHub()).Handler())
 	defer ts.Close()
 	bindPack(t, st, "campaign-lore-no-engine")
 	seedCharacter(t, st, "char-a", "campaign-lore-no-engine", "player-a")

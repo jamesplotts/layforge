@@ -247,6 +247,16 @@ type Server struct {
 	// around); see adminTermsKey*'s own doc comment for the matching
 	// key-name duplication this implies.
 	adminSettings store.AdminSettingsStore
+
+	// safety persists design doc §9.2's safety-tool flags: a topic a
+	// player invoked the safety tool on becomes a standing "do not
+	// narrate this" constraint the DM passes read every turn (safety.go).
+	// nil disables persistence of raised flags — the scene interrupt
+	// still broadcasts, and campaign-pack lines/veils still apply, but a
+	// topicful safety.flag then only constrains generation until a
+	// restart. Never nil in practice; main.go passes the same events
+	// value as every other store.XStore parameter here.
+	safety store.SafetyStore
 }
 
 // New creates a Server. logger must not be nil; pass slog.Default() if
@@ -289,8 +299,10 @@ type Server struct {
 // approve/reject action (design doc §9.4) — never nil in practice.
 // adminSettings backs the operator-terms gate (terms.go) — never nil in
 // practice, main.go passes the same events value as every other
-// store.XStore parameter here.
-func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider, pregenStore store.PregenStore, adminSettings store.AdminSettingsStore, hub *session.Hub) *Server {
+// store.XStore parameter here. safetyStore persists design doc §9.2's
+// raised safety-tool flags (safety.go); nil keeps them in effect only
+// until a restart, but never nil in practice for the same reason.
+func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider, narrativeModel string, authProvider auth.Provider, systemEngineClient systemenginepb.SystemEngineClient, characterStore store.CharacterStore, policyProvider policy.Provider, imageGenProvider imagegen.Provider, combatStateStore store.CombatStateStore, campaignPackStore store.CampaignPackStore, vehicleStore store.VehicleStore, transcriptionProvider transcription.Provider, pregenStore store.PregenStore, adminSettings store.AdminSettingsStore, safetyStore store.SafetyStore, hub *session.Hub) *Server {
 	return &Server{
 		logger:           logger,
 		events:           events,
@@ -312,6 +324,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		pregens:          pregenStore,
 		creationSessions: make(map[string]creationSession),
 		adminSettings:    adminSettings,
+		safety:           safetyStore,
 	}
 }
 
@@ -688,6 +701,15 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 // deliberately not naming who sent it: the broadcast is attributed to
 // masterSenderID like every other Master-originated message, not to the
 // flagging client.
+//
+// When the flag carries a topic, it also becomes a standing constraint
+// (§9.2: "injected as a hard constraint into the DM's next generation")
+// — persisted via s.safety so it outlives a restart and read back every
+// turn by safetyConstraintsContextText. A topicless flag has nothing to
+// constrain going forward, so it's only the interrupt. Persistence
+// failure is logged, not surfaced: the interrupt — the time-critical
+// half — has already happened, and a self-hoster whose safety store is
+// broken should not have the X-card itself appear to fail.
 func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic string) error {
 	msg, err := newMessage(campaignID, protocol.MessageTypeSafetyFlagBroadcast, protocol.SafetyFlagBroadcastPayload{
 		Topic: topic,
@@ -696,6 +718,13 @@ func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic stri
 		return err
 	}
 	recordEvent(ctx, s, msg)
+
+	if topic != "" && s.safety != nil {
+		if err := s.safety.AddSafetyFlag(ctx, campaignID, topic); err != nil {
+			s.logger.Error("failed to persist safety flag as a standing constraint", "error", err, "campaign_id", campaignID, "topic", topic)
+		}
+	}
+
 	return broadcastMessage(s, msg)
 }
 
@@ -703,13 +732,15 @@ func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic stri
 // fast pass: render the player's stated action/dialogue in third-person
 // prose, faithfully — not the DM/NPC reaction, and not a ruling on
 // whether the action succeeds. That's the slow pass's job (design doc
-// §7's second beat), which isn't implemented — see renderPlayerBubble.
+// §7's second beat — runSlowPass, launched from renderPlayerBubble once
+// this pass's bubble is out).
 const narrativeFastPassSystemPrompt = `You are rendering a tabletop RPG player's stated action or dialogue into brief, third-person, present-tense narrative prose for a shared chat log.
 Rules:
 - Describe only what the player explicitly stated — do not invent new events, dialogue, or outcomes.
 - Do not resolve success or failure of any action; that is decided elsewhere.
 - Keep it to 1-3 sentences.
 - Write in the tone of a dungeon master narrating at the table.
+- If a "Safety constraints" section is present, it is an absolute limit set by the table. Do not include any of the listed material in your rendering even if the player's stated action names it — render the rest of what they stated and leave that element out entirely.
 - Output only the narrated prose, nothing else — no preamble, no quotation marks around it.`
 
 // renderPlayerBubble runs the narrative-transform pipeline's fast pass
@@ -720,18 +751,26 @@ Rules:
 // detached goroutine — the DM/NPC reaction, including any tool calls
 // (design doc §8), can take much longer than the fast pass and must not
 // block this connection's read loop from handling the player's next
-// message while it runs. No campaign/character context beyond the
-// player's own input is fed to either pass, since no persistent
-// campaign-context assembly exists in Master yet to feed it.
+// message while it runs. The fast pass is deliberately kept lean — it
+// gets only the player's own input plus, when any are in effect, the
+// campaign's safety constraints (§9.2), since it can otherwise echo a
+// line-crossing detail straight back out of the player's phrasing. The
+// slow pass (runSlowPass) is where the fuller campaign/character context
+// is assembled.
 func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, campaignID string, input protocol.NarrativePlayerInputMessage) error {
 	if s.llm == nil {
 		return s.sendError(ctx, conn, campaignID, input.MessageID, errors.New("narrative rendering unavailable: no LLM provider configured"))
 	}
 
+	userPrompt := input.Payload.Text
+	if constraints := s.safetyConstraintsContextText(ctx, campaignID); constraints != "" {
+		userPrompt = constraints + "\nPlayer action to render: " + input.Payload.Text
+	}
+
 	completion, err := s.llm.Complete(ctx, llm.CompletionRequest{
 		Model:        s.narrativeModel,
 		SystemPrompt: withMaturityConstraint(narrativeFastPassSystemPrompt, s.campaignPolicy(ctx, campaignID)),
-		UserPrompt:   input.Payload.Text,
+		UserPrompt:   userPrompt,
 	})
 	if err != nil {
 		return s.sendError(ctx, conn, campaignID, input.MessageID, fmt.Errorf("rendering narrative: %w", err))

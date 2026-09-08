@@ -51,7 +51,7 @@ func TestServe_NarrativePlayerInput_SlowPass_ListVehicles_NotConfigured_ReturnsF
 	fakeLLM := toolCallLLM("list_vehicles", `{}`)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	// No vehicles store at all — a deployment that never configured one.
-	ts := httptest.NewServer(server.New(logger, nil, fakeLLM, "test-model", nil, &fakeSystemEngineClient{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, fakeLLM, "test-model", nil, &fakeSystemEngineClient{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-vehicles-unconfigured", "player-a")
@@ -445,7 +445,7 @@ func TestServe_VehicleImport_MissingFields_ReturnsSystemError(t *testing.T) {
 
 func TestServe_VehicleImport_NotConfigured_ReturnsSystemError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	ts := httptest.NewServer(server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
+	ts := httptest.NewServer(server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-vehicle-import-unconfigured", "player-a")

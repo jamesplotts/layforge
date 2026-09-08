@@ -29,7 +29,7 @@ import (
 func TestServe_HubKick_ClosesRealConnection(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	hub := session.NewHub()
-	srv := New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, hub)
+	srv := New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, hub)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -93,7 +93,7 @@ func TestServe_HubKick_ClosesRealConnection(t *testing.T) {
 func TestServe_AfterDisconnect_HubUnregistersPromptly(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	hub := session.NewHub()
-	srv := New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, hub)
+	srv := New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, hub)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

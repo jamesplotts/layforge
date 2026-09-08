@@ -33,7 +33,7 @@ func newTermsGateTestServer(t *testing.T) (*httptest.Server, *store.SQLiteEventS
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	srv := server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, st, session.NewHub())
+	srv := server.New(logger, nil, nil, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, st, nil, session.NewHub())
 	return httptest.NewServer(srv.Handler()), st
 }
 
