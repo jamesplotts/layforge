@@ -19,6 +19,16 @@ import (
 // outside the four files/directories a real pack actually uses.
 var allowedGeneratedFilePath = regexp.MustCompile(`^(campaign\.md|(?:locations|npcs|encounters)/[a-z0-9][a-z0-9-]*\.md)$`)
 
+// IsAllowedPackFilePath reports whether p — a pack-relative, forward-
+// slashed path — is one the pack format permits: campaign.md, or a
+// single markdown file directly under locations/, npcs/, or encounters/.
+// It is the same allow-list WriteAndValidate applies to generated files,
+// exposed for the library installer (InstallLibrary), which validates
+// every archive entry against the identical rule.
+func IsAllowedPackFilePath(p string) bool {
+	return allowedGeneratedFilePath.MatchString(p)
+}
+
 // WriteAndValidate writes files under root/slug (see PackDirFor for the
 // sandboxing this depends on), then runs the real LoadPack against the
 // result — the exact same gate a hand-authored pack goes through when a
