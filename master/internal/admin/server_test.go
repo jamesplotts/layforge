@@ -26,7 +26,7 @@ func newTestServer(t *testing.T, restartRequested chan struct{}) (*admin.Server,
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
 	seed := map[string]string{admin.SystemKeyAddr: ":8080", admin.SystemKeyLLMModel: "seed-model"}
-	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", seed, restartRequested, nil, "", "", session.NewHub())
+	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", seed, restartRequested, nil, "", "", "", session.NewHub())
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return srv, httpSrv
@@ -40,7 +40,7 @@ func newTestServerWithLLM(t *testing.T, llmProvider llm.Provider) (*admin.Server
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
-	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", nil, nil, llmProvider, "test-model", t.TempDir(), session.NewHub())
+	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", nil, nil, llmProvider, "test-model", t.TempDir(), "", session.NewHub())
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return srv, httpSrv

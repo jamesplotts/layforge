@@ -446,7 +446,7 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		policyProvider = admin.NewCampaignPackPolicyProvider(events, tiers, policyProvider)
 		policyProvider = admin.NewPolicyProvider(events, policyProvider)
 		restartRequested = make(chan struct{}, 1)
-		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, llmProvider, llmModel, campaignPacksDir, hub)
+		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, llmProvider, llmModel, campaignPacksDir, registryURL, hub)
 	}
 
 	// imageGenProvider stays nil (no image generation, the

@@ -72,6 +72,11 @@ const el = {
   generatePackFiles: document.getElementById("generate-pack-files"),
   generatePackSave: document.getElementById("generate-pack-save"),
   generatePackSaveStatus: document.getElementById("generate-pack-save-status"),
+  installLibraryUrl: document.getElementById("install-library-url"),
+  installLibraryOverwrite: document.getElementById("install-library-overwrite"),
+  installLibrarySubmit: document.getElementById("install-library-submit"),
+  installLibraryStatus: document.getElementById("install-library-status"),
+  installLibraryResults: document.getElementById("install-library-results"),
   pregenTableBody: document.getElementById("pregen-table-body"),
   pregenId: document.getElementById("pregen-id"),
   pregenName: document.getElementById("pregen-name"),
@@ -490,6 +495,49 @@ el.generatePackSave.addEventListener("click", async () => {
   // is that same existing "Bind Pack" button, not new bind logic.
   el.campaignPackDir.value = data.pack_dir;
   setStatus(el.generatePackSaveStatus, `Saved to ${data.pack_dir} — select a campaign above and click "Bind Pack" to use it.`);
+});
+
+el.installLibrarySubmit.addEventListener("click", async () => {
+  el.installLibrarySubmit.disabled = true;
+  el.installLibraryResults.hidden = true;
+  el.installLibraryResults.replaceChildren();
+  setStatus(el.installLibraryStatus, "Downloading and unpacking…");
+  try {
+    const resp = await fetch("/api/campaign-packs/install-library", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: el.installLibraryUrl.value.trim(),
+        overwrite: el.installLibraryOverwrite.checked,
+      }),
+    });
+    if (!resp.ok) {
+      setStatus(el.installLibraryStatus, `Failed: ${await errorText(resp)}`, true);
+      return;
+    }
+    const data = await resp.json();
+    const results = data.results || [];
+    const counts = { installed: 0, skipped_exists: 0, failed: 0 };
+    for (const res of results) {
+      if (res.status in counts) counts[res.status]++;
+      const li = document.createElement("li");
+      li.classList.add(`install-result-${res.status}`);
+      li.textContent = res.detail
+        ? `${res.slug} — ${res.status}: ${res.detail}`
+        : `${res.slug} — ${res.status}`;
+      el.installLibraryResults.appendChild(li);
+    }
+    el.installLibraryResults.hidden = results.length === 0;
+    setStatus(
+      el.installLibraryStatus,
+      `From ${data.source}: ${counts.installed} installed, ${counts.skipped_exists} already present, ${counts.failed} failed.`,
+      counts.failed > 0,
+    );
+  } catch (err) {
+    setStatus(el.installLibraryStatus, `Failed: ${err}`, true);
+  } finally {
+    el.installLibrarySubmit.disabled = false;
+  }
 });
 
 // --- Pregens tab ---

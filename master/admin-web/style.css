@@ -386,3 +386,38 @@ button.test-failure {
 .terms-modal-card button {
   align-self: flex-end;
 }
+
+/* "Install the campaign pack library" — a checkbox row and a per-pack
+   results list, both inside #campaign-context rather than a .tab-panel,
+   so they need their own rules. */
+.create-campaign-form label.checkbox-label {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.create-campaign-form label.checkbox-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.install-results {
+  flex: 1 1 100%;
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.install-results .install-result-installed {
+  color: var(--success);
+}
+
+.install-results .install-result-skipped_exists {
+  color: var(--text-dim);
+}
+
+.install-results .install-result-failed {
+  color: var(--danger);
+}

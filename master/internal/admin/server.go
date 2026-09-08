@@ -4,14 +4,17 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -140,6 +143,18 @@ type Server struct {
 	// packs; binding still accepts any path via the existing
 	// PUT /api/campaigns/{id}/pack, unaffected by this field.
 	campaignPacksDir string
+	// registryURL is the same layforge.org-style registry base URL
+	// main.go's heartbeat loop uses (the -registry-url flag), reused here
+	// only to derive the default download source for the "Install the
+	// campaign pack library" flow (handleInstallCampaignPackLibrary) —
+	// empty falls back to https://layforge.org, and the operator can
+	// always override the URL in the panel regardless.
+	registryURL string
+	// httpClient fetches the pack-library archive for
+	// handleInstallCampaignPackLibrary. A dedicated client with its own
+	// timeout, not http.DefaultClient, so a slow or hung download can't
+	// pin the request forever.
+	httpClient *http.Client
 }
 
 // New creates a Server. addr is this admin listener's own bind address
@@ -149,7 +164,7 @@ type Server struct {
 // with; a key GetSystemSettings has never stored an override for falls
 // back to this map (see handleGetSystem). restartRequested is the
 // send-only end of a channel main.go's run() selects on.
-func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, characters store.CharacterStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}, llmProvider llm.Provider, llmModel, campaignPacksDir string, hub *session.Hub) *Server {
+func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, characters store.CharacterStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}, llmProvider llm.Provider, llmModel, campaignPacksDir, registryURL string, hub *session.Hub) *Server {
 	return &Server{
 		logger:           logger,
 		store:            s,
@@ -164,6 +179,8 @@ func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.Cam
 		llmProvider:      llmProvider,
 		llmModel:         llmModel,
 		campaignPacksDir: campaignPacksDir,
+		registryURL:      registryURL,
+		httpClient:       &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -185,6 +202,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/campaigns/{id}/pack", s.requireSameOrigin(s.handlePutCampaignPack))
 	mux.HandleFunc("POST /api/campaign-packs/generate", s.requireSameOrigin(s.handleGenerateCampaignPack))
 	mux.HandleFunc("POST /api/campaign-packs/save", s.requireSameOrigin(s.handleSaveCampaignPack))
+	mux.HandleFunc("POST /api/campaign-packs/install-library", s.requireSameOrigin(s.handleInstallCampaignPackLibrary))
 	mux.HandleFunc("GET /api/campaigns/{id}/pregens", s.handleListPregens)
 	mux.HandleFunc("PUT /api/campaigns/{id}/pregens", s.requireSameOrigin(s.handlePutPregen))
 	mux.HandleFunc("DELETE /api/campaigns/{id}/pregens/{pregenId}", s.requireSameOrigin(s.handleDeletePregen))
@@ -531,6 +549,135 @@ func (s *Server) handleSaveCampaignPack(w http.ResponseWriter, r *http.Request) 
 	default:
 		s.writeErrorMsg(w, http.StatusBadRequest, `invalid mode: want "", "chapter", or "side_quest"`)
 	}
+}
+
+// defaultPackLibraryURL is the download source
+// handleInstallCampaignPackLibrary falls back to when neither the request
+// body nor -registry-url names one — the project's own public registry.
+const defaultPackLibraryURL = "https://layforge.org"
+
+// packLibraryArchivePath is appended to a registry base URL to reach the
+// hosted pack-library zip (registry/web/downloads/).
+const packLibraryArchivePath = "/downloads/campaign-pack-library.zip"
+
+// maxPackLibraryDownloadBytes caps the archive this endpoint will pull
+// over HTTP, matching campaignpack's own internal archive-size limit so a
+// download that would be rejected on unpack is rejected before it's even
+// fully read.
+const maxPackLibraryDownloadBytes = 32 << 20
+
+// installLibraryRequestDTO is POST /api/campaign-packs/install-library's
+// body. URL is optional — empty derives the source from -registry-url
+// (or defaultPackLibraryURL). Overwrite replaces packs whose slug
+// directory already exists; without it those are reported skipped.
+type installLibraryRequestDTO struct {
+	URL       string `json:"url"`
+	Overwrite bool   `json:"overwrite"`
+}
+
+// installLibraryResultDTO is one pack's outcome, mirroring
+// campaignpack.InstallResult. Status is one of "installed",
+// "skipped_exists", "failed"; detail is set only for "failed".
+type installLibraryResultDTO struct {
+	Slug   string `json:"slug"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type installLibraryResponseDTO struct {
+	// Source is the URL the archive was actually fetched from, echoed
+	// back so the panel can show which registry answered.
+	Source  string                    `json:"source"`
+	Results []installLibraryResultDTO `json:"results"`
+}
+
+// handleInstallCampaignPackLibrary downloads a pack-library archive and
+// unpacks it into s.campaignPacksDir via campaignpack.InstallLibrary,
+// which re-validates every pack with the same LoadPack gate a
+// hand-authored or generated pack goes through and enforces the archive
+// path/size limits (zip-slip, zip-bomb) in code — this handler never
+// trusts the archive's contents. Each pack's outcome is reported
+// independently; a single unparseable pack does not fail the request.
+func (s *Server) handleInstallCampaignPackLibrary(w http.ResponseWriter, r *http.Request) {
+	if s.campaignPacksDir == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "no campaign-packs directory is configured on this Master")
+		return
+	}
+
+	var dto installLibraryRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil && !errors.Is(err, io.EOF) {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+
+	source, err := s.resolvePackLibraryURL(dto.URL)
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	archive, err := s.downloadPackLibrary(r.Context(), source)
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	results, err := campaignpack.InstallLibrary(bytes.NewReader(archive), int64(len(archive)), s.campaignPacksDir, campaignpack.InstallOptions{Overwrite: dto.Overwrite})
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	out := installLibraryResponseDTO{Source: source, Results: make([]installLibraryResultDTO, len(results))}
+	for i, res := range results {
+		out.Results[i] = installLibraryResultDTO{Slug: res.Slug, Status: string(res.Status), Detail: res.Detail}
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+// resolvePackLibraryURL picks the archive download URL: an explicit,
+// absolute http(s) URL from the request body if given, otherwise
+// -registry-url (or defaultPackLibraryURL) plus packLibraryArchivePath.
+func (s *Server) resolvePackLibraryURL(requested string) (string, error) {
+	if requested != "" {
+		u, err := url.Parse(requested)
+		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
+			return "", errors.New("url must be an absolute http or https URL")
+		}
+		return requested, nil
+	}
+	base := s.registryURL
+	if base == "" {
+		base = defaultPackLibraryURL
+	}
+	return strings.TrimRight(base, "/") + packLibraryArchivePath, nil
+}
+
+// downloadPackLibrary GETs source and returns its body, capped at
+// maxPackLibraryDownloadBytes. A non-2xx response, an over-cap body, or a
+// transport error is returned as an error for the caller to surface as a
+// 502.
+func (s *Server) downloadPackLibrary(ctx context.Context, source string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building download request: %w", err)
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("downloading %s: %w", source, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("downloading %s: server returned %s", source, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPackLibraryDownloadBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", source, err)
+	}
+	if len(body) > maxPackLibraryDownloadBytes {
+		return nil, fmt.Errorf("archive at %s is larger than the %d-byte limit", source, maxPackLibraryDownloadBytes)
+	}
+	return body, nil
 }
 
 // pregenDTO is the Pregens tab's wire shape (design doc §9.4) — ID is
