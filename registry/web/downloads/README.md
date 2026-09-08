@@ -1,8 +1,19 @@
-# Campaign Pack Library
+# Campaign Pack Downloads
 
-`campaign-pack-library.zip` is the bundle the [layforge.org](https://layforge.org)
-homepage links to and that Master's admin panel downloads (Campaign tab →
-*Install the campaign pack library from layforge.org*).
+Two committed bundles the [layforge.org](https://layforge.org) homepage
+links to:
+
+- **`campaign-pack-library.zip`** — 21 ready-to-run packs. Master's admin
+  panel downloads this one (Campaign tab → *Install the campaign pack
+  library from layforge.org*), or unzip it into a `-campaign-packs-dir`
+  by hand.
+- **`campaign-pack-template.zip`** — the single `TEMPLATE/` authoring
+  skeleton (same as `campaign-packs/TEMPLATE/` in the repo). Unzip it,
+  rename the folder to your pack's slug, and follow
+  [`docs/authoring-campaign-packs.md`](../../../docs/authoring-campaign-packs.md).
+  Not meant for the bulk installer — it's a starting point to copy.
+
+## campaign-pack-library.zip
 
 ## What's in it
 
@@ -56,12 +67,19 @@ Master's `-campaign-packs-dir` at that directory.
 
 ## Regenerating
 
-The zip is a committed build artifact, not generated at deploy time. To
-rebuild it after changing the source packs, from the directory holding
-the `<slug>/` pack directories:
+Both zips are committed build artifacts, not generated at deploy time.
+
+`campaign-pack-template.zip` — from the repo's `campaign-packs/` directory:
+
+```
+zip -rq campaign-pack-template.zip TEMPLATE -x '.*'
+```
+
+`campaign-pack-library.zip` — from the directory holding the `<slug>/`
+pack directories:
 
 ```
 zip -rq campaign-pack-library.zip */ -x '.*'
 ```
 
-and move the result to `registry/web/downloads/`.
+Move the result to `registry/web/downloads/` in either case.

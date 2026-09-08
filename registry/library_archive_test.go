@@ -15,8 +15,12 @@ import (
 )
 
 // packLibraryArchivePath is the committed pack-library zip the homepage
-// links to and Master's admin panel downloads.
-var packLibraryArchivePath = filepath.Join("web", "downloads", "campaign-pack-library.zip")
+// links to and Master's admin panel downloads; packTemplateArchivePath
+// is the single-pack authoring template zip the homepage also links.
+var (
+	packLibraryArchivePath  = filepath.Join("web", "downloads", "campaign-pack-library.zip")
+	packTemplateArchivePath = filepath.Join("web", "downloads", "campaign-pack-template.zip")
+)
 
 func TestPackLibraryArchive_PresentAndShapedLikeAPackLibrary(t *testing.T) {
 	info, err := os.Stat(packLibraryArchivePath)
@@ -48,23 +52,54 @@ func TestPackLibraryArchive_PresentAndShapedLikeAPackLibrary(t *testing.T) {
 	}
 }
 
-func TestStaticFileServer_ServesThePackLibraryArchive(t *testing.T) {
-	if _, err := os.Stat(packLibraryArchivePath); err != nil {
-		t.Skipf("archive not built yet: %v", err)
+func TestPackTemplateArchive_PresentAndValid(t *testing.T) {
+	info, err := os.Stat(packTemplateArchivePath)
+	if err != nil {
+		t.Fatalf("template archive missing (%s): %v", packTemplateArchivePath, err)
 	}
+	if info.Size() == 0 {
+		t.Fatal("template archive is empty")
+	}
+	zr, err := zip.OpenReader(packTemplateArchivePath)
+	if err != nil {
+		t.Fatalf("template archive is not a valid zip: %v", err)
+	}
+	defer zr.Close()
+
+	var sawCampaign bool
+	for _, f := range zr.File {
+		if strings.Contains(f.Name, "..") || strings.HasPrefix(f.Name, "/") {
+			t.Errorf("template archive entry has an unsafe path: %q", f.Name)
+		}
+		if strings.HasSuffix(f.Name, "/campaign.md") {
+			sawCampaign = true
+		}
+	}
+	if !sawCampaign {
+		t.Error("template archive has no campaign.md")
+	}
+}
+
+func TestStaticFileServer_ServesTheArchives(t *testing.T) {
 	srv := httptest.NewServer(http.FileServer(http.Dir("web")))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/downloads/campaign-pack-library.zip")
-	if err != nil {
-		t.Fatalf("GET archive: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	n, _ := io.Copy(io.Discard, resp.Body)
-	if n == 0 {
-		t.Error("served archive body was empty")
+	for _, name := range []string{"campaign-pack-library.zip", "campaign-pack-template.zip"} {
+		if _, err := os.Stat(filepath.Join("web", "downloads", name)); err != nil {
+			t.Skipf("%s not built yet: %v", name, err)
+		}
+		resp, err := http.Get(srv.URL + "/downloads/" + name)
+		if err != nil {
+			t.Fatalf("GET %s: %v", name, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("%s status = %d, want 200", name, resp.StatusCode)
+		}
+		n, _ := io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if n == 0 {
+			t.Errorf("%s served body was empty", name)
+		}
 	}
 }
