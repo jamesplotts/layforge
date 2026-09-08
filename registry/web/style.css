@@ -82,6 +82,16 @@ main {
   padding-left: 20px;
 }
 
+.download-link {
+  display: inline-block;
+  padding: 9px 16px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
 code {
   background: var(--bg);
   border: 1px solid var(--panel-border);
