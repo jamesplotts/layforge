@@ -2068,6 +2068,34 @@ content). Not done: no lint/warning surface for the softer
 should comply; a disconnected map is the only failure hard enough to
 reject a whole generation over.
 
+**New: `internal/dungeon`** — a multi-level explorable-dungeon generator,
+ahead of its consumer. Design doc §11's V3 names a Gold Box / SSI-style
+first-person grid-crawler viewport that James plans to build; the
+protocol already carries what it needs (token position, facing,
+room-adjacency), and this is the generator half. It's a clean-room take
+on the 1979 DMG Appendix A structure — roll each step: passage /
+chamber / stairs / dead end; size the chamber; roll its exits — with
+entirely original probabilities, ported from an older VB implementation
+of the same idea (`Across Worlds/MapControl`). Rooms and corridors grow
+outward from a frontier of expansion points; staircases mint deeper
+levels (capped by `MaxLevels`, always paired up/down); every carve
+extends from an already-walkable cell, so each level is connected from
+its arrival point by construction, and the one-cell border is never
+carved. Chambers scatter a few features (fountain / statue / shrine /
+chest). `RoomSize` (cramped / average / huge) biases chamber size with
+three monotonic-mean distributions. Deliberately standalone: no
+consumer, no System Engine calls, no protocol surface — sibling package
+`combatmap` still generates the single tactical map; this generates a
+whole dungeon to walk. `Level.String()` renders ASCII for debugging.
+Covered by `dungeon_test.go` / `generator_test.go`: 30-seed
+per-level connectivity flood-fill, stair-pair reciprocity, `MaxLevels`
+respected, determinism, the one-cell border, `RoomSize` monotonicity,
+invalid-options-return-nil, tiny-budget termination. Not built: the
+room-adjacency graph a crawler would want as a post-process (regions +
+door edges), any renderer beyond ASCII, and all the actual viewport /
+protocol / DM-tool wiring — that's the V3 feature work this only
+prepares for.
+
 ## Layout
 
 ```
