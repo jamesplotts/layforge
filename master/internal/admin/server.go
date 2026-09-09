@@ -45,6 +45,14 @@ const (
 	SystemKeySystemEngineAddr = "system_engine_addr"
 	SystemKeyComfyUIURL       = "comfyui_url"
 	SystemKeyComfyUIWorkflow  = "comfyui_workflow_path"
+	// SystemKeyDiscordClientID/Secret/RedirectURL configure "Log in with
+	// Discord" (design doc §6.6). All three must be set for the feature
+	// to turn on. The secret is stored and echoed back to this
+	// localhost-only panel exactly like SystemKeyLLMAPIKey — it is never
+	// sent to a player client.
+	SystemKeyDiscordClientID     = "discord_client_id"
+	SystemKeyDiscordClientSecret = "discord_client_secret"
+	SystemKeyDiscordRedirectURL  = "discord_redirect_url"
 	// SystemKeyTermsAcceptedVersion/SystemKeyTermsAcceptedAt record the
 	// Host's own acceptance of internal/terms.OperatorText (see
 	// EffectiveSystemSettings' callers and the /api/terms endpoints
@@ -67,6 +75,9 @@ var systemKeys = []string{
 	SystemKeySystemEngineAddr,
 	SystemKeyComfyUIURL,
 	SystemKeyComfyUIWorkflow,
+	SystemKeyDiscordClientID,
+	SystemKeyDiscordClientSecret,
+	SystemKeyDiscordRedirectURL,
 }
 
 // EffectiveSystemSettings merges seed (typically the CLI flag values
@@ -815,6 +826,14 @@ type systemSettingsDTO struct {
 	SystemEngineAddr    string `json:"system_engine_addr"`
 	ComfyUIURL          string `json:"comfyui_url"`
 	ComfyUIWorkflowPath string `json:"comfyui_workflow_path"`
+
+	// DiscordClientID/Secret/RedirectURL configure "Log in with Discord"
+	// (design doc §6.6). DiscordClientSecret is treated exactly like
+	// LLMAPIKey — echoed back only to this local operator panel, never to
+	// a player client.
+	DiscordClientID     string `json:"discord_client_id"`
+	DiscordClientSecret string `json:"discord_client_secret"`
+	DiscordRedirectURL  string `json:"discord_redirect_url"`
 }
 
 func (d systemSettingsDTO) toMap() map[string]string {
@@ -824,9 +843,12 @@ func (d systemSettingsDTO) toMap() map[string]string {
 		SystemKeyLLMModel:         d.LLMModel,
 		SystemKeyLLMProvider:      d.LLMProvider,
 		SystemKeyLLMAPIKey:        d.LLMAPIKey,
-		SystemKeySystemEngineAddr: d.SystemEngineAddr,
-		SystemKeyComfyUIURL:       d.ComfyUIURL,
-		SystemKeyComfyUIWorkflow:  d.ComfyUIWorkflowPath,
+		SystemKeySystemEngineAddr:    d.SystemEngineAddr,
+		SystemKeyComfyUIURL:          d.ComfyUIURL,
+		SystemKeyComfyUIWorkflow:     d.ComfyUIWorkflowPath,
+		SystemKeyDiscordClientID:     d.DiscordClientID,
+		SystemKeyDiscordClientSecret: d.DiscordClientSecret,
+		SystemKeyDiscordRedirectURL:  d.DiscordRedirectURL,
 	}
 }
 
@@ -840,6 +862,9 @@ func systemSettingsDTOFromMap(m map[string]string) systemSettingsDTO {
 		SystemEngineAddr:    m[SystemKeySystemEngineAddr],
 		ComfyUIURL:          m[SystemKeyComfyUIURL],
 		ComfyUIWorkflowPath: m[SystemKeyComfyUIWorkflow],
+		DiscordClientID:     m[SystemKeyDiscordClientID],
+		DiscordClientSecret: m[SystemKeyDiscordClientSecret],
+		DiscordRedirectURL:  m[SystemKeyDiscordRedirectURL],
 	}
 }
 
@@ -854,6 +879,12 @@ func validateSystemSettings(dto systemSettingsDTO) string {
 	kind := llm.ProviderKind(dto.LLMProvider)
 	if kind != "" && kind != llm.ProviderKindOllama && dto.LLMAPIKey == "" {
 		return "llm_api_key is required for every llm_provider except ollama"
+	}
+	if dto.DiscordRedirectURL != "" {
+		u, err := url.Parse(dto.DiscordRedirectURL)
+		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
+			return "discord_redirect_url must be an absolute http(s) URL, e.g. https://play.example.com/auth/discord/callback"
+		}
 	}
 	return ""
 }

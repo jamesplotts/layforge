@@ -506,6 +506,45 @@ func TestServer_PutSystem_OllamaProviderWithoutAPIKey_Allowed(t *testing.T) {
 	}
 }
 
+func TestServer_PutSystem_DiscordSettings_RoundTrip(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	putResp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/system", map[string]any{
+		"addr":                  ":8080",
+		"discord_client_id":     "123456789012345678",
+		"discord_client_secret": "shh-secret",
+		"discord_redirect_url":  "https://play.example.com/auth/discord/callback",
+	}, "")
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d", putResp.StatusCode)
+	}
+
+	getResp := doJSON(t, http.MethodGet, httpSrv.URL+"/api/system", nil, "")
+	var got struct {
+		DiscordClientID     string `json:"discord_client_id"`
+		DiscordClientSecret string `json:"discord_client_secret"`
+		DiscordRedirectURL  string `json:"discord_redirect_url"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.DiscordClientID != "123456789012345678" || got.DiscordClientSecret != "shh-secret" ||
+		got.DiscordRedirectURL != "https://play.example.com/auth/discord/callback" {
+		t.Errorf("got = %+v, want the discord values round-tripped", got)
+	}
+}
+
+func TestServer_PutSystem_DiscordRedirectURL_MustBeAbsoluteHTTP(t *testing.T) {
+	_, httpSrv := newTestServer(t, nil)
+
+	resp := doJSON(t, http.MethodPut, httpSrv.URL+"/api/system", map[string]any{
+		"discord_redirect_url": "not-a-url",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 // fakeOllamaServer mimics Ollama's own POST /api/chat contract — used to
 // exercise handleTestLLM's real llm.NewProvider->OllamaProvider->real
 // HTTP call path against a hermetic server, the same style

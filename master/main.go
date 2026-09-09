@@ -120,10 +120,17 @@ func main() {
 	registryHeartbeatInterval := flag.Duration("registry-heartbeat-interval", 30*time.Second, "how often to refresh each opted-in campaign's registry listing; ignored if -registry-url is empty. Should stay comfortably under the registry's own TTL (90s by default in registry/main.go) so a slow tick or two doesn't make a listing flicker.")
 	acceptTermsVersion := flag.String("accept-terms-version", "", "accept the Host/operator terms (internal/terms.Version) non-interactively — must exactly match the current version string to count. For scripted/CI deployments only: with -admin-addr enabled (the default), just open the admin panel once and click Agree instead. Leave empty otherwise.")
 	campaignPacksDir := flag.String("campaign-packs-dir", "generated-campaign-packs", "directory a Host's AI-generated campaign packs (admin panel Campaign tab) are written under, one subdirectory per pack — resolved relative to the working directory, same zero-config convention as -db's own default. Unrelated to wherever hand-authored packs happen to live; binding a pack still accepts any path. Leave empty to disable AI campaign-pack generation entirely.")
+	discordClientID := flag.String("discord-client-id", "", "Discord application client ID for \"Log in with Discord\" (design doc §6.6). Leave empty (today's default) to run without Discord OAuth — joins then use -room-passwords / open campaigns exactly as before. Requires -discord-client-secret and -discord-redirect-url to take effect. Can also be set from the admin panel's System tab.")
+	discordClientSecret := flag.String("discord-client-secret", "", "Discord application client secret. Prefer the LAYFORGE_DISCORD_CLIENT_SECRET environment variable (used when this flag is empty) to keep it out of the process list. Never logged, never sent to any client — see design doc §3.1.")
+	discordRedirectURL := flag.String("discord-redirect-url", "", "the exact OAuth2 redirect URL registered in the Discord developer portal, e.g. https://play.example.com/auth/discord/callback. Must be reachable by a player's browser and point at this Master's public origin + /auth/discord/callback.")
 	flag.Parse()
 
+	if *discordClientSecret == "" {
+		*discordClientSecret = os.Getenv("LAYFORGE_DISCORD_CLIENT_SECRET")
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	if err := run(*addr, *dbPath, *llmURL, *llmModel, *llmProvider, *llmAPIKey, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *acceptTermsVersion, *campaignPacksDir, *registryHeartbeatInterval, logger); err != nil {
+	if err := run(*addr, *dbPath, *llmURL, *llmModel, *llmProvider, *llmAPIKey, *webDir, *roomPasswordsPath, *systemEngineAddr, *campaignPoliciesPath, *comfyUIURL, *comfyUIWorkflowPath, *adminAddr, *adminWebDir, *maturityTiersDir, *whisperURL, *whisperModel, *registryURL, *acceptTermsVersion, *campaignPacksDir, *discordClientID, *discordClientSecret, *discordRedirectURL, *registryHeartbeatInterval, logger); err != nil {
 		logger.Error("master exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -270,7 +277,7 @@ func listenURL(addr string) string {
 // blocks until ctx is canceled (SIGINT/SIGTERM) or the listener fails,
 // then shuts down gracefully. Split out from main so the startup/
 // shutdown logic is callable from a test without invoking os.Exit.
-func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL, acceptTermsVersion, campaignPacksDir string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
+func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roomPasswordsPath, systemEngineAddr, campaignPoliciesPath, comfyUIURL, comfyUIWorkflowPath, adminAddr, adminWebDir, maturityTiersDir, whisperURL, whisperModel, registryURL, acceptTermsVersion, campaignPacksDir, discordClientID, discordClientSecret, discordRedirectURL string, registryHeartbeatInterval time.Duration, logger *slog.Logger) error {
 	events, err := store.OpenSQLiteEventStore(dbPath)
 	if err != nil {
 		return err
@@ -281,6 +288,15 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		}
 	}()
 	logger.Info("event store opened", "path", dbPath)
+
+	// Sweep expired login sessions on startup — LookupOAuthSession already
+	// refuses an expired one, this just keeps the table from growing
+	// unbounded on a long-lived Master. Best-effort.
+	if n, err := events.DeleteExpiredOAuthSessions(context.Background(), time.Now()); err != nil {
+		logger.Warn("clearing expired oauth sessions", "error", err)
+	} else if n > 0 {
+		logger.Info("cleared expired oauth sessions", "count", n)
+	}
 
 	// systemSeed holds the true CLI flag values Master actually started
 	// with — passed to admin.New as-is (see its own doc comment: "the
@@ -299,6 +315,9 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		admin.SystemKeySystemEngineAddr: systemEngineAddr,
 		admin.SystemKeyComfyUIURL:       comfyUIURL,
 		admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
+		admin.SystemKeyDiscordClientID:     discordClientID,
+		admin.SystemKeyDiscordClientSecret: discordClientSecret,
+		admin.SystemKeyDiscordRedirectURL:  discordRedirectURL,
 	}
 
 	// design doc §3.3: a System-tab setting saved via the admin panel
@@ -320,6 +339,9 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 	systemEngineAddr = effectiveSystemSettings[admin.SystemKeySystemEngineAddr]
 	comfyUIURL = effectiveSystemSettings[admin.SystemKeyComfyUIURL]
 	comfyUIWorkflowPath = effectiveSystemSettings[admin.SystemKeyComfyUIWorkflow]
+	discordClientID = effectiveSystemSettings[admin.SystemKeyDiscordClientID]
+	discordClientSecret = effectiveSystemSettings[admin.SystemKeyDiscordClientSecret]
+	discordRedirectURL = effectiveSystemSettings[admin.SystemKeyDiscordRedirectURL]
 
 	// Operator-terms gate: SystemKeyTermsAcceptedVersion/*At deliberately
 	// aren't part of systemKeys/systemSettingsDTO (they're not a System-
@@ -501,6 +523,24 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, llmProvider, llmModel, campaignPacksDir, registryURL, systemEngineClient, hub)
 	}
 
+	// Discord OAuth (design doc §6.6) stays off unless all three of
+	// client id / secret / redirect URL are configured (flags, env, or the
+	// admin System tab). When on, it becomes the outermost auth provider:
+	// a valid Discord login is required, and whatever room-password chain
+	// was built above still runs beneath it (so "logged in AND knows the
+	// password" composes). discordOAuthHandler serves the browser-facing
+	// /auth/discord/* routes, mounted on the mux below.
+	var discordOAuthHandler *auth.DiscordOAuthHandler
+	if discordClientID != "" && discordClientSecret != "" && discordRedirectURL != "" {
+		authProvider = auth.NewDiscordOAuthProvider(events, authProvider)
+		discordOAuthHandler = auth.NewDiscordOAuthHandler(
+			discordClientID, discordClientSecret, discordRedirectURL, listenURL(addr), events, logger,
+		)
+		logger.Info("discord oauth enabled", "client_id", discordClientID, "redirect_url", discordRedirectURL)
+	} else if discordClientID != "" || discordClientSecret != "" || discordRedirectURL != "" {
+		logger.Warn("discord oauth partially configured, staying disabled — need all of client id, client secret, and redirect URL")
+	}
+
 	// imageGenProvider stays nil (no image generation, the
 	// generate_scene_image DM tool simply isn't offered) unless
 	// -comfyui-url is set — same opt-in reasoning as every other
@@ -542,6 +582,13 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", srv.Handler())
+
+	// Discord OAuth's browser-facing routes live on the player-facing
+	// listener (a player's browser hits them), not the localhost admin
+	// panel. Only mounted when the feature is fully configured.
+	if discordOAuthHandler != nil {
+		mux.Handle("/auth/discord/", discordOAuthHandler.Routes())
+	}
 
 	if webDir != "" {
 		if info, statErr := os.Stat(webDir); statErr != nil || !info.IsDir() {

@@ -146,6 +146,9 @@ const el = {
   sysSystemEngineAddr: document.getElementById("sys-system-engine-addr"),
   sysComfyUIURL: document.getElementById("sys-comfyui-url"),
   sysComfyUIWorkflow: document.getElementById("sys-comfyui-workflow"),
+  sysDiscordClientID: document.getElementById("sys-discord-client-id"),
+  sysDiscordClientSecret: document.getElementById("sys-discord-client-secret"),
+  sysDiscordRedirectURL: document.getElementById("sys-discord-redirect-url"),
   systemSave: document.getElementById("system-save"),
   systemSaveRestart: document.getElementById("system-save-restart"),
   systemSaveStatus: document.getElementById("system-save-status"),
@@ -1082,6 +1085,9 @@ async function loadSystemSettings() {
   el.sysSystemEngineAddr.value = data.system_engine_addr || "";
   el.sysComfyUIURL.value = data.comfyui_url || "";
   el.sysComfyUIWorkflow.value = data.comfyui_workflow_path || "";
+  el.sysDiscordClientID.value = data.discord_client_id || "";
+  el.sysDiscordClientSecret.value = data.discord_client_secret || "";
+  el.sysDiscordRedirectURL.value = data.discord_redirect_url || "";
 }
 
 function systemSettingsBody() {
@@ -1094,6 +1100,9 @@ function systemSettingsBody() {
     system_engine_addr: el.sysSystemEngineAddr.value,
     comfyui_url: el.sysComfyUIURL.value,
     comfyui_workflow_path: el.sysComfyUIWorkflow.value,
+    discord_client_id: el.sysDiscordClientID.value,
+    discord_client_secret: el.sysDiscordClientSecret.value,
+    discord_redirect_url: el.sysDiscordRedirectURL.value,
   };
 }
 

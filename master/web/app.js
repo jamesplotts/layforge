@@ -74,6 +74,66 @@ function clearAcceptedTerms() {
   }
 }
 
+// --- Discord login (design doc §6.6) ---
+// The session token is minted by this Master's /auth/discord/callback and
+// handed back in the URL fragment (never a query string — keeps it out of
+// access logs and Referer). It is presented as system.connect's
+// auth_token. Stored per-browser like the terms acceptance; treated as a
+// bearer secret, so it is never logged or shown.
+const DISCORD_TOKEN_KEY = "layforge.discordToken";
+const DISCORD_NAME_KEY = "layforge.discordName";
+
+function loadStoredDiscordLogin() {
+  try {
+    return {
+      token: localStorage.getItem(DISCORD_TOKEN_KEY) || "",
+      name: localStorage.getItem(DISCORD_NAME_KEY) || "",
+    };
+  } catch {
+    return { token: "", name: "" };
+  }
+}
+
+function saveDiscordLogin(token, name) {
+  try {
+    localStorage.setItem(DISCORD_TOKEN_KEY, token);
+    localStorage.setItem(DISCORD_NAME_KEY, name || "");
+  } catch {
+    // best-effort, see saveTermsAccepted
+  }
+}
+
+function clearDiscordLogin() {
+  try {
+    localStorage.removeItem(DISCORD_TOKEN_KEY);
+    localStorage.removeItem(DISCORD_NAME_KEY);
+  } catch {
+    // best-effort
+  }
+}
+
+// captureDiscordLoginFromHash reads a "#lf_token=…&lf_name=…" fragment
+// left by a completed /auth/discord/callback redirect, persists it, and
+// scrubs it from the address bar so a reload or a shared link doesn't
+// carry the token.
+function captureDiscordLoginFromHash() {
+  if (!location.hash || location.hash.length < 2) return;
+  let params;
+  try {
+    params = new URLSearchParams(location.hash.slice(1));
+  } catch {
+    return;
+  }
+  const token = params.get("lf_token");
+  if (!token) return;
+  saveDiscordLogin(token, params.get("lf_name") || "");
+  try {
+    history.replaceState(null, "", location.pathname + location.search);
+  } catch {
+    location.hash = "";
+  }
+}
+
 const state = {
   ws: null,
   wsUrl: "",
@@ -81,6 +141,11 @@ const state = {
   senderId: "",
   characterId: "",
   joined: false,
+  // discordToken is this browser's Discord login session token, sent as
+  // system.connect's auth_token when set. discordName is the display name
+  // for the join screen only. Both empty when Discord OAuth isn't in use.
+  discordToken: "",
+  discordName: "",
   pendingJoinUrl: null,
   pendingInputMessageId: null,
   // oldestLoadedSequence/hasMoreOlder track the "load earlier" cursor —
@@ -161,6 +226,11 @@ const el = {
   joinCharacter: document.getElementById("join-character"),
   joinButton: document.getElementById("join-button"),
   joinError: document.getElementById("join-error"),
+  discordAuth: document.getElementById("discord-auth"),
+  discordLoginButton: document.getElementById("discord-login-button"),
+  discordSignedIn: document.getElementById("discord-signed-in"),
+  discordName: document.getElementById("discord-name"),
+  discordLogoutButton: document.getElementById("discord-logout-button"),
   termsModal: document.getElementById("terms-modal"),
   termsModalAgree: document.getElementById("terms-modal-agree"),
   termsModalDecline: document.getElementById("terms-modal-decline"),
@@ -199,6 +269,16 @@ const el = {
 el.joinUrl.value = defaultWsUrl();
 el.joinButton.addEventListener("click", onJoinClick);
 el.termsModalAgree.addEventListener("click", onTermsAgree);
+
+captureDiscordLoginFromHash();
+initDiscordAuth();
+el.discordLoginButton.addEventListener("click", () => {
+  // Full-page navigation to Master's own login route (same origin as
+  // this client when Discord OAuth is in use); it round-trips through
+  // Discord and lands back here with a "#lf_token=…" fragment.
+  location.assign("/auth/discord/login");
+});
+el.discordLogoutButton.addEventListener("click", onDiscordLogout);
 el.termsModalDecline.addEventListener("click", () => {
   el.termsModal.hidden = true;
 });
@@ -369,10 +449,10 @@ function onJoinClick() {
   }
   state.campaignId = campaign;
   state.characterId = character;
-  // sender_id doubles as the player's identity for now — there's no
-  // auth/account system yet (design doc §6.6's Discord OAuth isn't
-  // implemented), so a client-chosen character name is all Master has
-  // to identify who's who.
+  // The character name travels as sender_id for display and is what an
+  // unauthenticated Master uses to tell players apart. When this browser
+  // has a Discord login, Master ignores sender_id for ownership and keys
+  // on the verified account instead (see connect()).
   state.senderId = character;
 
   if (!hasAcceptedCurrentTerms()) {
@@ -398,6 +478,51 @@ function onTermsAgree() {
 function showJoinError(message) {
   el.joinError.textContent = message;
   el.joinError.hidden = false;
+}
+
+// initDiscordAuth probes whether this Master runs Discord OAuth and, if
+// so, reveals the login controls. A failed/absent probe leaves the join
+// screen exactly as it was — Discord is opt-in per Master.
+async function initDiscordAuth() {
+  const stored = loadStoredDiscordLogin();
+  state.discordToken = stored.token;
+  state.discordName = stored.name;
+  try {
+    const resp = await fetch("/auth/discord/enabled", { cache: "no-store" });
+    if (!resp.ok) return;
+  } catch {
+    return;
+  }
+  el.discordAuth.hidden = false;
+  renderDiscordAuth();
+}
+
+function renderDiscordAuth() {
+  const signedIn = !!state.discordToken;
+  el.discordLoginButton.hidden = signedIn;
+  el.discordSignedIn.hidden = !signedIn;
+  if (signedIn) {
+    el.discordName.textContent = state.discordName || "your Discord account";
+  }
+}
+
+async function onDiscordLogout() {
+  const token = state.discordToken;
+  clearDiscordLogin();
+  state.discordToken = "";
+  state.discordName = "";
+  renderDiscordAuth();
+  if (!token) return;
+  try {
+    await fetch("/auth/discord/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+  } catch {
+    // The local token is already cleared; a failed server-side revoke
+    // just means it lingers until it expires on its own.
+  }
 }
 
 function connect(url) {
@@ -433,7 +558,13 @@ function openSocket() {
   ws.addEventListener("open", () => {
     send({
       ...newEnvelope("system.connect"),
-      payload: { client_kind: "player_web_v1" },
+      payload: {
+        client_kind: "player_web_v1",
+        // A Discord login token when this browser has one; otherwise
+        // empty (an open campaign) — the room-password case is handled by
+        // Masters that aren't running the reference client.
+        auth_token: state.discordToken || "",
+      },
     });
     // Reaching openSocket at all means this browser has already agreed
     // (onJoinClick only calls connect() after hasAcceptedCurrentTerms()
@@ -532,6 +663,12 @@ function handleMessage(msg) {
   switch (msg.type) {
     case "system.session_state":
       if (msg.payload && msg.payload.state === "joined") {
+        if (msg.payload.identity && msg.payload.identity.display_name) {
+          // Master verified who we are (Discord OAuth). Keep the stored
+          // name in sync with what Master actually resolved.
+          state.discordName = msg.payload.identity.display_name;
+          saveDiscordLogin(state.discordToken, state.discordName);
+        }
         if (state.hasJoinedOnce) {
           onReconnected();
         } else {
@@ -600,7 +737,9 @@ function onJoined() {
   state.joined = true;
   el.joinScreen.hidden = true;
   el.chatScreen.hidden = false;
-  el.chatCampaignLabel.textContent = state.campaignId;
+  el.chatCampaignLabel.textContent = state.discordName
+    ? state.campaignId + " · " + state.discordName
+    : state.campaignId;
   setStatus("connected", "connected");
   // No bounds set: Master returns the most recent page (design doc §10)
   // — "where things stand now," the natural first page for a chat-style

@@ -447,6 +447,25 @@
         ComfyUI Workflow Path
         <input id="sys-comfyui-workflow" type="text" placeholder="/path/to/workflow.json" />
       </label>
+      <h3 class="section-heading">Discord login</h3>
+      <p class="panel-hint">
+        Optional. Set all three to enable "Log in with Discord" for players (design doc &sect;6.6).
+        In the Discord developer portal, register the redirect URL
+        <code>&lt;your public origin&gt;/auth/discord/callback</code>. The client secret is stored on
+        this Master and shown only here &mdash; never sent to a player.
+      </p>
+      <label>
+        Discord Client ID
+        <input id="sys-discord-client-id" type="text" autocomplete="off" placeholder="123456789012345678" />
+      </label>
+      <label>
+        Discord Client Secret
+        <input id="sys-discord-client-secret" type="password" autocomplete="off" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;" />
+      </label>
+      <label>
+        Discord Redirect URL
+        <input id="sys-discord-redirect-url" type="text" autocomplete="off" placeholder="https://play.example.com/auth/discord/callback" />
+      </label>
       <div class="system-actions">
         <button id="system-save" type="button" class="secondary">Save (no restart)</button>
         <button id="system-save-restart" type="button" class="danger">Save &amp; Restart</button>

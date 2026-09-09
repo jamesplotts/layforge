@@ -27,6 +27,15 @@
         Character name
         <input id="join-character" type="text" placeholder="e.g. Kestrel" />
       </label>
+      <!-- Shown only when this Master runs Discord OAuth (design doc §6.6) —
+           app.js probes /auth/discord/enabled on load. -->
+      <div id="discord-auth" class="discord-auth" hidden>
+        <button id="discord-login-button" type="button" class="discord-login">Log in with Discord</button>
+        <p id="discord-signed-in" class="discord-signed-in" hidden>
+          Signed in as <strong id="discord-name"></strong>
+          <button id="discord-logout-button" type="button" class="link-button">Log out</button>
+        </p>
+      </div>
       <button id="join-button" type="button">Join</button>
       <p id="join-error" class="error" hidden></p>
     </div>

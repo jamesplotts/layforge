@@ -1018,6 +1018,11 @@ components:
                     description: e.g. "player_web_v1", or a third-party viewport identifying itself (docs/design.md §4).
                   auth_token:
                     type: string
+                    description: >-
+                      When the Master runs Discord OAuth (docs/design.md §6.6), a login session
+                      token minted by its /auth/discord/callback. When the Master uses room-code
+                      auth, the room password. Empty for an open campaign. A rejected token/password
+                      produces a system.error and the connection is closed.
 
     TermsAccept:
       name: terms.accept
@@ -1061,6 +1066,22 @@ components:
                     enum: [joined, left, paused, resumed]
                   character_id:
                     type: string
+                  identity:
+                    type: object
+                    description: >-
+                      Present on a "joined" state only when the connection authenticated to a
+                      real account (Discord OAuth, docs/design.md §6.6, §9.4). Carries no token
+                      or secret — only what a client renders. Absent for an open or
+                      room-password-only join.
+                    required: [account_id]
+                    properties:
+                      account_id:
+                        type: string
+                        description: Master's stable account id, e.g. "discord:80351110224678912".
+                      display_name:
+                        type: string
+                      avatar_url:
+                        type: string
 
     SystemError:
       name: system.error
