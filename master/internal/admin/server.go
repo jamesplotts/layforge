@@ -1717,8 +1717,9 @@ var kickNotificationDelay = 200 * time.Millisecond
 // to campaignID, if any (design doc §3.3's Host-operator capabilities;
 // removing pvp_with_consent left "the Host removes a disruptive player"
 // as the real lever instead of a per-player consent list). Not a ban:
-// nothing here prevents senderId from reconnecting and rejoining —
-// there is no account system in this repo to ban against (§9.4). A
+// nothing here prevents senderId from reconnecting and rejoining. Even
+// with Discord OAuth giving a stable account id now, a persistent
+// per-account block list is its own §9.4 feature and isn't built. A
 // senderId with no live connection is reported as Kicked: false, not
 // an error — the Host may simply be clicking a stale row.
 func (s *Server) handleKickPlayer(w http.ResponseWriter, r *http.Request) {

@@ -47,17 +47,18 @@ type Character struct {
 	// CampaignID scopes this character today. Design doc §9.4 describes
 	// uploaded characters as personal library data keyed to the player's
 	// account/Discord ID, snapshotted into campaign session state on
-	// join, not campaign state itself — that split needs an account
-	// system this codebase doesn't have yet (Discord OAuth is unbuilt).
-	// Storing directly against CampaignID is a deliberate, documented
-	// simplification pending that work, not the intended long-term shape.
+	// join, not campaign state itself. The account system now exists
+	// (store.Account, Discord OAuth), but the library/snapshot split does
+	// not — storing directly against CampaignID is a deliberate,
+	// documented simplification pending that work, not the long-term shape.
 	CampaignID string
 
-	// OwnerID is the sender_id of the client that uploaded this
-	// character — a stand-in for verified account identity until one
-	// exists (see CampaignID's doc comment). Like every other sender_id
-	// in this protocol today, it is self-reported by the client, not
-	// cryptographically verified.
+	// OwnerID identifies the character's owner. On a Master running
+	// Discord OAuth this is the authenticated account id
+	// (store.Account.ID, e.g. "discord:8035..."); on one without it, the
+	// client-declared sender_id, self-reported and not verified — the
+	// same as every sender_id in this protocol. See
+	// internal/server.actingSender for where the value is chosen.
 	OwnerID string
 
 	// SchemaVersion is the system engine schema_version CharacterData
@@ -65,12 +66,10 @@ type Character struct {
 	SchemaVersion string
 
 	// Status is this character's position in the review flow (design doc
-	// §9.4). Every character is created CharacterStatusPendingReview;
-	// nothing transitions it to Approved/Rejected yet, since that
-	// requires a privileged-operator concept Master doesn't have (no
-	// account/role system exists yet, only room-password join auth) —
-	// gating that transition without real authorization would violate
-	// CLAUDE.md's "gates over prompting" rule, not satisfy it.
+	// §9.4). Every character is created CharacterStatusPendingReview; the
+	// operator moves it to Approved/Rejected from the admin panel (the
+	// localhost operator surface — that is the privileged authorization,
+	// the same one every other admin action relies on).
 	Status CharacterStatus
 
 	// CharacterData is the character's canonical JSON as the system

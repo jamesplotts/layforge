@@ -87,7 +87,7 @@ type CampaignSummary struct {
 	DisplayName string
 	// PartyCount is how many characters exist for this campaign — not
 	// how many distinct players, since a player can own more than one
-	// character (design doc §9.4 has no account system yet to dedupe by).
+	// character and this count doesn't dedupe by OwnerID.
 	PartyCount int
 	// LastActiveAt is the most recent event timestamp for this campaign,
 	// falling back to the most recent character update when it has no

@@ -2187,6 +2187,57 @@ bad mode, missing session, cross-origin) covered by
 thin pass-through exercised against the engine fake in
 `internal/server/character_creation_test.go`.
 
+**Discord OAuth login and account-keyed character ownership (design doc
+§6.6, §9.4).** Master now has a real account system. Set
+`-discord-client-id`, `-discord-client-secret` (or the
+`LAYFORGE_DISCORD_CLIENT_SECRET` env var), and `-discord-redirect-url`
+(`<your public origin>/auth/discord/callback`, registered in the Discord
+developer portal) — or the matching three fields on the admin System tab
+— and "Log in with Discord" turns on. All three must be set; a partial
+config logs a warning and stays off.
+
+- `store.AccountStore` (`accounts` + `oauth_sessions` tables): a verified
+  identity keyed `discord:<snowflake>`, and an opaque 30-day session
+  token Master mints itself (never a Discord token, never a JWT).
+  Sessions aren't refreshed — an expired one is a one-click re-login;
+  startup sweeps expired rows.
+- `auth.Provider.Authorize` now returns an `auth.Result` (`OK`, `Reason`,
+  `Identity`). `auth.DiscordOAuthProvider` validates the session token,
+  resolves it to an `auth.Identity`, and — when it wraps a `Next`
+  provider (the room-password chain) — still lets that provider make the
+  campaign-level call, so "logged in **and** knows the room password"
+  composes. `auth.DiscordOAuthHandler` serves `/auth/discord/{login,
+  callback,logout,enabled}` on the player-facing listener: PKCE S256, a
+  CSRF `state` with a 10-minute TTL, and the minted token handed back to
+  the web client in the redirect's URL **fragment** so it never reaches
+  an access log or a `Referer` header. The client secret lives only in
+  the handler and the outbound token-exchange body.
+- A connection that authenticates acts as its account, not its
+  client-declared `sender_id`: `connState.identity` + the `actingSender`
+  helper feed the account id into every ownership-sensitive dispatch path
+  (`importCharacter`, `resolveCheck`, `applyCharacterEffect`,
+  map-token-move, character-creation, …), and the Hub registers the
+  connection under the account id so per-player (fog-of-war) sends and
+  the admin kick still target it. The `joined` `system.session_state`
+  echoes a no-secret `identity` block. **When Discord OAuth is not
+  configured, `actingSender` always falls through to `sender_id` and
+  behavior is byte-for-byte unchanged.**
+- The per-account character *library* (design doc §9.4's model where one
+  library character is snapshotted into each campaign's session state)
+  is still unbuilt — this makes the account identity authoritative so
+  that work can build on it. A pre-existing DB whose `characters.owner_id`
+  values are old `sender_id` strings won't match an account id once
+  OAuth is on; acceptable for a pre-release project doing fresh installs,
+  no migration shim.
+
+Covered by `internal/store/sqlite_account_test.go`,
+`internal/auth/discord_test.go` /
+`internal/auth/discord_oauth_internal_test.go` (an `httptest` stand-in
+for Discord's token + `/users/@me` endpoints), the adapted
+`internal/auth` / `internal/admin` provider tests, and
+`internal/server/acting_sender_internal_test.go`. Not browser-tested with
+a real Discord application this pass.
+
 ## Layout
 
 ```
@@ -2354,6 +2405,18 @@ resolution/character import. grpc-go dials lazily, so Master makes one
 real `GetCharacterSchema` call at startup to actually confirm
 reachability — an unreachable or not-yet-started sidecar logs a warning
 and Master still starts normally, the same way a missing `-web-dir` does.
+
+`-discord-client-id` / `-discord-client-secret` / `-discord-redirect-url`
+enable "Log in with Discord" (design doc §6.6). Register a Discord
+application, set its OAuth2 redirect to
+`<your public origin>/auth/discord/callback`, and pass all three (or fill
+the matching fields on the admin System tab). Prefer the
+`LAYFORGE_DISCORD_CLIENT_SECRET` environment variable over the flag to
+keep the secret out of the process list. Leave them unset (the default)
+to run with no accounts — joins then work exactly as before
+(`-room-passwords` / open campaigns). When enabled, an authenticated
+player's characters are owned by their Discord account rather than the
+character name typed at join; see the Status section above.
 
 `-admin-addr` (default `127.0.0.1:8090`) opens the admin/operator
 settings panel described in the Status section above — open
