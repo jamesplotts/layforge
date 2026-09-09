@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -265,7 +266,31 @@ func (s *Server) Handler() http.Handler {
 	if s.webDir != "" {
 		mux.Handle("/", noStaticCache(http.FileServer(http.Dir(s.webDir))))
 	}
-	return mux
+	return s.recoverPanic(mux)
+}
+
+// recoverPanic wraps the admin mux so a panic in any handler becomes a
+// logged 500 with a JSON body, instead of net/http's default (log the
+// panic, drop the connection) — which reaches the panel only as an
+// opaque "TypeError: Failed to fetch" with no clue what went wrong. The
+// admin listener is single-operator and localhost-only, so turning a
+// crash into a visible error is strictly better than hiding it.
+func (s *Server) recoverPanic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.logger.Error("admin handler panicked",
+					"method", r.Method, "path", r.URL.Path, "panic", rec,
+					"stack", string(debug.Stack()))
+				// Best-effort: if the handler already started writing a
+				// response, this header write is a no-op and the client
+				// still sees a truncated body — but the log line above is
+				// what matters for diagnosis.
+				s.writeErrorMsg(w, http.StatusInternalServerError, fmt.Sprintf("internal error handling %s %s (see Master's log)", r.Method, r.URL.Path))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireSameOrigin wraps a mutating handler to reject a request whose
@@ -677,14 +702,25 @@ func (s *Server) handleInstallCampaignPackLibrary(w http.ResponseWriter, r *http
 		return
 	}
 
-	archive, err := s.downloadPackLibrary(r.Context(), source)
+	// A hard ceiling on the whole operation independent of any client
+	// timeout, so a stalled download or a slow disk surfaces as a real
+	// 504 in the panel rather than a hung request the browser eventually
+	// reports as an opaque "Failed to fetch".
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+
+	s.logger.Info("campaign pack library install: downloading", "source", source)
+	archive, err := s.downloadPackLibrary(ctx, source)
 	if err != nil {
+		s.logger.Warn("campaign pack library install: download failed", "source", source, "error", err)
 		s.writeErrorMsg(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
+	s.logger.Info("campaign pack library install: unpacking", "bytes", len(archive), "dest", s.campaignPacksDir)
 	results, err := campaignpack.InstallLibrary(bytes.NewReader(archive), int64(len(archive)), s.campaignPacksDir, campaignpack.InstallOptions{Overwrite: dto.Overwrite})
 	if err != nil {
+		s.logger.Warn("campaign pack library install: unpack failed", "error", err)
 		s.writeErrorMsg(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -693,7 +729,7 @@ func (s *Server) handleInstallCampaignPackLibrary(w http.ResponseWriter, r *http
 	for i, res := range results {
 		dto := installLibraryResultDTO{Slug: res.Slug, Status: string(res.Status), Detail: res.Detail}
 		if res.Status == campaignpack.InstallStatusInstalled || res.Status == campaignpack.InstallStatusSkippedExists {
-			campaignID, added := s.bindInstalledPackToCampaign(r.Context(), res.Slug)
+			campaignID, added := s.bindInstalledPackToCampaign(ctx, res.Slug)
 			dto.Campaign = campaignID
 			dto.CampaignAdded = added
 			if added {
@@ -702,6 +738,8 @@ func (s *Server) handleInstallCampaignPackLibrary(w http.ResponseWriter, r *http
 		}
 		out.Results[i] = dto
 	}
+	s.logger.Info("campaign pack library install: done",
+		"packs", len(results), "campaigns_added", out.CampaignsAdded)
 	s.writeJSON(w, http.StatusOK, out)
 }
 
