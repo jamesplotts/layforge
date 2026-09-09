@@ -27,7 +27,7 @@ func newTestServerWithStore(t *testing.T) (*admin.Server, *httptest.Server, *sto
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
 	hub := session.NewHub()
-	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", nil, nil, nil, "", "", "", hub)
+	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", nil, nil, nil, "", "", "", nil, hub)
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return srv, httpSrv, s, hub
@@ -79,7 +79,7 @@ func TestServer_ListCharacters_ReturnsEveryCharacterForTheCampaign(t *testing.T)
 
 func TestServer_ListCharacters_NotConfigured_ReturnsEmptyList(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := admin.New(logger, newTestStore(t), nil, nil, nil, "", "127.0.0.1:8090", nil, nil, nil, "", "", "", nil)
+	srv := admin.New(logger, newTestStore(t), nil, nil, nil, "", "127.0.0.1:8090", nil, nil, nil, "", "", "", nil, nil)
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 
@@ -198,7 +198,7 @@ func TestServer_ReviewCharacter_WrongCampaign_ReturnsNotFound(t *testing.T) {
 
 func TestServer_ReviewCharacter_NotConfigured_ReturnsBadRequest(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := admin.New(logger, newTestStore(t), nil, nil, nil, "", "127.0.0.1:8090", nil, nil, nil, "", "", "", nil)
+	srv := admin.New(logger, newTestStore(t), nil, nil, nil, "", "127.0.0.1:8090", nil, nil, nil, "", "", "", nil, nil)
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 

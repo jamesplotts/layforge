@@ -454,43 +454,13 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 	// wait for their next reconnect.
 	hub := session.NewHub()
 
-	var adminServer *admin.Server
-	if adminAddr != "" {
-		authProvider = admin.NewAuthProvider(events, authProvider)
-		policyProvider = admin.NewCampaignPackPolicyProvider(events, tiers, policyProvider)
-		policyProvider = admin.NewPolicyProvider(events, policyProvider)
-		restartRequested = make(chan struct{}, 1)
-		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, llmProvider, llmModel, campaignPacksDir, registryURL, hub)
-	}
-
-	// imageGenProvider stays nil (no image generation, the
-	// generate_scene_image DM tool simply isn't offered) unless
-	// -comfyui-url is set — same opt-in reasoning as every other
-	// optional dependency above. Verified live against a real running
-	// ComfyUI instance (design doc §6.3) — see package imagegen's doc
-	// comment.
-	var imageGenProvider imagegen.Provider
-	if comfyUIURL != "" {
-		if comfyUIWorkflowPath == "" {
-			return errors.New("-comfyui-url requires -comfyui-workflow (an API-format ComfyUI workflow JSON file)")
-		}
-		workflowTemplate, err := os.ReadFile(comfyUIWorkflowPath)
-		if err != nil {
-			return fmt.Errorf("reading -comfyui-workflow file: %w", err)
-		}
-		provider, err := imagegen.NewComfyUIProvider(comfyUIURL, string(workflowTemplate))
-		if err != nil {
-			return fmt.Errorf("configuring ComfyUI image generation: %w", err)
-		}
-		imageGenProvider = provider
-		logger.Info("image generation enabled", "comfyui_url", comfyUIURL, "workflow", comfyUIWorkflowPath)
-	}
-
 	// systemEngineClient stays nil (no rules-resolution or character-import
 	// calls possible) unless -system-engine-addr is set. character.upload
-	// is its one caller today (design doc §9.4's mechanical half — see
-	// package server's importCharacter); dice/rules dispatch is still
-	// design doc §11 future work.
+	// and the admin panel's "roll a pregen" flow are its callers today
+	// (design doc §9.4's mechanical half — see package server's
+	// importCharacter and package admin's handleStartCharacterCreation);
+	// dice/rules dispatch is still design doc §11 future work. Set here,
+	// before adminServer/server below, since both take it.
 	var systemEngineClient systemenginepb.SystemEngineClient
 	if systemEngineAddr != "" {
 		client, closeEngine, err := systemengine.Dial(systemEngineAddr)
@@ -520,6 +490,38 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		} else {
 			logger.Info("system engine connected", "addr", systemEngineAddr, "schema_version", schema.SchemaVersion)
 		}
+	}
+
+	var adminServer *admin.Server
+	if adminAddr != "" {
+		authProvider = admin.NewAuthProvider(events, authProvider)
+		policyProvider = admin.NewCampaignPackPolicyProvider(events, tiers, policyProvider)
+		policyProvider = admin.NewPolicyProvider(events, policyProvider)
+		restartRequested = make(chan struct{}, 1)
+		adminServer = admin.New(logger, events, events, events, events, adminWebDir, adminAddr, systemSeed, restartRequested, llmProvider, llmModel, campaignPacksDir, registryURL, systemEngineClient, hub)
+	}
+
+	// imageGenProvider stays nil (no image generation, the
+	// generate_scene_image DM tool simply isn't offered) unless
+	// -comfyui-url is set — same opt-in reasoning as every other
+	// optional dependency above. Verified live against a real running
+	// ComfyUI instance (design doc §6.3) — see package imagegen's doc
+	// comment.
+	var imageGenProvider imagegen.Provider
+	if comfyUIURL != "" {
+		if comfyUIWorkflowPath == "" {
+			return errors.New("-comfyui-url requires -comfyui-workflow (an API-format ComfyUI workflow JSON file)")
+		}
+		workflowTemplate, err := os.ReadFile(comfyUIWorkflowPath)
+		if err != nil {
+			return fmt.Errorf("reading -comfyui-workflow file: %w", err)
+		}
+		provider, err := imagegen.NewComfyUIProvider(comfyUIURL, string(workflowTemplate))
+		if err != nil {
+			return fmt.Errorf("configuring ComfyUI image generation: %w", err)
+		}
+		imageGenProvider = provider
+		logger.Info("image generation enabled", "comfyui_url", comfyUIURL, "workflow", comfyUIWorkflowPath)
 	}
 
 	// transcriptionProvider stays nil (no push-to-talk transcription, the

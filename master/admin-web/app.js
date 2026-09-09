@@ -34,6 +34,8 @@ const state = {
   generatedPackSlug: "",
   campaigns: [],
   selectedCharacterId: "",
+  pregenRollSession: "",
+  pregenRollMode: "quick",
 };
 
 const el = {
@@ -90,9 +92,28 @@ const el = {
   pregenSaveStatus: document.getElementById("pregen-save-status"),
   pregenNewButton: document.getElementById("pregen-new-button"),
   pregenForm: document.getElementById("pregen-form"),
+  pregenFormHint: document.getElementById("pregen-form-hint"),
   pregenCancel: document.getElementById("pregen-cancel"),
   pregenCampaignNote: document.getElementById("pregen-campaign-note"),
   pregenEmptyNote: document.getElementById("pregen-empty-note"),
+  pregenCreateChoices: document.getElementById("pregen-create-choices"),
+  pregenChoiceQuick: document.getElementById("pregen-choice-quick"),
+  pregenChoiceDetailed: document.getElementById("pregen-choice-detailed"),
+  pregenChoiceJson: document.getElementById("pregen-choice-json"),
+  pregenChoiceCancel: document.getElementById("pregen-choice-cancel"),
+  pregenRoll: document.getElementById("pregen-roll"),
+  pregenRollNameStep: document.getElementById("pregen-roll-name-step"),
+  pregenRollName: document.getElementById("pregen-roll-name"),
+  pregenRollStart: document.getElementById("pregen-roll-start"),
+  pregenRollCancel: document.getElementById("pregen-roll-cancel"),
+  pregenRollPromptStep: document.getElementById("pregen-roll-prompt-step"),
+  pregenRollPrompt: document.getElementById("pregen-roll-prompt"),
+  pregenRollChoices: document.getElementById("pregen-roll-choices"),
+  pregenRollFreetextLabel: document.getElementById("pregen-roll-freetext-label"),
+  pregenRollFreetext: document.getElementById("pregen-roll-freetext"),
+  pregenRollFreetextActions: document.getElementById("pregen-roll-freetext-actions"),
+  pregenRollFreetextSubmit: document.getElementById("pregen-roll-freetext-submit"),
+  pregenRollStatus: document.getElementById("pregen-roll-status"),
   connectedPlayersTableBody: document.getElementById("connected-players-table-body"),
   campaignCharactersTableBody: document.getElementById("campaign-characters-table-body"),
   allCharacterPicker: document.getElementById("all-character-picker"),
@@ -624,18 +645,124 @@ async function loadPregens(id) {
   }
 }
 
-function showPregenForm(show) {
-  el.pregenForm.hidden = !show;
-  el.pregenNewButton.hidden = show;
-  if (!show) {
-    for (const id of ["pregenId", "pregenName", "pregenDescription", "pregenSchemaVersion", "pregenCharacterJSON"]) {
-      el[id].value = "";
+// Pregen creation is a small state machine: New button -> choices ->
+// (roll flow | paste-JSON form). resetPregenCreate collapses all of it.
+function resetPregenCreate() {
+  el.pregenNewButton.hidden = false;
+  for (const node of [el.pregenCreateChoices, el.pregenRoll, el.pregenForm]) node.hidden = true;
+  el.pregenRollNameStep.hidden = false;
+  el.pregenRollPromptStep.hidden = true;
+  for (const id of ["pregenId", "pregenName", "pregenDescription", "pregenSchemaVersion", "pregenCharacterJSON", "pregenRollName", "pregenRollFreetext"]) {
+    el[id].value = "";
+  }
+  setStatus(el.pregenSaveStatus, "");
+  setStatus(el.pregenRollStatus, "");
+  state.pregenRollSession = "";
+}
+
+el.pregenNewButton.addEventListener("click", () => {
+  el.pregenNewButton.hidden = true;
+  el.pregenCreateChoices.hidden = false;
+});
+el.pregenChoiceCancel.addEventListener("click", resetPregenCreate);
+el.pregenCancel.addEventListener("click", resetPregenCreate);
+el.pregenRollCancel.addEventListener("click", resetPregenCreate);
+
+el.pregenChoiceJson.addEventListener("click", () => {
+  el.pregenCreateChoices.hidden = true;
+  el.pregenForm.hidden = false;
+  el.pregenFormHint.textContent = "Paste a full character JSON below, then set an ID and Create Template.";
+});
+el.pregenChoiceQuick.addEventListener("click", () => startPregenRoll("quick"));
+el.pregenChoiceDetailed.addEventListener("click", () => startPregenRoll("detailed"));
+
+function startPregenRoll(mode) {
+  state.pregenRollMode = mode;
+  el.pregenCreateChoices.hidden = true;
+  el.pregenRoll.hidden = false;
+  el.pregenRollNameStep.hidden = false;
+  el.pregenRollPromptStep.hidden = true;
+  el.pregenRollName.focus();
+}
+
+el.pregenRollStart.addEventListener("click", async () => {
+  const name = el.pregenRollName.value.trim();
+  if (!name) {
+    setStatus(el.pregenRollStatus, "A name is required.", true);
+    return;
+  }
+  setStatus(el.pregenRollStatus, "Starting…");
+  await pregenRollStep("/api/character-creation/start", { mode: state.pregenRollMode, name });
+});
+
+async function pregenRollStep(path, body) {
+  el.pregenRollStart.disabled = true;
+  el.pregenRollFreetextSubmit.disabled = true;
+  try {
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      setStatus(el.pregenRollStatus, `Failed: ${await errorText(resp)}`, true);
+      return;
     }
-    setStatus(el.pregenSaveStatus, "");
+    const step = await resp.json();
+    state.pregenRollSession = step.session_id;
+    if (step.done) {
+      finishPregenRoll(step);
+      return;
+    }
+    renderPregenRollPrompt(step);
+  } finally {
+    el.pregenRollStart.disabled = false;
+    el.pregenRollFreetextSubmit.disabled = false;
   }
 }
-el.pregenNewButton.addEventListener("click", () => showPregenForm(true));
-el.pregenCancel.addEventListener("click", () => showPregenForm(false));
+
+function renderPregenRollPrompt(step) {
+  el.pregenRollNameStep.hidden = true;
+  el.pregenRollPromptStep.hidden = false;
+  el.pregenRollPrompt.textContent = step.prompt_text || "Choose:";
+  el.pregenRollChoices.replaceChildren();
+  setStatus(el.pregenRollStatus, "");
+
+  const choices = step.choices || [];
+  const freetext = choices.length === 0;
+  el.pregenRollFreetextLabel.hidden = !freetext;
+  el.pregenRollFreetextActions.hidden = !freetext;
+  el.pregenRollFreetext.value = "";
+
+  for (const choice of choices) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "secondary";
+    b.textContent = choice;
+    b.addEventListener("click", () => submitPregenAnswer(choice));
+    el.pregenRollChoices.appendChild(b);
+  }
+  if (freetext) el.pregenRollFreetext.focus();
+}
+
+el.pregenRollFreetextSubmit.addEventListener("click", () => submitPregenAnswer(el.pregenRollFreetext.value.trim()));
+
+async function submitPregenAnswer(answer) {
+  setStatus(el.pregenRollStatus, "…");
+  await pregenRollStep("/api/character-creation/answer", { session_id: state.pregenRollSession, answer });
+}
+
+// finishPregenRoll drops the finished character into the paste-JSON form
+// so the Host just sets an ID/description and clicks Create Template.
+function finishPregenRoll(step) {
+  el.pregenRoll.hidden = true;
+  el.pregenForm.hidden = false;
+  el.pregenFormHint.textContent = "Character rolled. Give it an ID (and tweak the JSON if you like), then Create Template.";
+  el.pregenName.value = el.pregenRollName.value.trim();
+  el.pregenSchemaVersion.value = step.schema_version || "";
+  el.pregenCharacterJSON.value = step.character_json ? JSON.stringify(step.character_json, null, 2) : "";
+  el.pregenId.focus();
+}
 
 el.pregenSave.addEventListener("click", async () => {
   if (!state.campaignId) return;
@@ -664,7 +791,7 @@ el.pregenSave.addEventListener("click", async () => {
     setStatus(el.pregenSaveStatus, `Failed: ${await errorText(resp)}`, true);
     return;
   }
-  showPregenForm(false);
+  resetPregenCreate();
   await loadPregens(state.campaignId);
 });
 

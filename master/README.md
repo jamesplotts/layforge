@@ -2163,6 +2163,30 @@ cross-origin and 404 paths). The admin-web restructure is
 static-verified (build, JS parse, every element id resolves) but not
 browser-tested this pass — the extension wasn't connected.
 
+**Rolling a character template on the Pregens tab.** First-use question:
+where does the Host get the character JSON a template needs? Answered by
+reusing the same system-engine character-creation flow players get.
+"New character template" now offers three routes — **Quick roll**,
+**Detailed roll**, or **Paste character JSON** (the previous behaviour,
+kept as a fallback). The two roll routes drive the engine's iterative
+Q&A: `POST /api/character-creation/start` (`{mode, name}`) opens a
+session against `StartCharacterCreation` with `campaign_id
+"admin-pregen"`, and `POST /api/character-creation/answer`
+(`{session_id, answer}`) relays each `AnswerCharacterCreationPrompt`
+turn. Each response comes back as a step — `prompt_text` + `choices` to
+render as buttons (or a free-text box when there are no choices), until
+`done`, when the finished `Actor.character_data` is marshaled to JSON
+and pre-filled into the template form for the Host to name and save. The
+engine has no "list every field" RPC — creation is a stateful branching
+conversation, not a flat schema — so a one-shot generated form isn't
+possible; this iterative flow is the closest fit. Both endpoints require
+`-system-engine-addr`; with no engine wired they return 400 pointing at
+the paste-JSON fallback. Handler guards (missing engine, missing name,
+bad mode, missing session, cross-origin) covered by
+`internal/admin/character_creation_test.go`; the RPC relay itself is a
+thin pass-through exercised against the engine fake in
+`internal/server/character_creation_test.go`.
+
 ## Layout
 
 ```

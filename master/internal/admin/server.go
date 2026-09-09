@@ -20,12 +20,15 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
+
 	"github.com/jamesplotts/layforge/master/internal/campaignpack"
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/policy"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/session"
 	"github.com/jamesplotts/layforge/master/internal/store"
+	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 	"github.com/jamesplotts/layforge/master/internal/terms"
 )
 
@@ -156,6 +159,15 @@ type Server struct {
 	// timeout, not http.DefaultClient, so a slow or hung download can't
 	// pin the request forever.
 	httpClient *http.Client
+	// systemEngine backs the Pregens tab's "roll a character template"
+	// flow (handleStartCharacterCreation / handleAnswerCharacterCreation)
+	// — the exact same StartCharacterCreation / AnswerCharacterCreationPrompt
+	// RPCs the WS join-time flow drives for a player (internal/server/
+	// character_creation.go), just relayed from this HTTP listener. nil
+	// means that flow rejects with a real "not configured" error, the
+	// same nil-disables-the-feature pattern every other engine-dependent
+	// path uses; pasting a full character JSON still works without it.
+	systemEngine systemenginepb.SystemEngineClient
 }
 
 // New creates a Server. addr is this admin listener's own bind address
@@ -165,7 +177,7 @@ type Server struct {
 // with; a key GetSystemSettings has never stored an override for falls
 // back to this map (see handleGetSystem). restartRequested is the
 // send-only end of a channel main.go's run() selects on.
-func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, characters store.CharacterStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}, llmProvider llm.Provider, llmModel, campaignPacksDir, registryURL string, hub *session.Hub) *Server {
+func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.CampaignPackStore, pregens store.PregenStore, characters store.CharacterStore, webDir, addr string, systemSeed map[string]string, restartRequested chan<- struct{}, llmProvider llm.Provider, llmModel, campaignPacksDir, registryURL string, systemEngine systemenginepb.SystemEngineClient, hub *session.Hub) *Server {
 	return &Server{
 		logger:           logger,
 		store:            s,
@@ -181,6 +193,7 @@ func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.Cam
 		llmModel:         llmModel,
 		campaignPacksDir: campaignPacksDir,
 		registryURL:      registryURL,
+		systemEngine:     systemEngine,
 		httpClient:       &http.Client{Timeout: 60 * time.Second},
 	}
 }
@@ -221,6 +234,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/campaigns/{id}/pregens", s.handleListPregens)
 	mux.HandleFunc("PUT /api/campaigns/{id}/pregens", s.requireSameOrigin(s.handlePutPregen))
 	mux.HandleFunc("DELETE /api/campaigns/{id}/pregens/{pregenId}", s.requireSameOrigin(s.handleDeletePregen))
+	mux.HandleFunc("POST /api/character-creation/start", s.requireSameOrigin(s.handleStartCharacterCreation))
+	mux.HandleFunc("POST /api/character-creation/answer", s.requireSameOrigin(s.handleAnswerCharacterCreation))
 	mux.HandleFunc("GET /api/campaigns/{id}/characters", s.handleListCharacters)
 	mux.HandleFunc("PUT /api/campaigns/{id}/characters/{characterId}/review", s.requireSameOrigin(s.handleReviewCharacter))
 	mux.HandleFunc("GET /api/characters", s.handleListAllCharacters)
@@ -1266,6 +1281,142 @@ func (s *Server) handleDeletePregen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// characterCreationStartDTO is POST /api/character-creation/start's body.
+// mode is "quick" (race/class/gender, engine rolls the rest) or
+// "detailed" (every step is a prompt). name is the template's character
+// name — set on the finished character directly, never asked as a prompt.
+type characterCreationStartDTO struct {
+	Mode string `json:"mode"`
+	Name string `json:"name"`
+}
+
+// characterCreationAnswerDTO is POST /api/character-creation/answer's
+// body: the session id a prior /start (or /answer) returned, plus the
+// chosen option (a real member of the last prompt's choices) or free
+// text for a choiceless prompt.
+type characterCreationAnswerDTO struct {
+	SessionID string `json:"session_id"`
+	Answer    string `json:"answer"`
+}
+
+// characterCreationStepDTO is the wire shape both endpoints answer with —
+// a straight mapping of the engine's CharacterCreationPromptResponse.
+// While Done is false the Host is shown PromptText and picks from
+// Choices (or types free text when Choices is empty); once Done is true,
+// CharacterJSON / SchemaVersion carry the finished character, ready to
+// drop into the pregen form and save.
+type characterCreationStepDTO struct {
+	SessionID     string          `json:"session_id"`
+	Done          bool            `json:"done"`
+	PromptText    string          `json:"prompt_text,omitempty"`
+	Choices       []string        `json:"choices,omitempty"`
+	CharacterJSON json.RawMessage `json:"character_json,omitempty"`
+	SchemaVersion string          `json:"schema_version,omitempty"`
+}
+
+// handleStartCharacterCreation begins an engine-driven character-creation
+// session for the Pregens tab — the same StartCharacterCreation RPC the
+// WS join-time flow uses, relayed from this localhost-only listener.
+// Master holds no session state of its own here (unlike the WS flow's
+// per-player ownership tracking): the panel is single-operator, so it
+// just carries the engine's session_id back and forth.
+func (s *Server) handleStartCharacterCreation(w http.ResponseWriter, r *http.Request) {
+	if s.systemEngine == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "no system engine is configured on this Master — start one with -system-engine-addr, or paste a character JSON instead")
+		return
+	}
+	var dto characterCreationStartDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(dto.Name) == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	mode := systemenginepb.CharacterCreationMode_CHARACTER_CREATION_MODE_QUICK
+	switch dto.Mode {
+	case "", "quick":
+	case "detailed":
+		mode = systemenginepb.CharacterCreationMode_CHARACTER_CREATION_MODE_DETAILED
+	default:
+		s.writeErrorMsg(w, http.StatusBadRequest, `mode must be "quick" or "detailed"`)
+		return
+	}
+
+	var idb [16]byte
+	if _, err := rand.Read(idb[:]); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	sessionID := hex.EncodeToString(idb[:])
+
+	resp, err := s.systemEngine.StartCharacterCreation(r.Context(), &systemenginepb.StartCharacterCreationRequest{
+		SessionId:     sessionID,
+		CampaignId:    "admin-pregen",
+		Mode:          mode,
+		CharacterName: dto.Name,
+	})
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadGateway, "calling system engine: "+err.Error())
+		return
+	}
+	s.writeCharacterCreationStep(w, sessionID, resp)
+}
+
+// handleAnswerCharacterCreation records one answer and returns the next
+// prompt (or the finished character).
+func (s *Server) handleAnswerCharacterCreation(w http.ResponseWriter, r *http.Request) {
+	if s.systemEngine == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "no system engine is configured on this Master")
+		return
+	}
+	var dto characterCreationAnswerDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if dto.SessionID == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	resp, err := s.systemEngine.AnswerCharacterCreationPrompt(r.Context(), &systemenginepb.AnswerCharacterCreationPromptRequest{
+		SessionId: dto.SessionID,
+		Answer:    dto.Answer,
+	})
+	if err != nil {
+		s.writeErrorMsg(w, http.StatusBadGateway, "calling system engine: "+err.Error())
+		return
+	}
+	s.writeCharacterCreationStep(w, dto.SessionID, resp)
+}
+
+// writeCharacterCreationStep maps a CharacterCreationPromptResponse to
+// the wire DTO, turning the engine's own success=false into a 400 and,
+// on done, marshaling the finished actor's opaque character_data to JSON
+// the pregen form can take verbatim.
+func (s *Server) writeCharacterCreationStep(w http.ResponseWriter, sessionID string, resp *systemenginepb.CharacterCreationPromptResponse) {
+	if resp == nil {
+		s.writeErrorMsg(w, http.StatusBadGateway, "system engine returned no response")
+		return
+	}
+	if !resp.Success {
+		s.writeErrorMsg(w, http.StatusBadRequest, "character creation: "+resp.Error)
+		return
+	}
+	out := characterCreationStepDTO{SessionID: sessionID, Done: resp.Done, PromptText: resp.PromptText, Choices: resp.Choices}
+	if resp.Done && resp.Actor != nil {
+		data, err := protojson.Marshal(resp.Actor.CharacterData)
+		if err != nil {
+			s.writeErrorMsg(w, http.StatusBadGateway, "marshaling generated character: "+err.Error())
+			return
+		}
+		out.CharacterJSON = data
+		out.SchemaVersion = resp.Actor.SchemaVersion
+	}
+	s.writeJSON(w, http.StatusOK, out)
 }
 
 // characterDTO is the Character Review tab's wire shape — every

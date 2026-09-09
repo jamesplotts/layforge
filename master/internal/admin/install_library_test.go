@@ -29,7 +29,7 @@ func newTestServerWithPacksDir(t *testing.T) (*httptest.Server, string) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := newTestStore(t)
 	packsDir := t.TempDir()
-	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", nil, nil, nil, "", packsDir, "", session.NewHub())
+	srv := admin.New(logger, s, s, s, s, "", "127.0.0.1:8090", nil, nil, nil, "", packsDir, "", nil, session.NewHub())
 	httpSrv := httptest.NewServer(srv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return httpSrv, packsDir

@@ -268,7 +268,49 @@
 
       <button id="pregen-new-button" type="button">New character template</button>
 
+      <!-- Step 1: how to make the template's character. -->
+      <div id="pregen-create-choices" class="pregen-create-choices" hidden>
+        <p class="panel-hint">How do you want to build this template's character?</p>
+        <div class="form-actions">
+          <button id="pregen-choice-quick" type="button">Quick roll</button>
+          <button id="pregen-choice-detailed" type="button" class="secondary">Detailed roll</button>
+          <button id="pregen-choice-json" type="button" class="secondary">Paste character JSON</button>
+          <button id="pregen-choice-cancel" type="button" class="secondary">Cancel</button>
+        </div>
+        <p class="note">
+          "Quick" and "Detailed" ask the system engine to build a real, valid character — the same
+          flow a player gets at join time. Needs a system engine (<code>-system-engine-addr</code>).
+        </p>
+      </div>
+
+      <!-- Step 2 (roll): the engine's prompts, one at a time. -->
+      <div id="pregen-roll" class="pregen-roll" hidden>
+        <div id="pregen-roll-name-step">
+          <label>
+            Character name
+            <input id="pregen-roll-name" type="text" placeholder="Bram the Bold" />
+          </label>
+          <div class="form-actions">
+            <button id="pregen-roll-start" type="button">Start</button>
+            <button id="pregen-roll-cancel" type="button" class="secondary">Cancel</button>
+          </div>
+        </div>
+        <div id="pregen-roll-prompt-step" hidden>
+          <p id="pregen-roll-prompt" class="pregen-roll-prompt"></p>
+          <div id="pregen-roll-choices" class="form-actions"></div>
+          <label id="pregen-roll-freetext-label" hidden>
+            Your answer
+            <input id="pregen-roll-freetext" type="text" />
+          </label>
+          <div id="pregen-roll-freetext-actions" class="form-actions" hidden>
+            <button id="pregen-roll-freetext-submit" type="button">Submit</button>
+          </div>
+        </div>
+        <span id="pregen-roll-status" class="save-status"></span>
+      </div>
+
       <div id="pregen-form" class="create-campaign-form" hidden>
+        <p class="panel-hint" id="pregen-form-hint">Paste a full character JSON below, then set an ID and Create Template.</p>
         <label>
           ID (shown to players as their choice — pick something readable, e.g. "bram-fighter")
           <input id="pregen-id" type="text" placeholder="bram-fighter" />

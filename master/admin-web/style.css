@@ -586,3 +586,25 @@ button.test-failure {
   overflow-x: auto;
   max-height: 320px;
 }
+
+/* --- Pregens: roll-a-template flow --- */
+.pregen-create-choices,
+.pregen-roll {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.pregen-roll-prompt {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--text);
+}
+#pregen-roll-choices button,
+#pregen-create-choices .form-actions button {
+  flex: 0 0 auto;
+}
+.form-actions {
+  flex-wrap: wrap;
+}
