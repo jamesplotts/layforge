@@ -177,7 +177,7 @@ const el = {
   inputText: document.getElementById("input-text"),
   inputSend: document.getElementById("input-send"),
   micButton: document.getElementById("mic-button"),
-  diceStage: document.getElementById("dice-stage"),
+  diceOverlay: document.getElementById("dice-overlay"),
   rollAbility: document.getElementById("roll-ability"),
   rollCheckButton: document.getElementById("roll-check-button"),
   diceSkinSelect: document.getElementById("dice-skin-select"),
@@ -240,10 +240,80 @@ for (const skin of Dice.listSkins()) {
 }
 const savedSkin = Dice.loadSavedDiceSkin(Dice.DEFAULT_SKIN_ID);
 el.diceSkinSelect.value = savedSkin;
-// The die is mounted once at load — .dice-tray-stage's CSS size (110x110)
-// is fixed regardless of the chat screen's visibility, so this doesn't
-// need to wait for onJoined to show it.
-state.dieHandle = Dice.mountDie(el.diceStage, savedSkin);
+// The die is mounted once at load into #dice-overlay, the canvas layered
+// over the message log (see index.html). While the chat screen is still
+// hidden the overlay measures 0×0 — Dice.mountDie falls back to a stub
+// size and initDiceArena's ResizeObserver re-sizes the physics arena to
+// the real log viewport the moment the chat screen is shown.
+state.dieHandle = Dice.mountDie(el.diceOverlay, savedSkin);
+// Exposed for console/automation testing of the cosmetic tumble without a
+// backend, e.g. `Dice.startTumble(dieHandle)` then
+// `Dice.settleOnResult(dieHandle, 17, () => {})` — see README / dice.js.
+window.dieHandle = state.dieHandle;
+initDiceArena();
+
+// initDiceArena keeps the cosmetic dice physics in sync with the live
+// layout: the tumbling box tracks the message log's pixel size, and a
+// static collider is placed over every visible chat bubble so the die
+// caroms off them. Rebuilt on resize (ResizeObserver), on scroll
+// (throttled — bubbles enter/leave the viewport), and on DOM mutation
+// (debounced MutationObserver — history prepends at the top, live
+// messages append at the bottom). Never rebuilt per animation frame
+// (hard constraint #5).
+function initDiceArena() {
+  const overlay = el.diceOverlay;
+  const log = el.log;
+
+  const syncSize = () => Dice.resizeArena(state.dieHandle, overlay.clientWidth, overlay.clientHeight);
+
+  const rebuildColliders = () => {
+    const logRect = log.getBoundingClientRect();
+    if (logRect.width < 4 || logRect.height < 4) return;
+    const rects = [];
+    for (const node of log.querySelectorAll(".bubble, .creation-prompt, .scene-image")) {
+      const r = node.getBoundingClientRect();
+      if (r.bottom <= logRect.top || r.top >= logRect.bottom) continue; // off-screen — skip.
+      rects.push({
+        x: r.left - logRect.left + r.width / 2,
+        y: r.top - logRect.top + r.height / 2,
+        w: r.width,
+        h: r.height,
+      });
+    }
+    Dice.setBubbleColliders(state.dieHandle, rects);
+  };
+
+  const refresh = () => {
+    syncSize();
+    rebuildColliders();
+  };
+
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(refresh).observe(overlay);
+  }
+  window.addEventListener("resize", refresh);
+
+  let scrollThrottle = null;
+  log.addEventListener(
+    "scroll",
+    () => {
+      if (scrollThrottle) return;
+      scrollThrottle = setTimeout(() => {
+        scrollThrottle = null;
+        rebuildColliders();
+      }, 120);
+    },
+    { passive: true }
+  );
+
+  let mutationDebounce = null;
+  new MutationObserver(() => {
+    clearTimeout(mutationDebounce);
+    mutationDebounce = setTimeout(rebuildColliders, 150);
+  }).observe(log, { childList: true, subtree: true });
+
+  refresh();
+}
 
 function defaultWsUrl() {
   // location.host is empty when opened via file://, and there's no

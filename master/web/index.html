@@ -107,16 +107,27 @@ If you do not agree, do not join this game.</pre>
         <button id="load-earlier-button" type="button" class="load-earlier" hidden>
           Load earlier history
         </button>
-        <div id="log" class="log"></div>
+        <!-- .log-frame is a non-scrolling positioned wrapper so the
+             cosmetic dice canvas (#dice-overlay) can be layered over
+             exactly the visible message viewport without scrolling with
+             the conversation. #dice-overlay is pointer-events:none (hard
+             constraint #4) — it never blocks log scroll or text
+             selection. dice.js sizes the canvas to the overlay's client
+             rect and builds its physics walls from those pixels. -->
+        <div class="log-frame">
+          <div id="log" class="log"></div>
+          <div id="dice-overlay" class="dice-overlay" aria-hidden="true"></div>
+        </div>
 
         <!-- Dice tray: authoritative server roll, cosmetic client
              animation (design doc §3.1, §4) — roll.check_request in,
              roll.request/roll.result out. Disabled until join's stopgap
              character upload (see app.js) resolves, since a check needs
              a real character_id Master's store recognizes, not just the
-             display name typed at join. -->
+             display name typed at join. The die itself tumbles in
+             #dice-overlay above; the tray holds only the controls and
+             the last-result readout. -->
         <div class="dice-tray">
-          <div class="dice-tray-stage" id="dice-stage"></div>
           <div class="dice-tray-controls">
             <div class="dice-tray-row">
               <select id="roll-ability">

@@ -3,17 +3,56 @@
 
 :root {
   color-scheme: dark;
-  --bg: #14151a;
-  --panel: #1c1e26;
-  --panel-border: #2c2f3a;
-  --text: #e6e6ea;
-  --text-dim: #8b8d9a;
-  --accent: #7c9bff;
-  --accent-text: #0c0e14;
-  --danger: #ff6b6b;
-  --danger-bg: #3a1c1c;
-  --bubble-bg: #262838;
-  --bubble-border: #383c52;
+
+  /* --- Tabletop chrome (dark wood + brass) --- */
+  --bg: #1b130c;
+  --panel: #2a2016;
+  --panel-2: #221a11;
+  --panel-border: #4a3826;
+  --text: #f3e9d8;
+  --text-dim: #b39c7d;
+  --accent: #cc9a54;            /* brass — links, focus rings, active tabs */
+  --accent-text: #241a0d;
+  --brass: #cc9a54;
+  --brass-dark: #8a6329;
+  --danger: #e8836f;
+  --danger-bg: #3a1c17;
+
+  /* --- Leather message ground --- */
+  --leather-base: #c6a274;
+  --leather-low: #8f6f4e;
+  --leather-high: #e2c79c;
+  --leather-edge: #5f4526;
+  --leather-ink: #574023;      /* readable text sitting directly on leather */
+  --stitch: rgba(244, 230, 202, 0.55);
+
+  /* --- Chat bubbles --- */
+  --bubble-player: #2f5aa0;     /* sapphire */
+  --bubble-player-hi: #3f74c4;
+  --bubble-player-edge: #7ba7dd;
+  --bubble-player-text: #eef4fc;
+  --bubble-player-who: rgba(255, 255, 255, 0.72);
+
+  --bubble-dm: #7c2026;         /* oxblood */
+  --bubble-dm-hi: #9c3038;
+  --bubble-dm-edge: #cf7168;
+  --bubble-dm-text: #fbe9e3;
+  --bubble-dm-who: rgba(255, 236, 230, 0.8);
+
+  --bubble-shadow: rgba(48, 30, 12, 0.5);
+
+  /* --- Parchment (cards on wood) --- */
+  --parchment: #efe1c4;
+  --parchment-hi: #f8efd9;
+  --parchment-ink: #2c2013;
+  --parchment-ink-dim: #6b5638;
+  --parchment-line: #b39a72;
+
+  /* Backwards-compatible aliases still referenced in a few rules. */
+  --bubble-bg: var(--bubble-player);
+  --bubble-border: var(--bubble-player-edge);
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
 }
 
 * {
@@ -34,9 +73,15 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
+  background:
+    radial-gradient(120% 90% at 50% -10%, rgba(120, 92, 58, 0.35), rgba(120, 92, 58, 0) 60%),
+    linear-gradient(180deg, #241a11, #17100a 70%);
   color: var(--text);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+h1, h2, .character-sidebar-header, .join-card h1 {
+  font-family: var(--font-display);
 }
 
 .screen {
@@ -51,55 +96,79 @@ body {
   align-items: center;
   justify-content: center;
   padding: 24px;
+  background:
+    radial-gradient(circle at 50% 32%, rgba(204, 154, 84, 0.16), rgba(204, 154, 84, 0) 45%),
+    radial-gradient(circle at 50% 120%, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0) 60%);
 }
 
 .join-card {
   width: 100%;
-  max-width: 380px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  padding: 28px;
+  max-width: 400px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.05) 40%),
+    var(--parchment);
+  border: 1px solid var(--brass);
+  border-radius: 10px;
+  padding: 32px 30px;
+  color: var(--parchment-ink);
+  box-shadow:
+    0 0 0 7px rgba(36, 26, 15, 0.6),
+    0 30px 70px -14px rgba(0, 0, 0, 0.75);
 }
 
 .join-card h1 {
-  margin: 0 0 4px;
-  font-size: 22px;
+  margin: 0 0 6px;
+  font-size: 36px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: center;
+  color: #3a2b1d;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 .tagline {
-  margin: 0 0 20px;
-  color: var(--text-dim);
+  margin: 0 0 24px;
+  color: var(--parchment-ink-dim);
   font-size: 13px;
+  font-style: italic;
+  text-align: center;
 }
 
 .join-card label {
   display: block;
   margin-bottom: 14px;
-  font-size: 13px;
-  color: var(--text-dim);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--parchment-ink-dim);
 }
 
 .join-card input {
   display: block;
   width: 100%;
   margin-top: 6px;
-  padding: 9px 10px;
-  background: var(--bg);
-  border: 1px solid var(--panel-border);
+  padding: 10px 11px;
+  background: #fbf5e6;
+  border: 1px solid var(--parchment-line);
   border-radius: 6px;
-  color: var(--text);
+  color: var(--parchment-ink);
   font-size: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+  box-shadow: inset 0 1px 3px rgba(90, 67, 38, 0.25);
 }
 
 .join-card input:focus {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brass-dark);
   outline-offset: -1px;
 }
 
 #join-button {
   width: 100%;
-  margin-top: 4px;
+  margin-top: 8px;
+  padding: 11px 16px;
+  font-size: 15px;
+  letter-spacing: 0.04em;
 }
 
 .error {
@@ -117,13 +186,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--panel-border);
-  background: var(--panel);
+  padding: 12px 18px;
+  border-bottom: 2px solid var(--brass);
+  background: linear-gradient(180deg, #3a2b1d, #241a11);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
 }
 
 .chat-header strong {
-  font-size: 14px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  color: var(--brass);
 }
 
 .status {
@@ -149,7 +222,7 @@ body {
   align-items: flex-end;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--panel-border);
+  border-bottom: 2px solid var(--danger);
   background: var(--danger-bg);
 }
 
@@ -203,27 +276,97 @@ button.secondary {
   flex-direction: column;
 }
 
+/* .log-frame is the non-scrolling positioned wrapper around #log. It
+   exists so the cosmetic dice canvas (#dice-overlay) can be absolutely
+   positioned over exactly the visible message viewport without moving
+   when the log scrolls. #log keeps its own overflow/scroll behaviour. */
+.log-frame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .log {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 16px;
+  padding: 20px 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+
+  /* Worn tan leather: warm base colour, layered gradient lowlights /
+     highlights, procedural grain + mottle from an inline SVG turbulence
+     filter (data URI — no asset file, no build step), and an inset
+     vignette so the edges of the "hide" fall into shadow. */
+  background-color: var(--leather-base);
+  background-image:
+    radial-gradient(120% 80% at 50% -18%, rgba(255, 240, 212, 0.16), rgba(255, 240, 212, 0) 48%),
+    radial-gradient(140% 115% at 50% 120%, rgba(48, 30, 13, 0.42), rgba(48, 30, 13, 0) 55%),
+    linear-gradient(122deg, rgba(120, 90, 58, 0.42) 0%, rgba(198, 162, 116, 0) 26%, rgba(198, 162, 116, 0) 70%, rgba(120, 90, 58, 0.42) 100%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='340' height='340'%3E%3Cfilter id='a'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.010' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.28 0 0 0 0 0.19 0 0 0 0 0.10 0 0 0 0.4 0'/%3E%3C/filter%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.13 0 0 0 0 0.08 0 0 0 0 0.03 0 0 0 0.13 0'/%3E%3C/filter%3E%3Crect width='340' height='340' filter='url(%23a)'/%3E%3Crect width='340' height='340' filter='url(%23b)'/%3E%3C/svg%3E");
+  background-size: auto, auto, auto, 340px 340px;
+  background-repeat: no-repeat, no-repeat, no-repeat, repeat;
+  box-shadow:
+    inset 0 0 90px rgba(36, 21, 7, 0.5),
+    inset 0 0 26px rgba(24, 14, 5, 0.5);
+}
+
+/* Tooled/stitched frame just inside the leather edge. On .log-frame (not
+   #log) so it stays put while the conversation scrolls. */
+.log-frame::after {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border: 2px dashed var(--stitch);
+  border-radius: 7px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Cosmetic dice arena: a WebGL canvas dice.js renders into, sized to the
+   visible log viewport, above the bubbles, never intercepting pointer
+   events (so log scroll + text selection keep working — hard constraint
+   #4). Opacity is animated by dice.js so a rested die fades back rather
+   than covering the text. */
+.dice-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.dice-overlay canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
 }
 
 .bubble {
+  position: relative;
   max-width: 72ch;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--bubble-bg);
-  border: 1px solid var(--bubble-border);
+  padding: 9px 14px 11px;
+  border-radius: 12px;
+  color: var(--bubble-player-text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 44%),
+    linear-gradient(180deg, var(--bubble-player-hi), var(--bubble-player));
+  border: 1px solid var(--bubble-player-edge);
+  box-shadow:
+    0 12px 20px -8px var(--bubble-shadow),
+    0 3px 6px rgba(40, 25, 10, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
 }
 
 .bubble .who {
   display: block;
-  font-size: 12px;
-  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--bubble-player-who);
   margin-bottom: 3px;
 }
 
@@ -232,19 +375,31 @@ button.secondary {
 }
 
 .bubble.pending {
-  opacity: 0.6;
+  opacity: 0.55;
 }
 
-/* narrative.dm_prose (design doc §7's slow pass) — visually distinct
-   from a player's own rendered bubble via a left accent bar, since it's
-   DM/NPC narration the player didn't write. */
+/* narrative.dm_prose (design doc §7's slow pass) — the DM speaking, in
+   oxblood so it never reads as a player's own (sapphire) bubble. */
 .bubble.dm-bubble {
-  border-left: 3px solid var(--accent);
-  background: var(--panel);
+  color: var(--bubble-dm-text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 44%),
+    linear-gradient(180deg, var(--bubble-dm-hi), var(--bubble-dm));
+  border-color: var(--bubble-dm-edge);
+}
+
+.bubble.dm-bubble .who {
+  color: var(--bubble-dm-who);
 }
 
 .tool-result-note {
   font-style: normal;
+  align-self: center;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: rgba(250, 243, 228, 0.6);
+  border: 1px solid rgba(90, 67, 38, 0.3);
+  color: var(--leather-ink);
 }
 
 /* character.creation_prompt (design doc §9.4) — a private, direct reply
@@ -252,11 +407,14 @@ button.secondary {
    plain .note) since it's interactive, not just informational. */
 .creation-prompt {
   max-width: 72ch;
-  padding: 10px 14px;
+  padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid var(--bubble-border);
-  border-left: 3px solid var(--accent);
-  background: var(--panel);
+  border: 1px solid var(--brass);
+  border-left: 4px solid var(--brass);
+  background:
+    linear-gradient(180deg, var(--parchment-hi), var(--parchment));
+  color: var(--parchment-ink);
+  box-shadow: 0 10px 18px -8px var(--bubble-shadow);
 }
 
 .creation-prompt-text {
@@ -280,10 +438,10 @@ button.secondary {
   flex: 1 1 100%;
   min-width: 0;
   padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--panel-border);
+  background: #fbf5e6;
+  border: 1px solid var(--parchment-line);
   border-radius: 8px;
-  color: var(--text);
+  color: var(--parchment-ink);
   font: inherit;
   resize: vertical;
 }
@@ -291,7 +449,7 @@ button.secondary {
 .creation-prompt-file {
   flex: 1 1 100%;
   font-size: 13px;
-  color: var(--text-dim);
+  color: var(--parchment-ink-dim);
 }
 
 /* Answered prompts stay visible in scrollback but visually settle —
@@ -303,7 +461,13 @@ button.secondary {
 .turn-state-note {
   font-style: normal;
   font-weight: 600;
-  color: var(--accent);
+  align-self: center;
+  padding: 4px 16px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--parchment-hi), var(--parchment));
+  border: 1px solid var(--brass);
+  color: #5a3d12;
+  box-shadow: 0 6px 12px -6px var(--bubble-shadow);
 }
 
 .scene-image {
@@ -311,9 +475,10 @@ button.secondary {
   max-width: 72ch;
   margin: 4px 0;
   padding: 8px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, var(--parchment-hi), var(--parchment));
+  border: 1px solid var(--brass);
   border-radius: 10px;
+  box-shadow: 0 12px 22px -10px var(--bubble-shadow);
 }
 
 .scene-image img {
@@ -325,7 +490,7 @@ button.secondary {
 .scene-image figcaption {
   margin-top: 6px;
   font-size: 12px;
-  color: var(--text-dim);
+  color: var(--parchment-ink-dim);
   white-space: pre-wrap;
 }
 
@@ -436,14 +601,21 @@ button.secondary {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 24px;
+  padding: 26px;
   border-radius: 10px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(0, 0, 0, 0.04) 40%),
+    var(--parchment);
+  border: 1px solid var(--brass);
+  color: var(--parchment-ink);
+  box-shadow:
+    0 0 0 6px rgba(36, 26, 15, 0.6),
+    0 30px 70px -14px rgba(0, 0, 0, 0.75);
 }
 
 .terms-modal-card h2 {
   margin: 0;
+  color: #3a2b1d;
 }
 
 .terms-modal-text {
@@ -452,8 +624,8 @@ button.secondary {
   white-space: pre-wrap;
   font-family: inherit;
   font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-dim);
+  line-height: 1.55;
+  color: var(--parchment-ink);
 }
 
 .terms-modal-actions {
@@ -464,43 +636,48 @@ button.secondary {
 
 .note {
   align-self: center;
-  color: var(--text-dim);
+  color: var(--leather-ink);
   font-size: 12px;
   font-style: italic;
 }
 
 .note.error-note {
-  color: var(--danger);
+  color: #7a1f16;
 }
 
 .note.character-rejected-note {
-  color: var(--danger);
+  color: #7a1f16;
   font-style: normal;
+  font-weight: 600;
 }
 
 .note.character-approved-note {
-  color: var(--accent);
+  color: #3a5a1e;
   font-style: normal;
+  font-weight: 600;
 }
 
 .safety-banner {
   align-self: center;
-  padding: 8px 16px;
+  padding: 8px 18px;
   border-radius: 8px;
-  background: var(--danger-bg);
-  color: var(--danger);
-  font-weight: 600;
+  background: linear-gradient(180deg, #8f2620, #6d1a16);
+  border: 1px solid #c96b60;
+  color: #fbe7e2;
+  font-weight: 700;
   text-align: center;
+  box-shadow: 0 10px 20px -8px rgba(60, 20, 12, 0.6);
 }
 
 .load-earlier {
   display: block;
   margin: 10px auto 0;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  color: var(--text-dim);
+  background: linear-gradient(180deg, var(--parchment-hi), var(--parchment));
+  border: 1px solid var(--brass);
+  color: var(--parchment-ink-dim);
+  font-weight: 600;
   font-size: 12px;
-  padding: 6px 14px;
+  padding: 6px 16px;
 }
 
 /* --- Character sidebar (design doc §4) ---
@@ -514,15 +691,17 @@ button.secondary {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--panel-border);
-  background: var(--panel);
+  border-left: 2px solid var(--brass);
+  background: linear-gradient(180deg, #2a2016, #201810);
 }
 
 .character-sidebar-header {
   padding: 12px 16px 8px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-dim);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--brass);
 }
 
 .character-tabs {
@@ -630,8 +809,8 @@ button.secondary {
   display: flex;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--panel-border);
-  background: var(--panel);
+  border-top: 2px solid var(--brass);
+  background: linear-gradient(180deg, #2a2016, #201810);
 }
 
 #input-text {
@@ -673,27 +852,43 @@ button.secondary {
 button {
   padding: 9px 16px;
   border-radius: 8px;
-  border: none;
-  background: var(--accent);
+  border: 1px solid var(--brass-dark);
+  background: linear-gradient(180deg, #dcb271, #b8863f);
   color: var(--accent-text);
   font-weight: 600;
   font-size: 14px;
   cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 2px 5px rgba(0, 0, 0, 0.35);
 }
 
 button:hover {
-  filter: brightness(1.08);
+  filter: brightness(1.06);
+}
+
+button:active {
+  filter: brightness(0.95);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
   filter: none;
 }
 
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  box-shadow: none;
+}
+
 #safety-flag-button {
-  background: var(--danger-bg);
-  color: var(--danger);
+  background: linear-gradient(180deg, #7c2a24, #5f1c18);
+  border-color: #c96b60;
+  color: #fbe7e2;
 }
 
 /* Below this width there isn't room for a fixed 300px sidebar alongside
@@ -708,9 +903,13 @@ button:disabled {
     flex: none;
   }
 
-  .log {
+  .log-frame {
     flex: none;
-    max-height: 50vh;
+    height: 52vh;
+  }
+
+  .log {
+    flex: 1;
   }
 
   .character-sidebar {
