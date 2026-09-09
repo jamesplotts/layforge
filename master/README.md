@@ -2086,6 +2086,8 @@ chest) and ~1 in 6 of their non-first exits is a `TileSecretDoor` — a
 real, Walkable connection that also BlocksLOS (reads as blank wall) and
 answers `IsSecret()`, so the region beyond stays connected but a party
 has to find it; the "found yet?" state is runtime, not part of the map.
+Roughly one dead end in four hides a small sealed vault behind a secret
+door in its end wall — no other exits, always at least a chest.
 `RoomSize` (cramped / average / huge) biases chamber size with three
 monotonic-mean distributions. Deliberately standalone: no
 consumer, no System Engine calls, no protocol surface — sibling package
@@ -2096,8 +2098,9 @@ per-level connectivity flood-fill (which, treating a secret door as
 walkable, also proves the dungeon stays connected *through* them),
 stair-pair reciprocity, `MaxLevels` respected, determinism, the
 one-cell border, `RoomSize` monotonicity, secret doors real-but-
-wall-reading, invalid-options-return-nil, tiny-budget termination. Not
-built: secret *rooms* off dead ends, the room-adjacency graph a crawler
+wall-reading, secret vaults (a sealed floor-only region gated by a
+secret door always holds a chest), invalid-options-return-nil,
+tiny-budget termination. Not built: the room-adjacency graph a crawler
 would want as a post-process (regions + door edges), any renderer
 beyond ASCII, and all the actual viewport / protocol / DM-tool wiring —
 that's the V3 feature work this only prepares for.

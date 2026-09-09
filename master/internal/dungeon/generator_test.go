@@ -157,6 +157,134 @@ func TestGenerate_SecretDoorsAreRealConnectionsThatReadAsWall(t *testing.T) {
 	// since floodFill treats a secret door as walkable.
 }
 
+func TestGrowSecretRoom_SealedVaultWithTreasure(t *testing.T) {
+	// A hand-built level with a stub of corridor, so growSecretRoom has a
+	// real expansion point to carve a vault ahead of.
+	g := &generator{
+		opts:    Options{LevelWidth: 20, LevelHeight: 20},
+		rnd:     rand.New(rand.NewSource(1)),
+		dungeon: &Dungeon{},
+	}
+	l := &Level{Width: 20, Height: 20, Tiles: make([]TileType, 400)}
+	l.set(5, 10, TileFloor) // the dead-end corridor cell
+	g.dungeon.Levels = []*Level{l}
+
+	if !g.growSecretRoom(expansionPoint{level: 0, x: 5, y: 10, dir: east}) {
+		t.Fatal("growSecretRoom returned false with plenty of space")
+	}
+
+	// A secret door immediately east of the stub.
+	if tile, _ := l.At(6, 10); tile != TileSecretDoor {
+		t.Errorf("tile east of the stub = %v, want TileSecretDoor", tile)
+	}
+	// A chest somewhere on the level.
+	chests := 0
+	for _, f := range l.Features {
+		if f.Kind == FeatureChest {
+			chests++
+		}
+		if !l.Walkable(f.X, f.Y) {
+			t.Errorf("vault feature at (%d,%d) is not on a walkable tile", f.X, f.Y)
+		}
+	}
+	if chests == 0 {
+		t.Error("a secret vault should always hold at least one chest")
+	}
+	// The vault has no exits other than the secret door: from any vault
+	// floor tile, the only walkable cell outside the room's rectangle is
+	// the secret door.
+	room := reachAvoiding(l, 7, 10, TileSecretDoor)
+	if len(room) == 0 {
+		t.Fatal("no reachable vault interior east of the secret door")
+	}
+	if len(room) > 16 {
+		t.Errorf("vault interior is %d tiles, expected small", len(room))
+	}
+}
+
+func TestGenerate_SecretVaultsAppearInRealDungeons(t *testing.T) {
+	// Confirm the dead-end branch actually produces vaults during real
+	// generation: at least one secret door whose far side opens into a
+	// small floor-only region holding a chest.
+	found := false
+	for seed := int64(0); seed < 80 && !found; seed++ {
+		d := Generate(Options{
+			LevelWidth: 80, LevelHeight: 50, MaxLevels: 2,
+			Rand: rand.New(rand.NewSource(seed)),
+		})
+		for _, l := range d.Levels {
+			chestAt := map[[2]int]bool{}
+			for _, f := range l.Features {
+				if f.Kind == FeatureChest {
+					chestAt[[2]int{f.X, f.Y}] = true
+				}
+			}
+			for i, tile := range l.Tiles {
+				if tile != TileSecretDoor {
+					continue
+				}
+				x, y := i%l.Width, i/l.Width
+				for _, dxy := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+					fx, fy := x+dxy[0], y+dxy[1]
+					ft, ok := l.At(fx, fy)
+					if !ok || ft != TileFloor {
+						continue
+					}
+					region := reachAvoiding(l, fx, fy, TileSecretDoor)
+					if len(region) == 0 || len(region) > 20 {
+						continue
+					}
+					allFloor := true
+					hasChest := false
+					for p := range region {
+						if rt, _ := l.At(p[0], p[1]); rt != TileFloor {
+							allFloor = false
+						}
+						if chestAt[p] {
+							hasChest = true
+						}
+					}
+					if allFloor && hasChest {
+						found = true
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("no secret vault (small floor-only region with a chest, gated by a secret door) found across 80 seeds")
+	}
+}
+
+// reachAvoiding flood-fills walkable tiles from (sx, sy) via 4-way
+// movement, never stepping onto a tile of type avoid.
+func reachAvoiding(l *Level, sx, sy int, avoid TileType) map[[2]int]bool {
+	seen := map[[2]int]bool{}
+	start, ok := l.At(sx, sy)
+	if !ok || !start.Walkable() || start == avoid {
+		return seen
+	}
+	queue := [][2]int{{sx, sy}}
+	seen[[2]int{sx, sy}] = true
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, dxy := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+			n := [2]int{cur[0] + dxy[0], cur[1] + dxy[1]}
+			if seen[n] {
+				continue
+			}
+			t, ok := l.At(n[0], n[1])
+			if !ok || !t.Walkable() || t == avoid {
+				continue
+			}
+			seen[n] = true
+			queue = append(queue, n)
+		}
+	}
+	return seen
+}
+
 func TestGenerate_RespectsMaxLevels(t *testing.T) {
 	for seed := int64(0); seed < 15; seed++ {
 		d := Generate(Options{

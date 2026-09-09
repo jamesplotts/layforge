@@ -197,7 +197,11 @@ func (g *generator) grow(xp expansionPoint) {
 	case roll < 55 || crowded && roll < 95:
 		g.growPassage(xp)
 	case roll < 60:
-		// dead end — drop it
+		// dead end — but roughly one in four hides a small vault behind
+		// a secret door in the end wall, the payoff for searching one.
+		if !crowded && g.rnd.Intn(4) == 0 {
+			g.growSecretRoom(xp)
+		}
 	case roll < 92 && !crowded:
 		g.growChamber(xp)
 	case !crowded:
@@ -307,58 +311,105 @@ func (g *generator) growChamber(xp expansionPoint) {
 	g.growPassage(xp)
 }
 
-// tryChamber attempts to place a chamber; returns false without touching
-// the map if it doesn't fit.
-func (g *generator) tryChamber(xp expansionPoint) bool {
-	l := g.dungeon.Levels[xp.level]
-	w, h := g.chamberDims()
+// rect is an inclusive cell rectangle.
+type rect struct{ minX, minY, maxX, maxY int }
 
-	// Lay the chamber out ahead of the expansion point, spanning to the
-	// sides with a random offset so the entry isn't always centered.
+// placeableRect lays a w*h room out ahead of xp — spanning to the sides
+// with a random offset so the entry isn't always centered — and returns
+// it, or ok=false if it would leave the carvable area or touch anything
+// already carved. It does not modify the map.
+func (g *generator) placeableRect(xp expansionPoint, w, h int) (rect, bool) {
+	l := g.dungeon.Levels[xp.level]
 	dx, dy := xp.dir.delta()
-	doorX, doorY := xp.x+dx, xp.y+dy // the doorway cell
-	var minX, minY, maxX, maxY int
+	doorX, doorY := xp.x+dx, xp.y+dy
+	var r rect
 	if dx != 0 { // heading east or west
-		aheadX := doorX + dx // chamber's near edge
+		aheadX := doorX + dx
 		if dx > 0 {
-			minX, maxX = aheadX, aheadX+w-1
+			r.minX, r.maxX = aheadX, aheadX+w-1
 		} else {
-			minX, maxX = aheadX-w+1, aheadX
+			r.minX, r.maxX = aheadX-w+1, aheadX
 		}
 		off := g.rnd.Intn(h)
-		minY, maxY = doorY-off, doorY-off+h-1
+		r.minY, r.maxY = doorY-off, doorY-off+h-1
 	} else { // heading north or south
 		aheadY := doorY + dy
 		if dy > 0 {
-			minY, maxY = aheadY, aheadY+h-1
+			r.minY, r.maxY = aheadY, aheadY+h-1
 		} else {
-			minY, maxY = aheadY-h+1, aheadY
+			r.minY, r.maxY = aheadY-h+1, aheadY
 		}
 		off := g.rnd.Intn(w)
-		minX, maxX = doorX-off, doorX-off+w-1
+		r.minX, r.maxX = doorX-off, doorX-off+w-1
 	}
-
-	// Reject if the chamber (with a 1-cell inspection margin) leaves the
-	// carvable area or would touch anything already carved.
-	for y := minY - 1; y <= maxY+1; y++ {
-		for x := minX - 1; x <= maxX+1; x++ {
+	for y := r.minY - 1; y <= r.maxY+1; y++ {
+		for x := r.minX - 1; x <= r.maxX+1; x++ {
 			if !l.carvable(x, y) {
-				return false
+				return rect{}, false
 			}
 			if t, _ := l.At(x, y); t.Walkable() {
-				return false
+				return rect{}, false
 			}
 		}
 	}
+	return r, true
+}
 
-	l.set(doorX, doorY, TileDoor)
-	for y := minY; y <= maxY; y++ {
-		for x := minX; x <= maxX; x++ {
-			l.set(x, y, TileFloor)
+func (l *Level) fill(r rect, t TileType) {
+	for y := r.minY; y <= r.maxY; y++ {
+		for x := r.minX; x <= r.maxX; x++ {
+			l.set(x, y, t)
 		}
 	}
-	g.scatterFeatures(xp.level, minX, minY, maxX, maxY)
-	g.chamberExits(xp.level, minX, minY, maxX, maxY, xp.dir)
+}
+
+// tryChamber attempts to place a normal chamber (door, floor, scattered
+// features, wall exits); returns false without touching the map if it
+// doesn't fit.
+func (g *generator) tryChamber(xp expansionPoint) bool {
+	w, h := g.chamberDims()
+	r, ok := g.placeableRect(xp, w, h)
+	if !ok {
+		return false
+	}
+	l := g.dungeon.Levels[xp.level]
+	dx, dy := xp.dir.delta()
+	l.set(xp.x+dx, xp.y+dy, TileDoor)
+	l.fill(r, TileFloor)
+	g.scatterFeatures(xp.level, r.minX, r.minY, r.maxX, r.maxY)
+	g.chamberExits(xp.level, r.minX, r.minY, r.maxX, r.maxY, xp.dir)
+	return true
+}
+
+// growSecretRoom carves a small sealed vault ahead of a dead-end
+// expansion point, hidden behind a secret door — the classic payoff for
+// searching a dead end. It has no other exits (the vault is itself a
+// dead end) and always holds at least a chest. Returns false, touching
+// nothing, if there's no room for one.
+func (g *generator) growSecretRoom(xp expansionPoint) bool {
+	w, h := 2+g.rnd.Intn(3), 2+g.rnd.Intn(3)
+	r, ok := g.placeableRect(xp, w, h)
+	if !ok {
+		return false
+	}
+	l := g.dungeon.Levels[xp.level]
+	dx, dy := xp.dir.delta()
+	l.set(xp.x+dx, xp.y+dy, TileSecretDoor)
+	l.fill(r, TileFloor)
+
+	cx, cy := (r.minX+r.maxX)/2, (r.minY+r.maxY)/2
+	l.Features = append(l.Features, Feature{X: cx, Y: cy, Kind: FeatureChest})
+	if g.rnd.Intn(2) == 0 {
+		fx := r.minX + g.rnd.Intn(r.maxX-r.minX+1)
+		fy := r.minY + g.rnd.Intn(r.maxY-r.minY+1)
+		if fx != cx || fy != cy {
+			kind := FeatureShrine
+			if g.rnd.Intn(2) == 0 {
+				kind = FeatureStatue
+			}
+			l.Features = append(l.Features, Feature{X: fx, Y: fy, Kind: kind})
+		}
+	}
 	return true
 }
 
