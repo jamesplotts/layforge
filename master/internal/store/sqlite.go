@@ -152,6 +152,23 @@ var initStatements = []string{
 		flagged_at  TEXT NOT NULL,
 		PRIMARY KEY (campaign_id, topic)
 	);`,
+	`CREATE TABLE IF NOT EXISTS accounts (
+		account_id       TEXT PRIMARY KEY,
+		provider         TEXT NOT NULL,
+		provider_user_id TEXT NOT NULL,
+		display_name     TEXT NOT NULL DEFAULT '',
+		avatar_url       TEXT NOT NULL DEFAULT '',
+		created_at       TEXT NOT NULL,
+		last_seen_at     TEXT NOT NULL,
+		UNIQUE (provider, provider_user_id)
+	);`,
+	`CREATE TABLE IF NOT EXISTS oauth_sessions (
+		token      TEXT PRIMARY KEY,
+		account_id TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		expires_at TEXT NOT NULL
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_oauth_sessions_account ON oauth_sessions (account_id);`,
 }
 
 // SQLiteEventStore is the SQLite-backed EventStore — Master's
