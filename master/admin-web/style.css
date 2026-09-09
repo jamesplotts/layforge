@@ -608,3 +608,37 @@ button.test-failure {
 .form-actions {
   flex-wrap: wrap;
 }
+
+/* --- Discord setup walkthrough (System tab) --- */
+.setup-guide {
+  margin: 4px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 13px;
+}
+.setup-guide summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+.setup-guide ol {
+  margin: 10px 0 6px;
+  padding-left: 22px;
+  line-height: 1.6;
+}
+.setup-guide li {
+  margin-bottom: 6px;
+}
+.setup-guide a {
+  color: var(--accent);
+}
+#discord-redirect-hint code {
+  word-break: break-all;
+}
+#discord-redirect-copy {
+  margin-left: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+}

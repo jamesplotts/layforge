@@ -449,11 +449,46 @@
       </label>
       <h3 class="section-heading">Discord login</h3>
       <p class="panel-hint">
-        Optional. Set all three to enable "Log in with Discord" for players (design doc &sect;6.6).
-        In the Discord developer portal, register the redirect URL
-        <code>&lt;your public origin&gt;/auth/discord/callback</code>. The client secret is stored on
-        this Master and shown only here &mdash; never sent to a player.
+        Optional. Fill in all three fields to give players a "Log in with Discord" button
+        (design&nbsp;doc&nbsp;&sect;6.6). Leave them blank to run with no accounts &mdash; joining
+        works exactly as it does now. The client secret is stored on this Master and shown only
+        on this local panel &mdash; it is never sent to a player.
       </p>
+      <details class="setup-guide">
+        <summary>How to get these values from Discord (step by step)</summary>
+        <ol>
+          <li>
+            Open <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">discord.com/developers/applications</a>
+            and click <strong>New Application</strong>. Name it (e.g. &ldquo;Layforge &ndash; My Table&rdquo;),
+            accept the terms, and click <strong>Create</strong>. You do <em>not</em> need a bot or a bot token.
+          </li>
+          <li>
+            On <strong>General Information</strong>, copy the <strong>Application ID</strong> &mdash;
+            paste it into <strong>Discord Client ID</strong> below.
+          </li>
+          <li>
+            In the left sidebar click <strong>OAuth2</strong>. Under <strong>Client Secret</strong>
+            click <strong>Reset Secret</strong>, confirm, and copy the value (Discord shows it only once
+            &mdash; if you lose it, reset again). Paste it into <strong>Discord Client Secret</strong> below.
+          </li>
+          <li>
+            Still on the <strong>OAuth2</strong> page, under <strong>Redirects</strong> click
+            <strong>Add Redirect</strong> and paste the URL shown below the Redirect URL field.
+            Scroll down and click <strong>Save Changes</strong>.
+          </li>
+          <li>
+            Paste that same URL into <strong>Discord Redirect URL</strong> below, then
+            <strong>Save &amp; Restart</strong>. The two must match exactly &mdash; scheme, host, port,
+            path, no trailing slash.
+          </li>
+        </ol>
+        <p class="note">
+          Ignore the &ldquo;OAuth2 URL Generator&rdquo; and &ldquo;Scopes&rdquo; section in the portal
+          &mdash; Master builds its own sign-in URL (it asks only for the <code>identify</code> scope).
+          Discord allows a plain <code>http://</code> redirect for <code>localhost</code>; a public
+          deployment needs <code>https://</code>.
+        </p>
+      </details>
       <label>
         Discord Client ID
         <input id="sys-discord-client-id" type="text" autocomplete="off" placeholder="123456789012345678" />
@@ -466,6 +501,14 @@
         Discord Redirect URL
         <input id="sys-discord-redirect-url" type="text" autocomplete="off" placeholder="https://play.example.com/auth/discord/callback" />
       </label>
+      <p class="note" id="discord-redirect-hint">
+        Register this exact URL in the Discord portal (step 4):
+        <code id="discord-redirect-suggestion">&hellip;</code>
+        <button type="button" id="discord-redirect-copy" class="secondary">Copy &amp; fill</button>
+        <br />
+        For a public game, replace the host with the address players actually reach this Master at,
+        keeping <code>/auth/discord/callback</code>.
+      </p>
       <div class="system-actions">
         <button id="system-save" type="button" class="secondary">Save (no restart)</button>
         <button id="system-save-restart" type="button" class="danger">Save &amp; Restart</button>

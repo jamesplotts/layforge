@@ -149,6 +149,8 @@ const el = {
   sysDiscordClientID: document.getElementById("sys-discord-client-id"),
   sysDiscordClientSecret: document.getElementById("sys-discord-client-secret"),
   sysDiscordRedirectURL: document.getElementById("sys-discord-redirect-url"),
+  discordRedirectSuggestion: document.getElementById("discord-redirect-suggestion"),
+  discordRedirectCopy: document.getElementById("discord-redirect-copy"),
   systemSave: document.getElementById("system-save"),
   systemSaveRestart: document.getElementById("system-save-restart"),
   systemSaveStatus: document.getElementById("system-save-status"),
@@ -1088,6 +1090,34 @@ async function loadSystemSettings() {
   el.sysDiscordClientID.value = data.discord_client_id || "";
   el.sysDiscordClientSecret.value = data.discord_client_secret || "";
   el.sysDiscordRedirectURL.value = data.discord_redirect_url || "";
+  updateDiscordRedirectSuggestion();
+}
+
+// discordRedirectSuggestion mirrors Go's listenURL(addr): the player-
+// facing listen address turned into a browser-usable origin, plus the
+// fixed callback path. A bare or all-interfaces host shows as localhost —
+// none of ":8085", "0.0.0.0:8085", "[::]:8085" are things you can
+// actually type into a browser or register with Discord.
+function discordRedirectSuggestion() {
+  let addr = (el.sysAddr.value || "").trim();
+  if (!addr) addr = location.host; // fall back to however this panel was reached
+  let host = addr;
+  let port = "";
+  const lastColon = addr.lastIndexOf(":");
+  if (lastColon !== -1 && addr.indexOf("]") < lastColon) {
+    host = addr.slice(0, lastColon);
+    port = addr.slice(lastColon + 1);
+  }
+  host = host.replace(/^\[|\]$/g, "");
+  if (host === "" || host === "0.0.0.0" || host === "::") host = "localhost";
+  const origin = "http://" + host + (port ? ":" + port : "");
+  return origin + "/auth/discord/callback";
+}
+
+function updateDiscordRedirectSuggestion() {
+  if (el.discordRedirectSuggestion) {
+    el.discordRedirectSuggestion.textContent = discordRedirectSuggestion();
+  }
 }
 
 function systemSettingsBody() {
@@ -1116,6 +1146,17 @@ function resetLLMTestState() {
 for (const field of [el.sysLLMProvider, el.sysLLMURL, el.sysLLMModel, el.sysLLMAPIKey]) {
   field.addEventListener("input", resetLLMTestState);
   field.addEventListener("change", resetLLMTestState);
+}
+
+// The suggested Discord redirect URL is derived from the listen address,
+// so keep it live as the operator edits that field.
+el.sysAddr.addEventListener("input", updateDiscordRedirectSuggestion);
+if (el.discordRedirectCopy) {
+  el.discordRedirectCopy.addEventListener("click", () => {
+    const url = discordRedirectSuggestion();
+    el.sysDiscordRedirectURL.value = url;
+    if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
+  });
 }
 
 el.testLLMButton.addEventListener("click", async () => {
