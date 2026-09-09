@@ -32,6 +32,8 @@
 const state = {
   campaignId: "",
   generatedPackSlug: "",
+  campaigns: [],
+  selectedCharacterId: "",
 };
 
 const el = {
@@ -40,7 +42,8 @@ const el = {
   termsModal: document.getElementById("terms-modal"),
   termsModalText: document.getElementById("terms-modal-text"),
   termsModalAgree: document.getElementById("terms-modal-agree"),
-  campaignContext: document.getElementById("campaign-context"),
+  campaignPickerBar: document.getElementById("campaign-picker-bar"),
+  campaignManage: document.getElementById("campaign-manage"),
   campaignSelect: document.getElementById("campaign-select"),
   campaignTableBody: document.getElementById("campaign-table-body"),
   campaignListNote: document.getElementById("campaign-list-note"),
@@ -85,8 +88,29 @@ const el = {
   pregenCharacterJSON: document.getElementById("pregen-character-json"),
   pregenSave: document.getElementById("pregen-save"),
   pregenSaveStatus: document.getElementById("pregen-save-status"),
-  characterTableBody: document.getElementById("character-table-body"),
+  pregenNewButton: document.getElementById("pregen-new-button"),
+  pregenForm: document.getElementById("pregen-form"),
+  pregenCancel: document.getElementById("pregen-cancel"),
+  pregenCampaignNote: document.getElementById("pregen-campaign-note"),
+  pregenEmptyNote: document.getElementById("pregen-empty-note"),
   connectedPlayersTableBody: document.getElementById("connected-players-table-body"),
+  campaignCharactersTableBody: document.getElementById("campaign-characters-table-body"),
+  allCharacterPicker: document.getElementById("all-character-picker"),
+  allCharacterEmptyNote: document.getElementById("all-character-empty-note"),
+  characterDetail: document.getElementById("character-detail"),
+  cdName: document.getElementById("cd-name"),
+  cdOwner: document.getElementById("cd-owner"),
+  cdCampaign: document.getElementById("cd-campaign"),
+  cdStatus: document.getElementById("cd-status"),
+  cdCreated: document.getElementById("cd-created"),
+  cdMoveSelect: document.getElementById("cd-move-select"),
+  cdMoveButton: document.getElementById("cd-move-button"),
+  cdReviewReason: document.getElementById("cd-review-reason"),
+  cdApproveButton: document.getElementById("cd-approve-button"),
+  cdRejectButton: document.getElementById("cd-reject-button"),
+  cdJson: document.getElementById("cd-json"),
+  cdDeleteButton: document.getElementById("cd-delete-button"),
+  cdStatusLine: document.getElementById("cd-status-line"),
   campaignSaveStatus: document.getElementById("campaign-save-status"),
   roomPassword: document.getElementById("room-password"),
   securitySave: document.getElementById("security-save"),
@@ -113,13 +137,17 @@ for (const button of el.tabButtons) {
   button.addEventListener("click", () => selectTab(button.dataset.tab));
 }
 
+// pickerTabs are the tabs whose panels act on the selected campaign and
+// so need the campaign picker above them; campaignManageTab is the only
+// one that also gets the full campaign list + creation actions.
+const pickerTabs = ["campaign", "security", "pregens"];
+
 function selectTab(tabId) {
   for (const button of el.tabButtons) button.classList.toggle("active", button.dataset.tab === tabId);
   for (const panel of el.tabPanels) panel.hidden = panel.dataset.tab !== tabId;
-  // System is process-wide and needs no selected campaign at all — hide
-  // the shared campaign list/picker/create-form while it's active so a
-  // first-time Host sees only AI/LLM setup, not an empty campaign table.
-  el.campaignContext.hidden = tabId === "system";
+  el.campaignPickerBar.hidden = !pickerTabs.includes(tabId);
+  el.campaignManage.hidden = tabId !== "campaign";
+  if (tabId === "characters") loadAllCharacters();
 }
 
 // --- Campaign list, picker, and creation ---
@@ -135,10 +163,14 @@ function formatLastActive(iso) {
   return d.toLocaleString();
 }
 
+// state.campaigns caches the last /api/campaigns response so the
+// character-move dropdown (Characters tab) can list every campaign
+// without its own fetch.
 async function loadCampaignList() {
   const resp = await fetch("/api/campaigns");
   const data = await resp.json();
   const campaigns = data.campaigns || [];
+  state.campaigns = campaigns;
 
   el.campaignSelect.innerHTML = "";
   el.campaignTableBody.innerHTML = "";
@@ -322,7 +354,7 @@ async function selectCampaign(id) {
     loadCampaignSecurity(id),
     loadCampaignPack(id),
     loadPregens(id),
-    loadCharacters(id),
+    loadCampaignCharacters(id),
     loadConnectedPlayers(id),
   ]);
 }
@@ -556,10 +588,14 @@ el.installLibrarySubmit.addEventListener("click", async () => {
 // --- Pregens tab ---
 
 async function loadPregens(id) {
+  const label = campaignLabel(id);
+  el.pregenCampaignNote.textContent = `Templates below belong to campaign ${label}. Switch campaigns with the picker above.`;
+
   const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/pregens`);
   const pregens = (await resp.json()) || [];
 
   el.pregenTableBody.innerHTML = "";
+  el.pregenEmptyNote.hidden = pregens.length > 0;
   for (const p of pregens) {
     const row = document.createElement("tr");
 
@@ -588,6 +624,19 @@ async function loadPregens(id) {
   }
 }
 
+function showPregenForm(show) {
+  el.pregenForm.hidden = !show;
+  el.pregenNewButton.hidden = show;
+  if (!show) {
+    for (const id of ["pregenId", "pregenName", "pregenDescription", "pregenSchemaVersion", "pregenCharacterJSON"]) {
+      el[id].value = "";
+    }
+    setStatus(el.pregenSaveStatus, "");
+  }
+}
+el.pregenNewButton.addEventListener("click", () => showPregenForm(true));
+el.pregenCancel.addEventListener("click", () => showPregenForm(false));
+
 el.pregenSave.addEventListener("click", async () => {
   if (!state.campaignId) return;
   setStatus(el.pregenSaveStatus, "Saving…");
@@ -615,12 +664,7 @@ el.pregenSave.addEventListener("click", async () => {
     setStatus(el.pregenSaveStatus, `Failed: ${await errorText(resp)}`, true);
     return;
   }
-  setStatus(el.pregenSaveStatus, "Saved.");
-  el.pregenId.value = "";
-  el.pregenName.value = "";
-  el.pregenDescription.value = "";
-  el.pregenSchemaVersion.value = "";
-  el.pregenCharacterJSON.value = "";
+  showPregenForm(false);
   await loadPregens(state.campaignId);
 });
 
@@ -635,34 +679,63 @@ async function deletePregen(campaignId, pregenId) {
   await loadPregens(campaignId);
 }
 
-// --- Character Review tab ---
+// --- Characters ---
 //
-// Lists every character store.CharacterStore.ListCharacters returns for
-// this campaign (design doc §9.4) — quick/detailed-rolled characters
-// and claimed pregens included, though they're already Approved and so
-// have nothing to review; the table's own point is the imported ones
-// still PendingReview, or previously Approved/Rejected by either the
-// automatic pass or an earlier Host decision. Approve/Reject always
-// overrides whatever status a character already has — the Host is this
-// system's final authority (see handleReviewCharacter's own doc
-// comment, package admin).
+// The Campaign tab shows the characters IN the selected campaign
+// (loadCampaignCharacters) with move/remove. The Characters tab is a
+// cross-campaign roster (loadAllCharacters): a picker, then a detail
+// panel with move, approve/reject (design doc §9.4's import veto — Host
+// overrides any prior status), and delete.
 
-// characterDisplayName reads the character's own name straight off the
-// parsed object the JSON API response already gives us — character_json
-// is a json.RawMessage on the Go side, which encodes/decodes as a plain
-// embedded JSON value (an object), not a string, so there is nothing to
-// JSON.parse() here; doing so throws (an object isn't valid JSON text).
-function characterDisplayName(characterJSON) {
+// character_json comes back as a real embedded JSON object (Go
+// json.RawMessage), not a string — read .name straight off it.
+function characterName(characterJSON) {
   return characterJSON && characterJSON.name ? characterJSON.name : "(unnamed)";
 }
 
-async function loadCharacters(id) {
+function campaignLabel(campaignId) {
+  const c = (state.campaigns || []).find((c) => c.campaign_id === campaignId);
+  return c && c.display_name ? `${c.display_name} (${campaignId})` : campaignId;
+}
+
+// fillCampaignOptions populates a <select> with every known campaign,
+// optionally excluding one id (the character's current campaign, for a
+// move dropdown).
+function fillCampaignOptions(selectEl, excludeId) {
+  selectEl.innerHTML = "";
+  for (const c of state.campaigns || []) {
+    if (c.campaign_id === excludeId) continue;
+    const option = document.createElement("option");
+    option.value = c.campaign_id;
+    option.textContent = c.display_name || c.campaign_id;
+    selectEl.appendChild(option);
+  }
+}
+
+// --- Campaign tab: characters in this campaign ---
+
+async function loadCampaignCharacters(id) {
   const resp = await fetch(`/api/campaigns/${encodeURIComponent(id)}/characters`);
   const characters = (await resp.json()) || [];
 
-  el.characterTableBody.innerHTML = "";
+  el.campaignCharactersTableBody.innerHTML = "";
+  if (characters.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.className = "note";
+    cell.textContent = "No characters in this campaign yet.";
+    row.appendChild(cell);
+    el.campaignCharactersTableBody.appendChild(row);
+    return;
+  }
+
   for (const c of characters) {
     const row = document.createElement("tr");
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = c.name || characterName(c.character_json);
+    row.appendChild(nameCell);
 
     const ownerCell = document.createElement("td");
     ownerCell.textContent = c.owner_id;
@@ -672,46 +745,134 @@ async function loadCharacters(id) {
     statusCell.textContent = c.status;
     row.appendChild(statusCell);
 
-    const nameCell = document.createElement("td");
-    nameCell.textContent = characterDisplayName(c.character_json);
-    row.appendChild(nameCell);
+    const moveCell = document.createElement("td");
+    const moveSelect = document.createElement("select");
+    fillCampaignOptions(moveSelect, id);
+    const moveButton = document.createElement("button");
+    moveButton.type = "button";
+    moveButton.className = "secondary";
+    moveButton.textContent = "Move";
+    moveButton.disabled = moveSelect.options.length === 0;
+    moveButton.addEventListener("click", () => moveCharacter(c.id, moveSelect.value));
+    moveCell.append(moveSelect, moveButton);
+    row.appendChild(moveCell);
 
-    const approveCell = document.createElement("td");
-    const approveButton = document.createElement("button");
-    approveButton.type = "button";
-    approveButton.textContent = "Approve";
-    approveButton.addEventListener("click", () => reviewCharacter(id, c.id, "approved"));
-    approveCell.appendChild(approveButton);
-    row.appendChild(approveCell);
+    const removeCell = document.createElement("td");
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "danger";
+    removeButton.textContent = "Remove";
+    removeButton.addEventListener("click", () => deleteCharacter(c.id));
+    removeCell.appendChild(removeButton);
+    row.appendChild(removeCell);
 
-    const rejectCell = document.createElement("td");
-    const rejectButton = document.createElement("button");
-    rejectButton.type = "button";
-    rejectButton.className = "secondary";
-    rejectButton.textContent = "Reject";
-    rejectButton.addEventListener("click", () => reviewCharacter(id, c.id, "rejected"));
-    rejectCell.appendChild(rejectButton);
-    row.appendChild(rejectCell);
-
-    el.characterTableBody.appendChild(row);
+    el.campaignCharactersTableBody.appendChild(row);
   }
 }
 
-async function reviewCharacter(campaignId, characterId, status) {
-  const reason = window.prompt(`Reason for marking this character "${status}" (shown to the player, optional):`, "") || "";
+// --- Characters tab: cross-campaign roster ---
+
+async function loadAllCharacters() {
+  const resp = await fetch("/api/characters");
+  const characters = (await resp.json()) || [];
+  state.allCharacters = characters;
+
+  el.allCharacterPicker.innerHTML = "";
+  el.allCharacterEmptyNote.hidden = characters.length > 0;
+  el.characterDetail.hidden = characters.length === 0;
+
+  for (const c of characters) {
+    const option = document.createElement("option");
+    option.value = c.id;
+    const name = c.name || characterName(c.character_json);
+    option.textContent = `${name} — ${c.owner_id} — ${c.campaign_id}`;
+    el.allCharacterPicker.appendChild(option);
+  }
+
+  if (characters.length === 0) return;
+  const keep = characters.some((c) => c.id === state.selectedCharacterId)
+    ? state.selectedCharacterId
+    : characters[0].id;
+  el.allCharacterPicker.value = keep;
+  renderCharacterDetail(characters.find((c) => c.id === keep));
+}
+
+el.allCharacterPicker.addEventListener("change", () => {
+  const c = (state.allCharacters || []).find((c) => c.id === el.allCharacterPicker.value);
+  if (c) renderCharacterDetail(c);
+});
+
+function renderCharacterDetail(c) {
+  state.selectedCharacterId = c.id;
+  el.cdName.textContent = c.name || characterName(c.character_json);
+  el.cdOwner.textContent = c.owner_id;
+  el.cdCampaign.textContent = campaignLabel(c.campaign_id);
+  el.cdStatus.textContent = c.status;
+  el.cdCreated.textContent = c.created_at ? new Date(c.created_at).toLocaleString() : "";
+  el.cdJson.textContent = JSON.stringify(c.character_json, null, 2);
+  el.cdReviewReason.value = "";
+  setStatus(el.cdStatusLine, "");
+
+  fillCampaignOptions(el.cdMoveSelect, c.campaign_id);
+  el.cdMoveButton.disabled = el.cdMoveSelect.options.length === 0;
+}
+
+el.cdMoveButton.addEventListener("click", () =>
+  moveCharacter(state.selectedCharacterId, el.cdMoveSelect.value, el.cdStatusLine),
+);
+el.cdDeleteButton.addEventListener("click", () => deleteCharacter(state.selectedCharacterId, el.cdStatusLine));
+el.cdApproveButton.addEventListener("click", () => reviewSelectedCharacter("approved"));
+el.cdRejectButton.addEventListener("click", () => reviewSelectedCharacter("rejected"));
+
+async function refreshCharacterViews() {
+  const tasks = [loadAllCharacters(), loadCampaignList()];
+  if (state.campaignId) tasks.push(loadCampaignCharacters(state.campaignId), loadConnectedPlayers(state.campaignId));
+  await Promise.all(tasks);
+}
+
+async function moveCharacter(characterId, campaignId, statusEl) {
+  if (!characterId || !campaignId) return;
+  const resp = await fetch(`/api/characters/${encodeURIComponent(characterId)}/campaign`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ campaign_id: campaignId }),
+  });
+  if (!resp.ok) {
+    if (statusEl) setStatus(statusEl, `Move failed: ${await errorText(resp)}`, true);
+    return;
+  }
+  if (statusEl) setStatus(statusEl, `Moved to ${campaignId}.`);
+  await refreshCharacterViews();
+}
+
+async function deleteCharacter(characterId, statusEl) {
+  if (!characterId) return;
+  const resp = await fetch(`/api/characters/${encodeURIComponent(characterId)}`, { method: "DELETE" });
+  if (!resp.ok && resp.status !== 204) {
+    if (statusEl) setStatus(statusEl, `Delete failed: ${await errorText(resp)}`, true);
+    return;
+  }
+  if (characterId === state.selectedCharacterId) state.selectedCharacterId = "";
+  await refreshCharacterViews();
+}
+
+async function reviewSelectedCharacter(status) {
+  const c = (state.allCharacters || []).find((c) => c.id === state.selectedCharacterId);
+  if (!c) return;
   const resp = await fetch(
-    `/api/campaigns/${encodeURIComponent(campaignId)}/characters/${encodeURIComponent(characterId)}/review`,
+    `/api/campaigns/${encodeURIComponent(c.campaign_id)}/characters/${encodeURIComponent(c.id)}/review`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status, reason }),
+      body: JSON.stringify({ status, reason: el.cdReviewReason.value.trim() }),
     },
   );
   if (!resp.ok) {
-    window.alert(`Failed: ${await errorText(resp)}`);
+    setStatus(el.cdStatusLine, `Failed: ${await errorText(resp)}`, true);
     return;
   }
-  await loadCharacters(campaignId);
+  setStatus(el.cdStatusLine, `Marked ${status}.`);
+  await refreshCharacterViews();
 }
 
 async function loadConnectedPlayers(id) {

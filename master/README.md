@@ -2125,6 +2125,44 @@ unpack gate itself. Live-verified with a real Master binary against a
 stub archive server: install → two campaigns created → `GET
 /api/campaigns` returns both with the pack titles as display names.
 
+**Admin panel restructure — tab scoping, campaign listbox, a Characters
+tab, and cross-campaign character moves.** Follow-up to first-use
+feedback that the panel was unintuitive:
+
+- The campaign **picker** and the campaign **management** chrome (the
+  list, "Create a new campaign", "Generate a campaign pack with AI",
+  "Download Campaign Pack") were one always-on block on every non-System
+  tab. Split now: the picker shows on Campaign / Security / Pregens (the
+  tabs that act on a selected campaign); the management chrome is
+  Campaign-tab only. The campaign list is a fixed-height scrolling
+  listbox with a sticky header instead of an unbounded table.
+- **Characters tab** (was "Character Review"): a cross-campaign roster —
+  a picker over every character on the Master (`GET /api/characters`,
+  new `store.ListAllCharacters`), then a detail panel with the sheet,
+  a **move-to-campaign** action (`PUT /api/characters/{id}/campaign` →
+  `store.MoveCharacter`, a `campaign_id` reassignment — the §9.4
+  per-account snapshot model that would make it a copy is still
+  unbuilt), approve/reject with an inline reason field (replacing a
+  `window.prompt`), and delete (`DELETE /api/characters/{id}` →
+  `store.DeleteCharacter`). The `characters` table never constrained
+  one-character-per-owner, so a player owning several was already
+  supported end to end (every WS character action carries an explicit
+  `character_id`) — this just surfaces it.
+- **Campaign tab** gained "Active players" (the connected-players/kick
+  table, moved here from the old Characters tab) and "Characters in this
+  campaign" (that campaign's roster, with per-row move / remove).
+- **Pregens tab** gained a plain-language explanation of what a
+  character template is and does, a "New character template" button
+  that reveals the create form (with Cancel), and an empty-state note.
+  Per-row Delete was already there.
+
+Backend covered by `internal/store/sqlite_character_test.go`
+(list-all / move / delete, including not-found and empty-campaign) and
+`internal/admin/character_move_test.go` (the three endpoints, plus
+cross-origin and 404 paths). The admin-web restructure is
+static-verified (build, JS parse, every element id resolves) but not
+browser-tested this pass — the extension wasn't connected.
+
 ## Layout
 
 ```

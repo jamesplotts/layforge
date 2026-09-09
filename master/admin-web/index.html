@@ -30,14 +30,24 @@
   </nav>
 
   <main>
-    <!-- Scoped to Campaign/Security/Pregens/Character Review — all four
-         act on whichever campaign_id is selected here (see app.js's
-         selectCampaign), unlike System, which is process-wide and needs
-         no campaign at all. Hidden while System is active (see
-         selectTab) so a first-time Host isn't shown an empty campaign
-         table before ever seeing AI/LLM setup — the actual prerequisite
-         for everything else here to do anything useful. -->
-    <div id="campaign-context" hidden>
+    <!-- The campaign PICKER: the Campaign, Security, and Pregens tabs
+         all act on whichever campaign_id is selected here (see app.js's
+         selectTab / selectCampaign). Not shown on System (process-wide,
+         no campaign) or Characters (its own cross-campaign picker). -->
+    <div id="campaign-picker-bar" hidden>
+      <div class="campaign-picker">
+        <label>
+          Campaign
+          <select id="campaign-select"></select>
+        </label>
+      </div>
+    </div>
+
+    <!-- Campaign MANAGEMENT — the list of every campaign, and the
+         actions that create one (by hand, by AI generation, or by
+         downloading the pregenerated pack library). Campaign tab only;
+         not clutter on Security / Pregens / Characters. -->
+    <div id="campaign-manage" hidden>
       <!-- Every known campaign, with real party size/last-played/archived
            status — a host-created display name is shown in place of the
            raw campaign_id wherever one has been set. Archiving is purely a
@@ -57,18 +67,8 @@
           </thead>
           <tbody id="campaign-table-body"></tbody>
         </table>
-        <span id="campaign-list-note" class="note"></span>
       </div>
-
-      <!-- Campaign and Security tabs both act on whichever campaign_id is
-           selected here — one picker shared by both tabs rather than two
-           separate ones, since it's always the same campaign either way. -->
-      <div class="campaign-picker">
-        <label>
-          Campaign
-          <select id="campaign-select"></select>
-        </label>
-      </div>
+      <span id="campaign-list-note" class="note"></span>
 
       <!-- Primary "get something to play" action on this tab, so it is
            deliberately NOT inside a <details>: one click downloads the
@@ -208,6 +208,33 @@
       <p id="campaign-pack-current" class="note"></p>
       <button id="campaign-pack-save" type="button">Bind Pack</button>
       <span id="campaign-pack-save-status" class="save-status"></span>
+
+      <hr />
+      <h3 class="section-heading">Active players</h3>
+      <p class="panel-hint">
+        Players with a live connection to this campaign right now. Kicking one disconnects
+        them immediately — it isn't a ban, they can rejoin like any other player.
+      </p>
+      <table id="connected-players-table" class="campaign-table">
+        <thead>
+          <tr><th>Sender ID</th><th></th></tr>
+        </thead>
+        <tbody id="connected-players-table-body"></tbody>
+      </table>
+
+      <h3 class="section-heading">Characters in this campaign</h3>
+      <p class="panel-hint">
+        Every character on record in this campaign (players' own and DM-created NPCs alike).
+        "Move" reassigns a character to another campaign, carrying its sheet unchanged;
+        "Remove" deletes the record. Both take effect immediately — a player connected as
+        that character is left without one until they reconnect or re-import.
+      </p>
+      <table id="campaign-characters-table" class="campaign-table">
+        <thead>
+          <tr><th>Character</th><th>Owner</th><th>Status</th><th></th><th></th></tr>
+        </thead>
+        <tbody id="campaign-characters-table-body"></tbody>
+      </table>
     </section>
 
     <section class="tab-panel" data-tab="security" hidden>
@@ -221,87 +248,106 @@
     </section>
 
     <section class="tab-panel" data-tab="pregens" hidden>
+      <h3 class="section-heading">Character templates for this campaign</h3>
       <p class="panel-hint">
-        Pregenerated characters a player can pick at join time (design doc §9.4) — offered
-        alongside importing their own character or rolling a new one. Claiming a pregen copies
-        it into a brand-new character for that player; the template here is never changed by a
-        claim, so the same pregen can be offered to (and picked by) more than one player.
+        <strong>What this tab is for:</strong> a Host stocks a shelf of ready-made
+        characters here. When a player joins this campaign, one of their options — next to
+        "import my own" and "roll a new one" — is to pick one of these. Picking a template
+        <em>copies</em> it into a fresh character owned by that player; the template on this
+        shelf is never touched, so the same one can be handed to several players. It's the
+        no-prep way to get a new or trying-it-out player into the game with a sensible sheet.
       </p>
+      <p class="panel-hint" id="pregen-campaign-note"></p>
       <table id="pregen-table" class="campaign-table">
         <thead>
-          <tr>
-            <th>ID</th>
-            <th>Name</th>
-            <th>Description</th>
-            <th></th>
-          </tr>
+          <tr><th>ID</th><th>Name</th><th>Description</th><th></th></tr>
         </thead>
         <tbody id="pregen-table-body"></tbody>
       </table>
+      <p class="note" id="pregen-empty-note" hidden>No templates yet — create one below.</p>
 
-      <details class="create-campaign">
-        <summary>Add a pregen</summary>
-        <div class="create-campaign-form">
-          <label>
-            ID (shown to players as their choice — pick something readable, e.g. "bram-fighter")
-            <input id="pregen-id" type="text" placeholder="bram-fighter" />
-          </label>
-          <label>
-            Name
-            <input id="pregen-name" type="text" placeholder="Bram the Bold" />
-          </label>
-          <label>
-            Description (shown to players alongside the name)
-            <input id="pregen-description" type="text" placeholder="A stalwart level-1 fighter, ready to go." />
-          </label>
-          <label>
-            Schema Version
-            <input id="pregen-schema-version" type="text" placeholder="opencombatengine-v1" />
-          </label>
-          <label>
-            Character JSON
-            <textarea id="pregen-character-json" rows="6" placeholder='{"id":"...","name":"Bram", ...}'></textarea>
-          </label>
-          <button id="pregen-save" type="button">Save</button>
-          <span id="pregen-save-status" class="save-status"></span>
+      <button id="pregen-new-button" type="button">New character template</button>
+
+      <div id="pregen-form" class="create-campaign-form" hidden>
+        <label>
+          ID (shown to players as their choice — pick something readable, e.g. "bram-fighter")
+          <input id="pregen-id" type="text" placeholder="bram-fighter" />
+        </label>
+        <label>
+          Name
+          <input id="pregen-name" type="text" placeholder="Bram the Bold" />
+        </label>
+        <label>
+          Description (shown to players alongside the name)
+          <input id="pregen-description" type="text" placeholder="A stalwart level-1 fighter, ready to go." />
+        </label>
+        <label>
+          Schema Version
+          <input id="pregen-schema-version" type="text" placeholder="opencombatengine-v1" />
+        </label>
+        <label>
+          Character JSON
+          <textarea id="pregen-character-json" rows="6" placeholder='{"id":"...","name":"Bram", ...}'></textarea>
+        </label>
+        <div class="form-actions">
+          <button id="pregen-save" type="button">Create Template</button>
+          <button id="pregen-cancel" type="button" class="secondary">Cancel</button>
         </div>
-      </details>
+        <span id="pregen-save-status" class="save-status"></span>
+      </div>
     </section>
 
     <section class="tab-panel" data-tab="characters" hidden>
+      <h3 class="section-heading">Characters</h3>
       <p class="panel-hint">
-        Players with a live connection to this campaign right now. Kicking one disconnects
-        them immediately — it isn't a ban, they can rejoin like any other player.
+        Every character on this Master, across every campaign. Pick one to see its sheet,
+        move it to a different campaign, approve or reject an import waiting on review, or
+        delete it. A player may own more than one — each is a separate row.
       </p>
-      <table id="connected-players-table" class="campaign-table">
-        <thead>
-          <tr>
-            <th>Sender ID</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="connected-players-table-body"></tbody>
-      </table>
-      <p class="panel-hint">
-        Characters a player has imported into this campaign (design doc §9.4) — Master's own
-        automatic review (a deterministic campaign level-range check, then the DM AI's own
-        balance judgment) already ran on each of these; approving or rejecting here always
-        overrides that outcome, and a connected player is notified immediately either way.
-        Quick/detailed-rolled characters and claimed pregens never appear here — they're
-        already trusted (engine-generated or Host-authored), not subject to review.
-      </p>
-      <table id="character-table" class="campaign-table">
-        <thead>
-          <tr>
-            <th>Owner</th>
-            <th>Status</th>
-            <th>Character</th>
-            <th></th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="character-table-body"></tbody>
-      </table>
+      <label class="character-picker-label">
+        Character
+        <select id="all-character-picker"></select>
+      </label>
+      <p class="note" id="all-character-empty-note" hidden>No characters on this Master yet.</p>
+
+      <div id="character-detail" class="character-detail" hidden>
+        <dl class="character-detail-fields">
+          <dt>Name</dt><dd id="cd-name"></dd>
+          <dt>Owner</dt><dd id="cd-owner"></dd>
+          <dt>Campaign</dt><dd id="cd-campaign"></dd>
+          <dt>Review status</dt><dd id="cd-status"></dd>
+          <dt>Created</dt><dd id="cd-created"></dd>
+        </dl>
+
+        <div class="character-detail-action">
+          <label>
+            Move to campaign
+            <select id="cd-move-select"></select>
+          </label>
+          <button id="cd-move-button" type="button" class="secondary">Move</button>
+        </div>
+
+        <div class="character-detail-action">
+          <label>
+            Review reason (optional — shown to the player)
+            <input id="cd-review-reason" type="text" />
+          </label>
+          <div class="form-actions">
+            <button id="cd-approve-button" type="button">Approve</button>
+            <button id="cd-reject-button" type="button" class="secondary">Reject</button>
+          </div>
+        </div>
+
+        <details class="character-detail-json">
+          <summary>Raw character JSON</summary>
+          <pre id="cd-json"></pre>
+        </details>
+
+        <div class="character-detail-action">
+          <button id="cd-delete-button" type="button" class="danger">Delete character</button>
+          <span id="cd-status-line" class="save-status"></span>
+        </div>
+      </div>
     </section>
 
     <section class="tab-panel" data-tab="system">

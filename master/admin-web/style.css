@@ -89,7 +89,28 @@ main {
 }
 
 .campaign-list-wrap {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+}
+
+.campaign-list-wrap .campaign-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+
+.campaign-table td select {
+  display: inline-block;
+  width: auto;
+  max-width: 150px;
+  margin: 0 6px 0 0;
+  padding: 4px 6px;
+  font-size: 12px;
+  vertical-align: middle;
 }
 
 .campaign-table {
@@ -473,4 +494,95 @@ button.test-failure {
 
 .install-results .install-result-failed {
   color: var(--danger);
+}
+
+/* --- Section headings within a tab panel --- */
+.section-heading {
+  margin: 24px 0 6px;
+  font-size: 15px;
+  color: var(--text);
+}
+.section-heading:first-child {
+  margin-top: 0;
+}
+
+/* --- Pregens tab: create form toggle --- */
+#pregen-new-button {
+  margin-top: 12px;
+}
+#pregen-form {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* --- Characters tab --- */
+.character-picker-label {
+  display: block;
+  margin: 12px 0;
+}
+.character-picker-label select {
+  width: 100%;
+  max-width: 520px;
+}
+
+.character-detail {
+  padding: 18px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.character-detail-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+.character-detail-fields dt {
+  color: var(--text-dim);
+}
+.character-detail-fields dd {
+  margin: 0;
+}
+
+.character-detail-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--panel-border);
+  margin-top: 14px;
+}
+.character-detail-action label {
+  flex: 1 1 240px;
+  margin: 0;
+}
+
+.character-detail-json {
+  margin-top: 14px;
+}
+.character-detail-json summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.character-detail-json pre {
+  margin: 8px 0 0;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  font-size: 12px;
+  overflow-x: auto;
+  max-height: 320px;
 }
