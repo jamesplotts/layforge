@@ -502,12 +502,17 @@
         <input id="sys-discord-redirect-url" type="text" autocomplete="off" placeholder="https://play.example.com/auth/discord/callback" />
       </label>
       <p class="note" id="discord-redirect-hint">
-        Register this exact URL in the Discord portal (step 4):
+        <strong>The host and port here must be exactly what a player types in their browser to
+        reach the Layforge client</strong> &mdash; scheme, host, port, all identical. After a
+        player approves on Discord, Discord sends their browser to this URL, so
+        <code>localhost</code> only works when the player is on this same machine. On a LAN use
+        this Master's LAN IP (e.g. <code>http://192.168.1.5:8080/auth/discord/callback</code>);
+        publicly, your domain over <code>https://</code>. The same string must be registered in
+        the Discord portal (step&nbsp;4) and saved here.
+        <br />
+        Suggested (assumes players connect from this machine):
         <code id="discord-redirect-suggestion">&hellip;</code>
         <button type="button" id="discord-redirect-copy" class="secondary">Copy &amp; fill</button>
-        <br />
-        For a public game, replace the host with the address players actually reach this Master at,
-        keeping <code>/auth/discord/callback</code>.
       </p>
       <div class="system-actions">
         <button id="system-save" type="button" class="secondary">Save (no restart)</button>

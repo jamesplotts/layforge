@@ -173,6 +173,23 @@ func TestDiscordOAuth_Logout_DeletesSession(t *testing.T) {
 	}
 }
 
+func TestDiscordOAuth_WebClientURL_DerivedFromRedirectOrigin(t *testing.T) {
+	// Passing "" for webClientURL means "use the redirect URL's origin" —
+	// the address Discord just proved the browser can reach.
+	h := NewDiscordOAuthHandler("id", "secret",
+		"https://play.example.com:8443/auth/discord/callback", "", newMemAccountWriter(), nil)
+	if h.webClientURL != "https://play.example.com:8443" {
+		t.Errorf("webClientURL = %q, want the redirect URL's origin", h.webClientURL)
+	}
+
+	// An explicit value still wins.
+	h2 := NewDiscordOAuthHandler("id", "secret",
+		"https://play.example.com/auth/discord/callback", "https://other.example/", newMemAccountWriter(), nil)
+	if h2.webClientURL != "https://other.example" {
+		t.Errorf("webClientURL = %q, want the explicit override", h2.webClientURL)
+	}
+}
+
 func TestDiscordOAuth_Enabled_NoSecret(t *testing.T) {
 	h, _ := newTestHandler(t, newMemAccountWriter())
 	srv := httptest.NewServer(h.Routes())

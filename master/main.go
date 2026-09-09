@@ -533,8 +533,12 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 	var discordOAuthHandler *auth.DiscordOAuthHandler
 	if discordClientID != "" && discordClientSecret != "" && discordRedirectURL != "" {
 		authProvider = auth.NewDiscordOAuthProvider(events, authProvider)
+		// webClientURL left "" so the handler bounces a completed login
+		// back to the redirect URL's own origin — the address Discord just
+		// proved the browser can reach — not a -addr-derived "localhost"
+		// that only works when the player is on this same machine.
 		discordOAuthHandler = auth.NewDiscordOAuthHandler(
-			discordClientID, discordClientSecret, discordRedirectURL, listenURL(addr), events, logger,
+			discordClientID, discordClientSecret, discordRedirectURL, "", events, logger,
 		)
 		logger.Info("discord oauth enabled", "client_id", discordClientID, "redirect_url", discordRedirectURL)
 	} else if discordClientID != "" || discordClientSecret != "" || discordRedirectURL != "" {

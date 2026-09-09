@@ -95,10 +95,16 @@ type oauthState struct {
 // NewDiscordOAuthHandler creates a handler. redirectURL must be the exact
 // callback URL registered in the Discord developer portal
 // (<origin>/auth/discord/callback). webClientURL is where a completed
-// login bounces the browser.
+// login bounces the browser; pass "" to use redirectURL's own origin,
+// which is the right default — Discord just redirected the browser there,
+// so it is by definition an address the browser can reach (unlike a
+// -addr-derived "localhost" URL when the player is on another machine).
 func NewDiscordOAuthHandler(clientID, clientSecret, redirectURL, webClientURL string, s accountWriter, logger *slog.Logger) *DiscordOAuthHandler {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if webClientURL == "" {
+		webClientURL = originOf(redirectURL)
 	}
 	return &DiscordOAuthHandler{
 		clientID:     clientID,
@@ -110,6 +116,16 @@ func NewDiscordOAuthHandler(clientID, clientSecret, redirectURL, webClientURL st
 		logger:       logger,
 		state:        make(map[string]oauthState),
 	}
+}
+
+// originOf returns the scheme://host of a URL (no path/query), or "" if
+// it doesn't parse into an absolute URL with a host.
+func originOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // Routes returns the handler's mux, meant to be mounted at
