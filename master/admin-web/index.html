@@ -70,6 +70,30 @@
         </label>
       </div>
 
+      <!-- Primary "get something to play" action on this tab, so it is
+           deliberately NOT inside a <details>: one click downloads the
+           layforge.org campaign-pack library, unpacks it under this
+           Master (relative to where Master runs), and adds each adventure
+           as a bound, ready-to-play campaign in the dropdown above. A
+           campaign id that is already bound is left untouched. -->
+      <div class="download-packs">
+        <button id="install-library-submit" type="button" class="download-packs-button">Download Campaign Pack</button>
+        <p class="panel-hint">Pulls the pregenerated adventure library from layforge.org, unpacks it under this Master, and adds each one as a campaign you can pick from the dropdown above.</p>
+        <details class="download-packs-options">
+          <summary>Options</summary>
+          <label>
+            Source URL (blank = layforge.org)
+            <input id="install-library-url" type="text" placeholder="https://layforge.org/downloads/campaign-pack-library.zip" />
+          </label>
+          <label class="checkbox-label">
+            <input id="install-library-overwrite" type="checkbox" />
+            Re-download packs I already have
+          </label>
+        </details>
+        <span id="install-library-status" class="save-status"></span>
+        <ul id="install-library-results" class="install-results" hidden></ul>
+      </div>
+
       <details class="create-campaign">
         <summary>Create a new campaign</summary>
         <div class="create-campaign-form">
@@ -123,31 +147,6 @@
         </div>
       </details>
 
-      <!-- Downloads the curated campaign-pack library published on
-           layforge.org, unpacks it into this Master's campaign-packs
-           directory (relative to where Master runs), re-validates every
-           pack (the same parser gate binding one uses), then creates a
-           campaign per pack — bound and ready — so each shows up in the
-           Campaign dropdown above. A pack whose campaign id is already
-           bound is left alone; nothing already set up is clobbered.
-           Source URL defaults to -registry-url (or layforge.org). -->
-      <details class="create-campaign">
-        <summary>Download pregenerated campaign packs</summary>
-        <div class="create-campaign-form">
-          <p class="panel-hint">Downloads the layforge.org campaign-pack library, unpacks it under this Master, and adds each adventure as a ready-to-play campaign you can pick from the dropdown above. Packs that fail to validate are reported and skipped; anything you've already set up is left untouched.</p>
-          <label>
-            Source URL (optional — defaults to layforge.org)
-            <input id="install-library-url" type="text" placeholder="https://layforge.org/downloads/campaign-pack-library.zip" />
-          </label>
-          <label class="checkbox-label">
-            <input id="install-library-overwrite" type="checkbox" />
-            Re-download packs I already have
-          </label>
-          <button id="install-library-submit" type="button">Download Campaign Pack</button>
-          <span id="install-library-status" class="save-status"></span>
-          <ul id="install-library-results" class="install-results" hidden></ul>
-        </div>
-      </details>
     </div>
 
     <section class="tab-panel" data-tab="campaign" hidden>

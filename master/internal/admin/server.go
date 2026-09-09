@@ -185,6 +185,20 @@ func New(logger *slog.Logger, s store.AdminSettingsStore, campaignPack store.Cam
 	}
 }
 
+// noStaticCache wraps a static file handler so a browser always
+// revalidates before reusing a cached admin-panel asset. The panel's
+// HTML/CSS/JS change in place at fixed paths and an operator editing or
+// updating them should not have to hard-refresh to see the new UI —
+// "where is the button" is a bad failure mode. "no-cache" still allows
+// storage; http.FileServer answers the conditional request with a cheap
+// 304 when the file is unchanged.
+func noStaticCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Handler returns the admin HTTP handler: the JSON API under /api/, and
 // (if webDir is non-empty) the admin web UI's static files for
 // everything else — mirroring main.go's own /ws-plus-static-fallback
@@ -220,7 +234,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	if s.webDir != "" {
-		mux.Handle("/", http.FileServer(http.Dir(s.webDir)))
+		mux.Handle("/", noStaticCache(http.FileServer(http.Dir(s.webDir))))
 	}
 	return mux
 }

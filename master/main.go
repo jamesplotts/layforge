@@ -229,6 +229,20 @@ func defaultAdminWebDir() string {
 	return defaultDir("admin-web")
 }
 
+// noStaticCache wraps a static file handler so a browser always
+// revalidates a cached asset before reusing it. The web client's
+// HTML/CSS/JS live at fixed paths and change in place; without this a
+// self-hoster who restyles the client (or pulls an update) has to
+// hard-refresh to see it. "no-cache" still permits storage — the
+// file server answers the conditional request with a cheap 304 when the
+// file is unchanged.
+func noStaticCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // listenURL turns a listener bind address (e.g. ":8080", "0.0.0.0:8080",
 // "127.0.0.1:8090") into a real http:// URL a self-hoster can open
 // directly, rather than making them work out "which host do I actually
@@ -535,7 +549,7 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 			// broken Master.
 			logger.Warn("web client directory not found, not serving it", "web_dir", webDir, "error", statErr)
 		} else {
-			mux.Handle("/", http.FileServer(http.Dir(webDir)))
+			mux.Handle("/", noStaticCache(http.FileServer(http.Dir(webDir))))
 			logger.Info("serving web client", "web_dir", webDir)
 		}
 	}
