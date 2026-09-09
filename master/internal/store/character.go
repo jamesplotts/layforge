@@ -116,4 +116,26 @@ type CharacterStore interface {
 	// recently. Returns an empty slice, not an error, for a campaign with
 	// no characters at all.
 	ListCharacters(ctx context.Context, campaignID string) ([]Character, error)
+
+	// ListAllCharacters returns every character across every campaign,
+	// newest first — the admin panel's cross-campaign roster view, which
+	// (unlike ListCharacters and the WS-facing character tools) is not
+	// scoped to one campaign. Returns an empty slice, not an error, when
+	// there are none.
+	ListAllCharacters(ctx context.Context) ([]Character, error)
+
+	// MoveCharacter reassigns characterID to newCampaignID, carrying its
+	// data/status/owner unchanged (an operator action — the design doc's
+	// per-account snapshot model that would make this a copy is unbuilt;
+	// see Character.CampaignID's doc comment). Fails with
+	// ErrCharacterNotFound if no such character exists, or
+	// ErrCampaignIDRequired if newCampaignID is empty.
+	MoveCharacter(ctx context.Context, characterID, newCampaignID string) error
+
+	// DeleteCharacter permanently removes characterID's record. Fails
+	// with ErrCharacterNotFound if none exists. Deleting a character a
+	// player is actively connected as leaves that connection with no
+	// character until it re-uploads or reconnects — the admin UI warns
+	// about this; the store just does what it's told.
+	DeleteCharacter(ctx context.Context, characterID string) error
 }

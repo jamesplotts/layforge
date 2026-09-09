@@ -94,7 +94,7 @@ func (s *SQLiteEventStore) ListCampaignIDs(ctx context.Context) ([]string, error
 // prefers the most recent event timestamp, falling back to the most
 // recent character update for a campaign with characters but no events
 // yet (freshly uploaded, no play started) — either LEFT JOIN misses
-// leave it NULL, which COALESCE resolves to '' (parsed as the zero
+// leave it NULL, which COALESCE resolves to ” (parsed as the zero
 // time.Time below).
 func (s *SQLiteEventStore) ListCampaignSummaries(ctx context.Context) ([]CampaignSummary, error) {
 	rows, err := s.db.QueryContext(ctx,

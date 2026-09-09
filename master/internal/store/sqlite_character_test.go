@@ -154,3 +154,94 @@ func TestSQLiteEventStore_GetCharacter_NotFound_ReturnsError(t *testing.T) {
 		t.Errorf("GetCharacter() error = %v, want ErrCharacterNotFound", err)
 	}
 }
+
+func TestSQLiteEventStore_ListAllCharacters_ReturnsEveryCampaignsCharacters(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, c := range []store.Character{
+		testCharacter("char-1", "campaign-1"),
+		testCharacter("char-2", "campaign-1"),
+		testCharacter("char-3", "campaign-2"),
+	} {
+		if err := s.SaveCharacter(ctx, c); err != nil {
+			t.Fatalf("SaveCharacter(%s) error = %v", c.ID, err)
+		}
+	}
+
+	got, err := s.ListAllCharacters(ctx)
+	if err != nil {
+		t.Fatalf("ListAllCharacters() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListAllCharacters() = %d characters, want 3", len(got))
+	}
+}
+
+func TestSQLiteEventStore_ListAllCharacters_NoCharacters_ReturnsEmptySlice(t *testing.T) {
+	got, err := newTestStore(t).ListAllCharacters(context.Background())
+	if err != nil || got == nil || len(got) != 0 {
+		t.Errorf("ListAllCharacters() = %v, %v; want empty non-nil slice, nil err", got, err)
+	}
+}
+
+func TestSQLiteEventStore_MoveCharacter_ReassignsCampaignKeepingEverythingElse(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	c := testCharacter("char-1", "campaign-1")
+	if err := s.SaveCharacter(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.MoveCharacter(ctx, "char-1", "campaign-2"); err != nil {
+		t.Fatalf("MoveCharacter() error = %v", err)
+	}
+
+	got, err := s.GetCharacter(ctx, "char-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CampaignID != "campaign-2" {
+		t.Errorf("CampaignID = %q, want campaign-2", got.CampaignID)
+	}
+	if got.OwnerID != c.OwnerID || string(got.CharacterData) != string(c.CharacterData) || got.Status != c.Status {
+		t.Errorf("MoveCharacter changed more than the campaign: %+v", got)
+	}
+	if in1, _ := s.ListCharacters(ctx, "campaign-1"); len(in1) != 0 {
+		t.Errorf("campaign-1 still has %d characters after the move", len(in1))
+	}
+}
+
+func TestSQLiteEventStore_MoveCharacter_UnknownID_ReturnsNotFound(t *testing.T) {
+	err := newTestStore(t).MoveCharacter(context.Background(), "nope", "campaign-2")
+	if !errors.Is(err, store.ErrCharacterNotFound) {
+		t.Errorf("MoveCharacter() error = %v, want ErrCharacterNotFound", err)
+	}
+}
+
+func TestSQLiteEventStore_MoveCharacter_EmptyCampaign_ReturnsError(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SaveCharacter(context.Background(), testCharacter("char-1", "campaign-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MoveCharacter(context.Background(), "char-1", ""); !errors.Is(err, store.ErrCampaignIDRequired) {
+		t.Errorf("MoveCharacter(\"\") error = %v, want ErrCampaignIDRequired", err)
+	}
+}
+
+func TestSQLiteEventStore_DeleteCharacter_RemovesTheRecord(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.SaveCharacter(ctx, testCharacter("char-1", "campaign-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.DeleteCharacter(ctx, "char-1"); err != nil {
+		t.Fatalf("DeleteCharacter() error = %v", err)
+	}
+	if _, err := s.GetCharacter(ctx, "char-1"); !errors.Is(err, store.ErrCharacterNotFound) {
+		t.Errorf("GetCharacter after delete = %v, want ErrCharacterNotFound", err)
+	}
+	if err := s.DeleteCharacter(ctx, "char-1"); !errors.Is(err, store.ErrCharacterNotFound) {
+		t.Errorf("second DeleteCharacter() error = %v, want ErrCharacterNotFound", err)
+	}
+}

@@ -223,6 +223,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/campaigns/{id}/pregens/{pregenId}", s.requireSameOrigin(s.handleDeletePregen))
 	mux.HandleFunc("GET /api/campaigns/{id}/characters", s.handleListCharacters)
 	mux.HandleFunc("PUT /api/campaigns/{id}/characters/{characterId}/review", s.requireSameOrigin(s.handleReviewCharacter))
+	mux.HandleFunc("GET /api/characters", s.handleListAllCharacters)
+	mux.HandleFunc("PUT /api/characters/{characterId}/campaign", s.requireSameOrigin(s.handleMoveCharacter))
+	mux.HandleFunc("DELETE /api/characters/{characterId}", s.requireSameOrigin(s.handleDeleteCharacter))
 	mux.HandleFunc("GET /api/campaigns/{id}/players", s.handleListConnectedPlayers)
 	mux.HandleFunc("POST /api/campaigns/{id}/players/{senderId}/kick", s.requireSameOrigin(s.handleKickPlayer))
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
@@ -1271,11 +1274,32 @@ func (s *Server) handleDeletePregen(w http.ResponseWriter, r *http.Request) {
 // filtering/grouping by Status; this handler doesn't second-guess that).
 type characterDTO struct {
 	ID            string          `json:"id"`
+	CampaignID    string          `json:"campaign_id"`
 	OwnerID       string          `json:"owner_id"`
 	Status        string          `json:"status"`
+	Name          string          `json:"name"`
 	SchemaVersion string          `json:"schema_version"`
 	CharacterJSON json.RawMessage `json:"character_json"`
 	CreatedAt     time.Time       `json:"created_at"`
+}
+
+// characterName best-effort reads a "name" string off the opaque
+// character JSON so the admin UI can label a character without parsing
+// the whole engine schema. "" when there's no such field.
+func characterName(data json.RawMessage) string {
+	var probe struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(data, &probe)
+	return probe.Name
+}
+
+func characterToDTO(c store.Character) characterDTO {
+	return characterDTO{
+		ID: c.ID, CampaignID: c.CampaignID, OwnerID: c.OwnerID, Status: string(c.Status),
+		Name: characterName(c.CharacterData), SchemaVersion: c.SchemaVersion,
+		CharacterJSON: c.CharacterData, CreatedAt: c.CreatedAt,
+	}
 }
 
 // characterReviewRequestDTO is handleReviewCharacter's request body — a
@@ -1301,12 +1325,84 @@ func (s *Server) handleListCharacters(w http.ResponseWriter, r *http.Request) {
 	}
 	dtos := make([]characterDTO, len(characters))
 	for i, c := range characters {
-		dtos[i] = characterDTO{
-			ID: c.ID, OwnerID: c.OwnerID, Status: string(c.Status),
-			SchemaVersion: c.SchemaVersion, CharacterJSON: c.CharacterData, CreatedAt: c.CreatedAt,
-		}
+		dtos[i] = characterToDTO(c)
 	}
 	s.writeJSON(w, http.StatusOK, dtos)
+}
+
+// handleListAllCharacters is the Characters tab's cross-campaign roster
+// (design doc §9.4): every character on this Master, newest first, each
+// carrying its campaign_id so the UI can show where it lives and offer
+// to move it. NPCs (owner "master") are included — the UI groups by
+// status/owner, this handler doesn't second-guess that.
+func (s *Server) handleListAllCharacters(w http.ResponseWriter, r *http.Request) {
+	if s.characters == nil {
+		s.writeJSON(w, http.StatusOK, []characterDTO{})
+		return
+	}
+	characters, err := s.characters.ListAllCharacters(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	dtos := make([]characterDTO, len(characters))
+	for i, c := range characters {
+		dtos[i] = characterToDTO(c)
+	}
+	s.writeJSON(w, http.StatusOK, dtos)
+}
+
+// moveCharacterRequestDTO is PUT /api/characters/{id}/campaign's body.
+type moveCharacterRequestDTO struct {
+	CampaignID string `json:"campaign_id"`
+}
+
+// handleMoveCharacter reassigns a character to another campaign (design
+// doc §9.4 — an operator action; the per-account snapshot model that
+// would make this a copy is unbuilt). A character a player is connected
+// as can be moved out from under them — the admin UI warns; this just
+// does it.
+func (s *Server) handleMoveCharacter(w http.ResponseWriter, r *http.Request) {
+	if s.characters == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "characters are not configured on this Master")
+		return
+	}
+	var dto moveCharacterRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if dto.CampaignID == "" {
+		s.writeErrorMsg(w, http.StatusBadRequest, "campaign_id is required")
+		return
+	}
+	if err := s.characters.MoveCharacter(r.Context(), r.PathValue("characterId"), dto.CampaignID); err != nil {
+		if errors.Is(err, store.ErrCharacterNotFound) {
+			s.writeErrorMsg(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, dto)
+}
+
+// handleDeleteCharacter permanently removes a character record. Same
+// operator-action framing as handleMoveCharacter.
+func (s *Server) handleDeleteCharacter(w http.ResponseWriter, r *http.Request) {
+	if s.characters == nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "characters are not configured on this Master")
+		return
+	}
+	if err := s.characters.DeleteCharacter(r.Context(), r.PathValue("characterId")); err != nil {
+		if errors.Is(err, store.ErrCharacterNotFound) {
+			s.writeErrorMsg(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleReviewCharacter is the Host's veto/approval endpoint (design doc

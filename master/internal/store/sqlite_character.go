@@ -84,8 +84,56 @@ func (s *SQLiteEventStore) ListCharacters(ctx context.Context, campaignID string
 	if err != nil {
 		return nil, fmt.Errorf("store: listing characters: %w", err)
 	}
-	defer rows.Close()
+	return scanCharacterRows(rows)
+}
 
+// ListAllCharacters implements CharacterStore.
+func (s *SQLiteEventStore) ListAllCharacters(ctx context.Context) ([]Character, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT character_id, campaign_id, owner_id, schema_version, status, character_data, created_at, updated_at
+		 FROM characters
+		 ORDER BY created_at DESC, character_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing all characters: %w", err)
+	}
+	return scanCharacterRows(rows)
+}
+
+// MoveCharacter implements CharacterStore.
+func (s *SQLiteEventStore) MoveCharacter(ctx context.Context, characterID, newCampaignID string) error {
+	if newCampaignID == "" {
+		return ErrCampaignIDRequired
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE characters SET campaign_id = ?, updated_at = ? WHERE character_id = ?`,
+		newCampaignID, time.Now().UTC().Format(occurredAtLayout), characterID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: moving character: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: character_id=%q", ErrCharacterNotFound, characterID)
+	}
+	return nil
+}
+
+// DeleteCharacter implements CharacterStore.
+func (s *SQLiteEventStore) DeleteCharacter(ctx context.Context, characterID string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM characters WHERE character_id = ?`, characterID)
+	if err != nil {
+		return fmt.Errorf("store: deleting character: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: character_id=%q", ErrCharacterNotFound, characterID)
+	}
+	return nil
+}
+
+// scanCharacterRows drains rows (closing it) into Characters, shared by
+// ListCharacters/ListAllCharacters.
+func scanCharacterRows(rows *sql.Rows) ([]Character, error) {
+	defer rows.Close()
 	characters := make([]Character, 0)
 	for rows.Next() {
 		var c Character
@@ -95,12 +143,11 @@ func (s *SQLiteEventStore) ListCharacters(ctx context.Context, campaignID string
 		}
 		c.Status = CharacterStatus(status)
 		c.CharacterData = json.RawMessage(characterData)
-		c.CreatedAt, err = time.Parse(occurredAtLayout, createdAt)
-		if err != nil {
+		var err error
+		if c.CreatedAt, err = time.Parse(occurredAtLayout, createdAt); err != nil {
 			return nil, fmt.Errorf("store: parsing created_at for character %q: %w", c.ID, err)
 		}
-		c.UpdatedAt, err = time.Parse(occurredAtLayout, updatedAt)
-		if err != nil {
+		if c.UpdatedAt, err = time.Parse(occurredAtLayout, updatedAt); err != nil {
 			return nil, fmt.Errorf("store: parsing updated_at for character %q: %w", c.ID, err)
 		}
 		characters = append(characters, c)
