@@ -2082,19 +2082,25 @@ levels (capped by `MaxLevels`, always paired up/down); every carve
 extends from an already-walkable cell, so each level is connected from
 its arrival point by construction, and the one-cell border is never
 carved. Chambers scatter a few features (fountain / statue / shrine /
-chest). `RoomSize` (cramped / average / huge) biases chamber size with
-three monotonic-mean distributions. Deliberately standalone: no
+chest) and ~1 in 6 of their non-first exits is a `TileSecretDoor` — a
+real, Walkable connection that also BlocksLOS (reads as blank wall) and
+answers `IsSecret()`, so the region beyond stays connected but a party
+has to find it; the "found yet?" state is runtime, not part of the map.
+`RoomSize` (cramped / average / huge) biases chamber size with three
+monotonic-mean distributions. Deliberately standalone: no
 consumer, no System Engine calls, no protocol surface — sibling package
 `combatmap` still generates the single tactical map; this generates a
 whole dungeon to walk. `Level.String()` renders ASCII for debugging.
 Covered by `dungeon_test.go` / `generator_test.go`: 30-seed
-per-level connectivity flood-fill, stair-pair reciprocity, `MaxLevels`
-respected, determinism, the one-cell border, `RoomSize` monotonicity,
-invalid-options-return-nil, tiny-budget termination. Not built: the
-room-adjacency graph a crawler would want as a post-process (regions +
-door edges), any renderer beyond ASCII, and all the actual viewport /
-protocol / DM-tool wiring — that's the V3 feature work this only
-prepares for.
+per-level connectivity flood-fill (which, treating a secret door as
+walkable, also proves the dungeon stays connected *through* them),
+stair-pair reciprocity, `MaxLevels` respected, determinism, the
+one-cell border, `RoomSize` monotonicity, secret doors real-but-
+wall-reading, invalid-options-return-nil, tiny-budget termination. Not
+built: secret *rooms* off dead ends, the room-adjacency graph a crawler
+would want as a post-process (regions + door edges), any renderer
+beyond ASCII, and all the actual viewport / protocol / DM-tool wiring —
+that's the V3 feature work this only prepares for.
 
 ## Layout
 

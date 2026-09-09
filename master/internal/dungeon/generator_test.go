@@ -118,6 +118,45 @@ func TestGenerate_StairsCreatedInMatchingPairs(t *testing.T) {
 	}
 }
 
+func TestGenerate_SecretDoorsAreRealConnectionsThatReadAsWall(t *testing.T) {
+	sawSecret := false
+	for seed := int64(0); seed < 40 && !sawSecret; seed++ {
+		d := Generate(Options{
+			LevelWidth: 70, LevelHeight: 50, MaxLevels: 3,
+			Rand: rand.New(rand.NewSource(seed)),
+		})
+		for idx, l := range d.Levels {
+			for i, tile := range l.Tiles {
+				if tile != TileSecretDoor {
+					continue
+				}
+				sawSecret = true
+				if !tile.Walkable() || !tile.BlocksLOS() {
+					t.Errorf("seed %d level %d: secret door should be walkable and block LOS", seed, idx)
+				}
+				x, y := i%l.Width, i/l.Width
+				// A secret door sits between an open cell and (from the
+				// renderer's view) wall — it's a doorway, not an orphan.
+				open := 0
+				for _, dxy := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+					if t, ok := l.At(x+dxy[0], y+dxy[1]); ok && t.Walkable() {
+						open++
+					}
+				}
+				if open == 0 {
+					t.Errorf("seed %d level %d: secret door at (%d,%d) connects to nothing", seed, idx, x, y)
+				}
+			}
+		}
+	}
+	if !sawSecret {
+		t.Error("no secret door generated across 40 seeds — the feature never fires")
+	}
+	// Connectivity (TestGenerate_EveryWalkableTileReachableFromArrival)
+	// already proves the dungeon stays fully connected *through* these,
+	// since floodFill treats a secret door as walkable.
+}
+
 func TestGenerate_RespectsMaxLevels(t *testing.T) {
 	for seed := int64(0); seed < 15; seed++ {
 		d := Generate(Options{

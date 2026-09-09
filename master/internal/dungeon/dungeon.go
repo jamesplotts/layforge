@@ -46,26 +46,46 @@ const (
 	// connection to another level — see Level.Stairs for the link.
 	TileStairsUp
 	TileStairsDown
+	// TileSecretDoor is a real, traversable connection that reads as
+	// blank wall until a party finds it (a search check at runtime, not
+	// modeled here). It counts as Walkable — the path genuinely exists,
+	// so the dungeon stays fully connected — but also BlocksLOS, since
+	// you can't see through or past one you haven't found. A renderer
+	// draws it as wall and a movement/perception layer gates it; see
+	// IsSecret.
+	TileSecretDoor
 )
 
 // IsValid reports whether t is a defined TileType.
 func (t TileType) IsValid() bool {
-	return t <= TileStairsDown
+	return t <= TileSecretDoor
 }
 
 // Walkable reports whether a creature can stand on a cell of this type.
+// A secret door is walkable — the connection is real — even though a
+// party has to find it first; that "found yet?" state is runtime, not
+// part of the generated map.
 func (t TileType) Walkable() bool {
 	switch t {
-	case TileFloor, TileDoor, TileStairsUp, TileStairsDown:
+	case TileFloor, TileDoor, TileStairsUp, TileStairsDown, TileSecretDoor:
 		return true
 	default:
 		return false
 	}
 }
 
-// BlocksLOS reports whether this tile stops line of sight through it.
+// BlocksLOS reports whether this tile stops line of sight through it —
+// rock, and an unfound secret door (which is indistinguishable from rock
+// until found).
 func (t TileType) BlocksLOS() bool {
-	return t == TileRock
+	return t == TileRock || t == TileSecretDoor
+}
+
+// IsSecret reports whether t is a connection hidden until a party finds
+// it — the signal a renderer uses to draw it as wall and a
+// perception/movement layer uses to gate passage through it.
+func (t TileType) IsSecret() bool {
+	return t == TileSecretDoor
 }
 
 // FeatureKind is a point of interest sitting on an otherwise ordinary
@@ -173,7 +193,7 @@ func (l *Level) Walkable(x, y int) bool {
 func (l *Level) String() string {
 	runes := map[TileType]rune{
 		TileRock: '#', TileFloor: '.', TileDoor: '+',
-		TileStairsUp: '<', TileStairsDown: '>',
+		TileStairsUp: '<', TileStairsDown: '>', TileSecretDoor: '*',
 	}
 	featRunes := map[FeatureKind]rune{
 		FeatureFountain: 'F', FeatureStatue: 'S', FeatureShrine: 'H', FeatureChest: 'C',

@@ -434,7 +434,15 @@ func (g *generator) chamberExits(level, minX, minY, maxX, maxY int, entryDir dir
 			if t, ok := l.At(ox+ddx, oy+ddy); !ok || t.Walkable() {
 				continue
 			}
-			l.set(ox, oy, TileDoor)
+			door := TileDoor
+			// ~1 in 6 chamber exits is a secret door — the region beyond
+			// it is still connected (Walkable), a party just has to find
+			// it. Never the first exit, so a chamber is never sealed off
+			// entirely behind secrets.
+			if made > 0 && g.rnd.Intn(6) == 0 {
+				door = TileSecretDoor
+			}
+			l.set(ox, oy, door)
 			g.enqueue(level, ox, oy, wl.dir)
 			made++
 			break

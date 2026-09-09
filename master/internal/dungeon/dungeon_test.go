@@ -14,12 +14,14 @@ func TestTileType_WalkableAndLOS(t *testing.T) {
 		tile     TileType
 		walkable bool
 		blocks   bool
+		secret   bool
 	}{
-		{TileRock, false, true},
-		{TileFloor, true, false},
-		{TileDoor, true, false},
-		{TileStairsUp, true, false},
-		{TileStairsDown, true, false},
+		{TileRock, false, true, false},
+		{TileFloor, true, false, false},
+		{TileDoor, true, false, false},
+		{TileStairsUp, true, false, false},
+		{TileStairsDown, true, false, false},
+		{TileSecretDoor, true, true, true}, // real path, but reads as wall until found
 	}
 	for _, c := range cases {
 		if got := c.tile.Walkable(); got != c.walkable {
@@ -27,6 +29,9 @@ func TestTileType_WalkableAndLOS(t *testing.T) {
 		}
 		if got := c.tile.BlocksLOS(); got != c.blocks {
 			t.Errorf("%v.BlocksLOS() = %v, want %v", c.tile, got, c.blocks)
+		}
+		if got := c.tile.IsSecret(); got != c.secret {
+			t.Errorf("%v.IsSecret() = %v, want %v", c.tile, got, c.secret)
 		}
 		if !c.tile.IsValid() {
 			t.Errorf("%v.IsValid() = false", c.tile)
