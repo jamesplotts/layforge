@@ -416,16 +416,18 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 			fmt.Errorf("first message must be %q, got %q", protocol.MessageTypeSystemConnect, connect.Type))
 	}
 
+	var identity auth.Identity
 	if s.auth != nil {
-		authorized, reason, authErr := s.auth.Authorize(ctx, campaignID, connect.Payload.AuthToken)
+		result, authErr := s.auth.Authorize(ctx, campaignID, connect.Payload.AuthToken)
 		if authErr != nil {
 			return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
 				fmt.Errorf("checking authorization: %w", authErr))
 		}
-		if !authorized {
+		if !result.OK {
 			return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
-				fmt.Errorf("not authorized to join this campaign: %s", reason))
+				fmt.Errorf("not authorized to join this campaign: %s", result.Reason))
 		}
+		identity = result.Identity
 	}
 
 	s.logger.Info("client connected",
@@ -433,18 +435,36 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 		"campaign_id", connect.CampaignID,
 	)
 
-	if err := s.sendSessionState(ctx, conn, campaignID, protocol.SessionStateJoined); err != nil {
+	// A connection that authenticated to a real account (Discord OAuth)
+	// acts as that account for ownership and per-player routing, never as
+	// the client-declared sender_id. Unauthenticated joins (open campaign,
+	// room password) keep the pre-account behavior: sender_id is identity.
+	effectiveSender := connect.SenderID
+	if identity.Authenticated() {
+		effectiveSender = identity.AccountID
+	}
+
+	if err := s.sendSessionState(ctx, conn, campaignID, protocol.SessionStateJoined, identity); err != nil {
 		return err
 	}
 
-	return s.serve(ctx, conn, campaignID, connect.SenderID)
+	return s.serve(ctx, conn, campaignID, effectiveSender, identity)
 }
 
-// sendSessionState sends a system.session_state message to conn.
-func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, campaignID string, state protocol.SessionState) error {
-	msg, err := newMessage(campaignID, protocol.MessageTypeSystemSessionState, protocol.SystemSessionStatePayload{
-		State: state,
-	})
+// sendSessionState sends a system.session_state message to conn. A
+// non-zero identity (an authenticated connection) is echoed on the
+// payload so the client can show who it is signed in as; it carries no
+// token or secret.
+func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, campaignID string, state protocol.SessionState, identity auth.Identity) error {
+	payload := protocol.SystemSessionStatePayload{State: state}
+	if identity.Authenticated() {
+		payload.Identity = &protocol.SessionIdentity{
+			AccountID:   identity.AccountID,
+			DisplayName: identity.DisplayName,
+			AvatarURL:   identity.AvatarURL,
+		}
+	}
+	msg, err := newMessage(campaignID, protocol.MessageTypeSystemSessionState, payload)
 	if err != nil {
 		return err
 	}
@@ -459,10 +479,12 @@ func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, cam
 // write pump delivering session.Hub broadcasts to this client, and a
 // read loop dispatching each inbound message by type. It returns once
 // the connection ends, for any reason — client disconnect, a read/write
-// error, or ctx cancellation. senderID is the sender_id this connection
-// authenticated as at handshake time (its system.connect message) —
-// registered with the Hub so a later Hub.SendToSender can target this
-// connection specifically (design doc §9's per-player fog-of-war sends,
+// error, or ctx cancellation. senderID is this connection's effective
+// identity for Hub routing and ownership: its authenticated account id
+// when identity.Authenticated(), otherwise the client-declared sender_id
+// from its system.connect message. Either way it is registered with the
+// Hub so a later Hub.SendToSender can target this connection specifically
+// (design doc §9's per-player fog-of-war sends,
 // internal/server/combat_map.go), and given a closer so a later
 // Hub.Kick (the admin panel's "kick this player" action) can forcibly
 // end it. The closer uses CloseNow, not the graceful Close
@@ -474,7 +496,7 @@ func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, cam
 // to abort a connection out from under a concurrent read. It still
 // unblocks readLoop's pending conn.Read and lets the rest of this
 // function's normal shutdown path run unchanged.
-func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID, senderID string) error {
+func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, identity auth.Identity) error {
 	client := s.hub.Register(campaignID, senderID)
 	s.hub.SetCloser(client, func() {
 		conn.CloseNow()
@@ -507,12 +529,11 @@ func (s *Server) serve(ctx context.Context, conn *websocket.Conn, campaignID, se
 	}()
 
 	// cs holds this connection's own in-memory-only state (terms.go's
-	// termsAccepted flag today) — created fresh per connection and never
-	// persisted, since sender_id is entirely client-declared with no
-	// account system behind it (see terms.go's own doc comment for why
-	// that makes a live-connection gate the right trust boundary, not a
-	// sender_id-keyed database record).
-	cs := &connState{}
+	// termsAccepted flag, and the authenticated identity if any) — created
+	// fresh per connection and never persisted. The terms flag stays a
+	// live-connection gate rather than an account-keyed record even for an
+	// authenticated connection (see terms.go's own doc comment).
+	cs := &connState{identity: identity}
 	readErr := s.readLoop(ctx, conn, campaignID, cs)
 
 	// See unregister's own doc comment above: this eager call (not just
@@ -603,7 +624,7 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// Not recorded to the event log: this is a query against the
 		// log, not a game event — recording it would just be recursive
 		// noise (a request to view history, sitting in the history).
-		return s.sendHistory(ctx, conn, campaignID, envelope.MessageID, envelope.SenderID, req.Payload)
+		return s.sendHistory(ctx, conn, campaignID, envelope.MessageID, actingSender(cs, envelope.SenderID), req.Payload)
 	case protocol.MessageTypeNarrativePlayerInput:
 		var input protocol.NarrativePlayerInputMessage
 		if err := json.Unmarshal(data, &input); err != nil {
@@ -617,14 +638,14 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.upload payload: %w", err))
 		}
 		recordEvent(ctx, s, upload)
-		return s.importCharacter(ctx, conn, campaignID, envelope.SenderID, upload)
+		return s.importCharacter(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), upload)
 	case protocol.MessageTypeRollCheckRequest:
 		var req protocol.RollCheckRequestMessage
 		if err := json.Unmarshal(data, &req); err != nil {
 			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed roll.check_request payload: %w", err))
 		}
 		recordEvent(ctx, s, req)
-		return s.resolveCheck(ctx, conn, campaignID, envelope.SenderID, req)
+		return s.resolveCheck(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	case protocol.MessageTypeCharacterSchemaRequest:
 		var req protocol.CharacterSchemaRequestMessage
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -638,14 +659,14 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		if err := json.Unmarshal(data, &req); err != nil {
 			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.get payload: %w", err))
 		}
-		return s.sendCharacterState(ctx, conn, campaignID, envelope.SenderID, req)
+		return s.sendCharacterState(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	case protocol.MessageTypeCharacterApplyEffect:
 		var req protocol.CharacterApplyEffectMessage
 		if err := json.Unmarshal(data, &req); err != nil {
 			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.apply_effect payload: %w", err))
 		}
 		recordEvent(ctx, s, req)
-		return s.applyCharacterEffect(ctx, conn, campaignID, envelope.SenderID, req)
+		return s.applyCharacterEffect(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	case protocol.MessageTypeMapTokenMoveRequest:
 		var req protocol.MapTokenMoveRequestMessage
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -656,7 +677,7 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// for the same reason (see sendToSender's doc comment) — logging
 		// the request but not its differently-shaped-per-recipient result
 		// would be a misleading half-record.
-		return s.handleMapTokenMoveRequest(ctx, conn, campaignID, envelope.SenderID, req)
+		return s.handleMapTokenMoveRequest(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	case protocol.MessageTypeVehicleImport:
 		var req protocol.VehicleImportMessage
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -673,11 +694,11 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// transcription are explicitly ephemeral — only a finalized,
 		// possibly player-edited narrative.player_input becomes part of
 		// the durable log, the same as typed input already does.
-		return s.handleAudioChunk(ctx, conn, campaignID, envelope.SenderID, envelope.MessageID, req.Payload)
+		return s.handleAudioChunk(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), envelope.MessageID, req.Payload)
 	case protocol.MessageTypeCharacterCreationStart:
 		// Not recorded: like character.schema_request/character.get, this
 		// is a query kicking off a flow, not itself a game event.
-		return s.handleCreationStart(ctx, conn, campaignID, envelope.SenderID)
+		return s.handleCreationStart(ctx, conn, campaignID, actingSender(cs, envelope.SenderID))
 	case protocol.MessageTypeCharacterCreationAnswer:
 		var req protocol.CharacterCreationAnswerMessage
 		if err := json.Unmarshal(data, &req); err != nil {
@@ -687,7 +708,7 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// above — only the finished character (a real character.state,
 		// or an import's own character.validation_result) becomes part of
 		// the durable log, not the back-and-forth that produced it.
-		return s.handleCreationAnswer(ctx, conn, campaignID, envelope.SenderID, req)
+		return s.handleCreationAnswer(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}

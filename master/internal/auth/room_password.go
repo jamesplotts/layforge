@@ -37,11 +37,13 @@ func NewRoomPasswordProvider(passwords map[string]string) *RoomPasswordProvider 
 
 // Authorize implements Provider. It never returns a non-nil error — a
 // room password check has no failure mode short of a wrong/missing
-// password, which is reported through ok/reason, not err.
-func (p *RoomPasswordProvider) Authorize(_ context.Context, campaignID, authToken string) (bool, string, error) {
+// password, which is reported through Result.OK/Reason, not err. The
+// Result carries no Identity: a room password says nothing about who the
+// player is.
+func (p *RoomPasswordProvider) Authorize(_ context.Context, campaignID, authToken string) (Result, error) {
 	want, configured := p.passwords[campaignID]
 	if !configured {
-		return true, "", nil
+		return Result{OK: true}, nil
 	}
 	// Constant-time comparison: this is a password check, and campaign_id
 	// values (unlike e.g. session tokens) are often guessable or
@@ -50,7 +52,7 @@ func (p *RoomPasswordProvider) Authorize(_ context.Context, campaignID, authToke
 	// standing between "anyone" and "authorized" — worth not leaking
 	// timing information about it.
 	if subtle.ConstantTimeCompare([]byte(authToken), []byte(want)) != 1 {
-		return false, "incorrect password", nil
+		return Result{OK: false, Reason: "incorrect password"}, nil
 	}
-	return true, "", nil
+	return Result{OK: true}, nil
 }

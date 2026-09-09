@@ -30,18 +30,21 @@ func TestRoomPasswordProvider_Authorize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ok, reason, err := p.Authorize(context.Background(), tt.campaignID, tt.authToken)
+			res, err := p.Authorize(context.Background(), tt.campaignID, tt.authToken)
 			if err != nil {
 				t.Fatalf("Authorize() error = %v, want nil", err)
 			}
-			if ok != tt.wantOK {
-				t.Errorf("Authorize() ok = %v, want %v", ok, tt.wantOK)
+			if res.OK != tt.wantOK {
+				t.Errorf("Authorize() ok = %v, want %v", res.OK, tt.wantOK)
 			}
-			if !ok && reason == "" {
+			if !res.OK && res.Reason == "" {
 				t.Error("Authorize() reason is empty on a rejection, want an explanation")
 			}
-			if ok && reason != "" {
-				t.Errorf("Authorize() reason = %q on success, want empty", reason)
+			if res.OK && res.Reason != "" {
+				t.Errorf("Authorize() reason = %q on success, want empty", res.Reason)
+			}
+			if res.Identity.Authenticated() {
+				t.Errorf("Authorize() asserted an identity %+v, want none from a room password", res.Identity)
 			}
 		})
 	}
@@ -59,19 +62,19 @@ func TestNewRoomPasswordProvider_DoesNotRetainCallersMap(t *testing.T) {
 	p := auth.NewRoomPasswordProvider(passwords)
 	passwords["campaign-1"] = "changed"
 
-	ok, _, err := p.Authorize(context.Background(), "campaign-1", "secret")
+	res, err := p.Authorize(context.Background(), "campaign-1", "secret")
 	if err != nil {
 		t.Fatalf("Authorize() error = %v, want nil", err)
 	}
-	if !ok {
+	if !res.OK {
 		t.Error("Authorize(campaign-1, \"secret\") = false, want true (the original password should still work)")
 	}
 
-	ok, _, err = p.Authorize(context.Background(), "campaign-1", "changed")
+	res, err = p.Authorize(context.Background(), "campaign-1", "changed")
 	if err != nil {
 		t.Fatalf("Authorize() error = %v, want nil", err)
 	}
-	if ok {
+	if res.OK {
 		t.Error("Authorize(campaign-1, \"changed\") = true, want false (the post-construction mutation should not have taken effect)")
 	}
 }

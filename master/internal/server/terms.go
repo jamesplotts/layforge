@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/terms"
 )
 
@@ -21,19 +22,38 @@ import (
 // npcOwnerSenderID duplication already documents for this codebase.
 const adminSettingsKeyTermsAcceptedVersion = "terms_accepted_version"
 
-// connState holds one WebSocket connection's own in-memory-only state —
-// today just termsAccepted, but the natural place for any future
-// per-connection (not per-campaign, not per-sender_id) flag. Created
-// fresh in serve for each new connection and never persisted:
-// sender_id is entirely client-declared with no account system behind
-// it (nothing server-side verifies "this is the same human as last
-// time"), so persisting acceptance against that string would be false
-// confidence — gating the live connection itself is the real trust
-// boundary already relied on everywhere else in this protocol, and it
-// costs a compliant client nothing beyond resending terms.accept once
-// per connection.
+// connState holds one WebSocket connection's own in-memory-only state,
+// created fresh in serve for each new connection and never persisted.
+//
+// termsAccepted stays a per-connection flag even when identity is
+// authenticated: an unauthenticated join has only a client-declared
+// sender_id (nothing server-side verifies "this is the same human as
+// last time"), so persisting acceptance against that string would be
+// false confidence — gating the live connection is the real trust
+// boundary relied on everywhere else in this protocol, and costs a
+// compliant client nothing beyond resending terms.accept once per
+// connection.
+//
+// identity is the verified account this connection authenticated as
+// (Discord OAuth), or the zero Identity for an open / room-password
+// join. When set, actingSender returns its AccountID so ownership and
+// per-player routing key on the account, not the client's sender_id.
 type connState struct {
 	termsAccepted bool
+	identity      auth.Identity
+}
+
+// actingSender is the identity to attribute an inbound message's action
+// to: the connection's authenticated account when it has one, otherwise
+// the client-declared sender_id from the message envelope. Ownership
+// checks (ownedCharacter) and per-player sends route on this, so a
+// client cannot claim to act as another player by forging sender_id once
+// the connection is authenticated.
+func actingSender(cs *connState, senderID string) string {
+	if cs != nil && cs.identity.Authenticated() {
+		return cs.identity.AccountID
+	}
+	return senderID
 }
 
 // termsGateError pairs a system.error Code with the human-readable

@@ -40,6 +40,21 @@ type SystemSessionStatePayload struct {
 	// joining/leaving, and omitted for session-wide states like paused/
 	// resumed.
 	CharacterID string `json:"character_id,omitempty"`
+	// Identity is set on a joined state when the connection authenticated
+	// to a real account (Discord OAuth), so the client can show who it is
+	// signed in as. Omitted (nil) for an unauthenticated join — an open
+	// campaign or a room-password-only one.
+	Identity *SessionIdentity `json:"identity,omitempty"`
+}
+
+// SessionIdentity is the verified account identity of an authenticated
+// connection, echoed back on the joined system.session_state. It never
+// carries a token or any secret — only what a client renders. Mirrors
+// auth.Identity (package protocol can't import package auth).
+type SessionIdentity struct {
+	AccountID   string `json:"account_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
 }
 
 // SystemSessionStateMessage is a system.session_state Message.

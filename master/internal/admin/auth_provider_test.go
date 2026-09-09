@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jamesplotts/layforge/master/internal/admin"
+	"github.com/jamesplotts/layforge/master/internal/auth"
 	"github.com/jamesplotts/layforge/master/internal/store"
 )
 
@@ -15,35 +16,49 @@ import (
 // AuthProvider's fallback path without depending on
 // auth.RoomPasswordProvider's own construction.
 type fakeAuthProvider struct {
-	ok     bool
-	reason string
+	ok       bool
+	reason   string
+	identity auth.Identity
 }
 
-func (f fakeAuthProvider) Authorize(context.Context, string, string) (bool, string, error) {
-	return f.ok, f.reason, nil
+func (f fakeAuthProvider) Authorize(context.Context, string, string) (auth.Result, error) {
+	return auth.Result{OK: f.ok, Reason: f.reason, Identity: f.identity}, nil
 }
 
 func TestAuthProvider_Authorize_NoStoredSettings_FallsBackToFallback(t *testing.T) {
 	fallback := fakeAuthProvider{ok: false, reason: "fallback says no"}
 	p := admin.NewAuthProvider(newTestStore(t), fallback)
 
-	ok, reason, err := p.Authorize(context.Background(), "unconfigured-campaign", "whatever")
+	res, err := p.Authorize(context.Background(), "unconfigured-campaign", "whatever")
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
-	if ok || reason != "fallback says no" {
-		t.Errorf("Authorize() = (%v, %q), want fallback's (false, %q)", ok, reason, "fallback says no")
+	if res.OK || res.Reason != "fallback says no" {
+		t.Errorf("Authorize() = (%v, %q), want fallback's (false, %q)", res.OK, res.Reason, "fallback says no")
+	}
+}
+
+func TestAuthProvider_Authorize_PassesThroughFallbackIdentity(t *testing.T) {
+	fallback := fakeAuthProvider{ok: true, identity: auth.Identity{AccountID: "discord:1", DisplayName: "Bram"}}
+	p := admin.NewAuthProvider(newTestStore(t), fallback)
+
+	res, err := p.Authorize(context.Background(), "unconfigured-campaign", "tok")
+	if err != nil {
+		t.Fatalf("Authorize() error = %v", err)
+	}
+	if !res.OK || res.Identity.AccountID != "discord:1" {
+		t.Errorf("Authorize() = %+v, want OK with the fallback's identity", res)
 	}
 }
 
 func TestAuthProvider_Authorize_NoStoredSettingsOrFallback_ReturnsOpen(t *testing.T) {
 	p := admin.NewAuthProvider(newTestStore(t), nil)
 
-	ok, _, err := p.Authorize(context.Background(), "unconfigured-campaign", "")
+	res, err := p.Authorize(context.Background(), "unconfigured-campaign", "")
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
-	if !ok {
+	if !res.OK {
 		t.Error("Authorize() ok = false, want true (open, no provider configured at all)")
 	}
 }
@@ -55,11 +70,11 @@ func TestAuthProvider_Authorize_StoredPassword_CorrectToken_Authorized(t *testin
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
 	}
 
-	ok, _, err := p.Authorize(context.Background(), "campaign-1", "hunter2")
+	res, err := p.Authorize(context.Background(), "campaign-1", "hunter2")
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
-	if !ok {
+	if !res.OK {
 		t.Error("Authorize() ok = false, want true for the correct password")
 	}
 }
@@ -71,14 +86,14 @@ func TestAuthProvider_Authorize_StoredPassword_WrongToken_Rejected(t *testing.T)
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
 	}
 
-	ok, reason, err := p.Authorize(context.Background(), "campaign-1", "wrong")
+	res, err := p.Authorize(context.Background(), "campaign-1", "wrong")
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
-	if ok {
+	if res.OK {
 		t.Error("Authorize() ok = true, want false for the wrong password")
 	}
-	if reason == "" {
+	if res.Reason == "" {
 		t.Error("Authorize() reason is empty, want a human-readable rejection reason")
 	}
 }
@@ -96,11 +111,11 @@ func TestAuthProvider_Authorize_StoredEmptyPassword_FallsBackToFallback(t *testi
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
 	}
 
-	ok, reason, err := p.Authorize(context.Background(), "campaign-1", "")
+	res, err := p.Authorize(context.Background(), "campaign-1", "")
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
-	if ok || reason != "fallback says no" {
-		t.Errorf("Authorize() = (%v, %q), want fallback's (false, %q)", ok, reason, "fallback says no")
+	if res.OK || res.Reason != "fallback says no" {
+		t.Errorf("Authorize() = (%v, %q), want fallback's (false, %q)", res.OK, res.Reason, "fallback says no")
 	}
 }
