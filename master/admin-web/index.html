@@ -124,25 +124,26 @@
       </details>
 
       <!-- Downloads the curated campaign-pack library published on
-           layforge.org and unpacks it into this Master's campaign-packs
-           directory. Every pack is re-validated (the same parser gate
-           binding one uses) before it's kept; packs already present are
-           skipped unless "Overwrite" is checked. Source URL defaults to
-           -registry-url (or layforge.org) — the field only needs a value
-           to point at a different registry. -->
+           layforge.org, unpacks it into this Master's campaign-packs
+           directory (relative to where Master runs), re-validates every
+           pack (the same parser gate binding one uses), then creates a
+           campaign per pack — bound and ready — so each shows up in the
+           Campaign dropdown above. A pack whose campaign id is already
+           bound is left alone; nothing already set up is clobbered.
+           Source URL defaults to -registry-url (or layforge.org). -->
       <details class="create-campaign">
-        <summary>Install the campaign pack library from layforge.org</summary>
+        <summary>Download pregenerated campaign packs</summary>
         <div class="create-campaign-form">
-          <p class="panel-hint">Grabs a shelf of ready-to-run adventures and unpacks them into this Master's campaign-packs directory. Each pack is re-validated before it's kept; anything that fails is reported and skipped.</p>
+          <p class="panel-hint">Downloads the layforge.org campaign-pack library, unpacks it under this Master, and adds each adventure as a ready-to-play campaign you can pick from the dropdown above. Packs that fail to validate are reported and skipped; anything you've already set up is left untouched.</p>
           <label>
             Source URL (optional — defaults to layforge.org)
             <input id="install-library-url" type="text" placeholder="https://layforge.org/downloads/campaign-pack-library.zip" />
           </label>
           <label class="checkbox-label">
             <input id="install-library-overwrite" type="checkbox" />
-            Overwrite packs I already have
+            Re-download packs I already have
           </label>
-          <button id="install-library-submit" type="button">Download &amp; Install</button>
+          <button id="install-library-submit" type="button">Download Campaign Pack</button>
           <span id="install-library-status" class="save-status"></span>
           <ul id="install-library-results" class="install-results" hidden></ul>
         </div>

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -578,10 +579,15 @@ type installLibraryRequestDTO struct {
 // installLibraryResultDTO is one pack's outcome, mirroring
 // campaignpack.InstallResult. Status is one of "installed",
 // "skipped_exists", "failed"; detail is set only for "failed".
+// Campaign is the campaign_id this pack was made selectable under (its
+// own campaign.md id); CampaignAdded is true when that campaign was
+// created by this install rather than already existing.
 type installLibraryResultDTO struct {
-	Slug   string `json:"slug"`
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
+	Slug          string `json:"slug"`
+	Status        string `json:"status"`
+	Detail        string `json:"detail,omitempty"`
+	Campaign      string `json:"campaign,omitempty"`
+	CampaignAdded bool   `json:"campaign_added,omitempty"`
 }
 
 type installLibraryResponseDTO struct {
@@ -589,6 +595,10 @@ type installLibraryResponseDTO struct {
 	// back so the panel can show which registry answered.
 	Source  string                    `json:"source"`
 	Results []installLibraryResultDTO `json:"results"`
+	// CampaignsAdded counts the pregenerated campaigns this install
+	// newly made selectable — the panel uses it to decide whether to
+	// refresh the campaign dropdown.
+	CampaignsAdded int `json:"campaigns_added"`
 }
 
 // handleInstallCampaignPackLibrary downloads a pack-library archive and
@@ -598,6 +608,14 @@ type installLibraryResponseDTO struct {
 // path/size limits (zip-slip, zip-bomb) in code — this handler never
 // trusts the archive's contents. Each pack's outcome is reported
 // independently; a single unparseable pack does not fail the request.
+//
+// Each pack that lands on disk is then made directly selectable: a
+// campaign is created under the pack's own campaign.md id (display name
+// = its title) and the pack bound to it, so the Host can pick a
+// pregenerated adventure straight from the panel's campaign dropdown
+// without a separate create-then-bind step. This is skipped for a
+// campaign id that already has a pack bound — a re-run, or a collision
+// with the Host's own campaign, never clobbers an existing binding.
 func (s *Server) handleInstallCampaignPackLibrary(w http.ResponseWriter, r *http.Request) {
 	if s.campaignPacksDir == "" {
 		s.writeErrorMsg(w, http.StatusBadRequest, "no campaign-packs directory is configured on this Master")
@@ -630,9 +648,58 @@ func (s *Server) handleInstallCampaignPackLibrary(w http.ResponseWriter, r *http
 
 	out := installLibraryResponseDTO{Source: source, Results: make([]installLibraryResultDTO, len(results))}
 	for i, res := range results {
-		out.Results[i] = installLibraryResultDTO{Slug: res.Slug, Status: string(res.Status), Detail: res.Detail}
+		dto := installLibraryResultDTO{Slug: res.Slug, Status: string(res.Status), Detail: res.Detail}
+		if res.Status == campaignpack.InstallStatusInstalled || res.Status == campaignpack.InstallStatusSkippedExists {
+			campaignID, added := s.bindInstalledPackToCampaign(r.Context(), res.Slug)
+			dto.Campaign = campaignID
+			dto.CampaignAdded = added
+			if added {
+				out.CampaignsAdded++
+			}
+		}
+		out.Results[i] = dto
 	}
 	s.writeJSON(w, http.StatusOK, out)
+}
+
+// bindInstalledPackToCampaign creates a campaign for the just-installed
+// pack directory slug (campaign_id = the pack's own campaign.md id,
+// display name = its title) and binds the pack to it, so it shows up in
+// the panel's campaign dropdown ready to play. Returns the campaign id
+// and whether it was newly created. A no-op (returns the id, added
+// false) when a pack is already bound to that campaign id, or ("", false)
+// when campaign-pack storage isn't configured or the pack won't re-load.
+func (s *Server) bindInstalledPackToCampaign(ctx context.Context, slug string) (campaignID string, added bool) {
+	if s.campaignPack == nil {
+		return "", false
+	}
+	packDir := filepath.Join(s.campaignPacksDir, slug)
+	pack, err := campaignpack.LoadPack(packDir)
+	if err != nil {
+		s.logger.Warn("installed pack did not re-load; not creating a campaign for it", "slug", slug, "error", err)
+		return "", false
+	}
+
+	if _, bound, err := s.campaignPack.GetCampaignPack(ctx, pack.ID); err != nil {
+		s.logger.Warn("could not check existing pack binding", "campaign_id", pack.ID, "error", err)
+		return pack.ID, false
+	} else if bound {
+		return pack.ID, false // already set up — never clobber
+	}
+
+	title := pack.Title
+	if title == "" {
+		title = pack.ID
+	}
+	if err := s.store.SaveCampaignMeta(ctx, pack.ID, title); err != nil {
+		s.logger.Warn("could not name campaign for installed pack", "campaign_id", pack.ID, "error", err)
+		return pack.ID, false
+	}
+	if err := s.campaignPack.SaveCampaignPack(ctx, pack.ID, packDir, pack.ID); err != nil {
+		s.logger.Warn("could not bind installed pack to its campaign", "campaign_id", pack.ID, "error", err)
+		return pack.ID, false
+	}
+	return pack.ID, true
 }
 
 // resolvePackLibraryURL picks the archive download URL: an explicit,

@@ -522,15 +522,28 @@ el.installLibrarySubmit.addEventListener("click", async () => {
       if (res.status in counts) counts[res.status]++;
       const li = document.createElement("li");
       li.classList.add(`install-result-${res.status}`);
-      li.textContent = res.detail
+      let line = res.detail
         ? `${res.slug} — ${res.status}: ${res.detail}`
         : `${res.slug} — ${res.status}`;
+      if (res.campaign_added) line += ` → campaign "${res.campaign}" added`;
+      else if (res.campaign) line += ` → campaign "${res.campaign}"`;
+      li.textContent = line;
       el.installLibraryResults.appendChild(li);
     }
     el.installLibraryResults.hidden = results.length === 0;
+
+    // Bring the new campaigns into the dropdown above.
+    if (data.campaigns_added > 0) {
+      await loadCampaignList();
+    }
+
+    const added = data.campaigns_added || 0;
     setStatus(
       el.installLibraryStatus,
-      `From ${data.source}: ${counts.installed} installed, ${counts.skipped_exists} already present, ${counts.failed} failed.`,
+      `From ${data.source}: ${counts.installed} unpacked, ${counts.skipped_exists} already present, ${counts.failed} failed — ` +
+        (added > 0
+          ? `${added} campaign${added === 1 ? "" : "s"} added to the dropdown above.`
+          : "no new campaigns added."),
       counts.failed > 0,
     );
   } catch (err) {

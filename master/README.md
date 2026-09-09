@@ -2105,6 +2105,26 @@ would want as a post-process (regions + door edges), any renderer
 beyond ASCII, and all the actual viewport / protocol / DM-tool wiring —
 that's the V3 feature work this only prepares for.
 
+**"Download Campaign Pack"** on the admin panel's Campaign tab now does
+the whole chain in one click: `POST /api/campaign-packs/install-library`
+downloads `layforge.org/downloads/campaign-pack-library.zip` (or a
+`-registry-url`-derived / operator-supplied URL), unpacks it into
+`-campaign-packs-dir` through `campaignpack.InstallLibrary` (the same
+zip-slip / zip-bomb / `LoadPack`-revalidation gate every pack goes
+through), and then, for each pack that landed, creates a campaign under
+the pack's own `campaign.md` id (display name = its title) and binds the
+pack to it — so the pregenerated adventures appear straight in the
+Campaign dropdown, no separate create-then-bind step. A campaign id that
+already has a pack bound (a re-run, or a collision with the Host's own
+campaign) is left completely alone. The panel refreshes the dropdown
+when `campaigns_added > 0`. Covered by `internal/admin/
+install_library_test.go` (campaigns created + packs bound + dropdown
+list reflects it; a second run adds nothing; an existing binding is
+never clobbered) and `internal/campaignpack/library_test.go` for the
+unpack gate itself. Live-verified with a real Master binary against a
+stub archive server: install → two campaigns created → `GET
+/api/campaigns` returns both with the pack titles as display names.
+
 ## Layout
 
 ```
