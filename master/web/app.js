@@ -157,6 +157,10 @@ const state = {
   // join, so the close handler that fires right after doesn't overwrite
   // the reason with a generic message.
   handshakeRejected: false,
+  // characterCreated flips true once character.validation_result lands a
+  // real character_id — used to decide whether a system.error mid-setup
+  // should offer a "start creation over" affordance.
+  characterCreated: false,
   pendingJoinUrl: null,
   pendingInputMessageId: null,
   // oldestLoadedSequence/hasMoreOlder track the "load earlier" cursor —
@@ -921,6 +925,32 @@ function onSystemError(msg) {
     state.pendingRollMessageId = null;
     el.rollCheckButton.disabled = false;
   }
+  // A character-creation failure (e.g. the chosen path needs a system
+  // engine the Host hasn't configured) deletes the session server-side
+  // and disables the prompt's buttons — leaving the player with no way
+  // forward. Offer a fresh start so they can pick a different path or
+  // retry once the Host fixes it.
+  if (state.joined && !state.characterCreated) {
+    appendCreationRetry();
+  }
+}
+
+// appendCreationRetry adds a "Start character creation over" button to
+// the log — re-sends character.creation_start with the name already
+// entered, kicking the flow back to the top-level choice.
+function appendCreationRetry() {
+  const wrap = document.createElement("div");
+  wrap.className = "creation-prompt";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Start character creation over";
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    send({ ...newEnvelope("character.creation_start"), payload: { character_name: state.characterId || "" } });
+  });
+  wrap.appendChild(button);
+  el.log.appendChild(wrap);
+  el.log.scrollTop = el.log.scrollHeight;
 }
 
 function onNarrativeBubble(msg) {
@@ -1408,6 +1438,7 @@ function onCharacterValidationResult(msg) {
     return;
   }
   state.rollCharacterId = payload.character_id;
+  state.characterCreated = true;
   el.rollCheckButton.disabled = false;
   el.effectDamageButton.disabled = false;
   el.effectHealButton.disabled = false;

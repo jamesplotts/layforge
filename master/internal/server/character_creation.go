@@ -91,11 +91,54 @@ func (s *Server) handleCreationStart(ctx context.Context, conn *websocket.Conn, 
 		return err
 	}
 	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageTopLevel, characterName: strings.TrimSpace(characterName)})
+
+	// Only offer a path that can actually complete on this Master.
+	// Import and rolling both need the System Engine; pregen needs the
+	// Host to have authored at least one for this campaign. Offering a
+	// choice that immediately fails would strand the player (the sub-flow
+	// deletes the session on failure) — gate it here instead.
+	var choices []string
+	var parts []string
+	engineUp := s.systemEngine != nil
+	if engineUp {
+		choices = append(choices, creationChoiceImport, creationChoiceQuickRoll, creationChoiceDetailedRoll)
+		parts = append(parts,
+			"import an existing character",
+			"quick roll a new one (you pick race/class/gender, the rest is rolled)",
+			"detailed roll a new one (you make every choice)")
+	}
+	if s.pregens != nil && s.characters != nil {
+		if pregens, err := s.pregens.ListPregens(ctx, campaignID); err == nil && len(pregens) > 0 {
+			choices = append(choices, creationChoicePregen)
+			parts = append(parts, "pick a pregenerated character your Host has offered")
+		}
+	}
+	if len(choices) == 0 {
+		s.deleteCreationSession(sessionID)
+		return s.sendError(ctx, conn, campaignID, "",
+			errors.New("character creation isn't available yet: this Master has no system engine configured (needed to roll or import a character) and the Host hasn't added any pregenerated characters. Ask the Host to set -system-engine-addr or add a pregen on the admin panel."))
+	}
+
 	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID,
-		"How would you like to create your character? Import an existing character, quick roll a new one (you pick race/class/gender, the rest is rolled), detailed roll a new one (you make every choice), or pick a pregenerated character your Host has offered.",
-		[]string{creationChoiceImport, creationChoiceQuickRoll, creationChoiceDetailedRoll, creationChoicePregen},
+		"How would you like to create your character? You can "+joinWithOr(parts)+".",
+		choices,
 		false,
 	)
+}
+
+// joinWithOr renders ["a", "b", "c"] as "a, b, or c" (and "a or b" for
+// two, "a" for one) for the creation prompt's free-text description.
+func joinWithOr(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[0] + " or " + parts[1]
+	default:
+		return strings.Join(parts[:len(parts)-1], ", ") + ", or " + parts[len(parts)-1]
+	}
 }
 
 // handleCreationAnswer implements character.creation_answer: routes the

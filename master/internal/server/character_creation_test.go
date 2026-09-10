@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,8 +79,8 @@ func sendCreationAnswer(ctx context.Context, conn *websocket.Conn, campaignID, s
 	return wsjson.Write(ctx, conn, msg)
 }
 
-func TestServe_CreationStart_SendsTopLevelPromptWithFourChoices(t *testing.T) {
-	ts, _ := newTestServerForCreation(t, nil)
+func TestServe_CreationStart_WithEngine_OffersImportAndRoll(t *testing.T) {
+	ts, _ := newTestServerForCreation(t, &fakeSystemEngineClient{})
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-creation", "player-a")
@@ -97,7 +98,9 @@ func TestServe_CreationStart_SendsTopLevelPromptWithFourChoices(t *testing.T) {
 	if prompt.Payload.SessionID == "" {
 		t.Error("Payload.SessionID is empty, want a generated id")
 	}
-	want := map[string]bool{"import": true, "quick_roll": true, "detailed_roll": true, "pregen": true}
+	// No pregens authored, so pregen is not offered; the three
+	// engine-backed choices are.
+	want := map[string]bool{"import": true, "quick_roll": true, "detailed_roll": true}
 	if len(prompt.Payload.Choices) != len(want) {
 		t.Fatalf("Payload.Choices = %v, want exactly %v", prompt.Payload.Choices, want)
 	}
@@ -107,7 +110,28 @@ func TestServe_CreationStart_SendsTopLevelPromptWithFourChoices(t *testing.T) {
 		}
 	}
 	if prompt.Payload.AcceptsFileUpload {
-		t.Error("top-level prompt AcceptsFileUpload = true, want false — only the import sub-flow's own paste-JSON prompt should set this")
+		t.Error("top-level prompt AcceptsFileUpload = true, want false")
+	}
+}
+
+func TestServe_CreationStart_NoEngineNoPregens_ClearError(t *testing.T) {
+	ts, _ := newTestServerForCreation(t, nil)
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-creation-nada", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := sendCreationStart(ctx, conn, "campaign-creation-nada", "player-a"); err != nil {
+		t.Fatalf("sendCreationStart() error = %v", err)
+	}
+	var errMsg protocol.SystemErrorMessage
+	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
+		t.Fatalf("Read(system.error) error = %v", err)
+	}
+	if !strings.Contains(errMsg.Payload.Message, "system engine") {
+		t.Errorf("message = %q, want it to explain the missing system engine", errMsg.Payload.Message)
 	}
 }
 
