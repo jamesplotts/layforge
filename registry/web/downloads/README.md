@@ -23,6 +23,12 @@ the same directory shape Master's loader (`campaignpack.LoadPack`) and
 the *Bind Pack* button expect. Levels 2–10, mostly 3–8, four chapters
 each.
 
+These are written for the **OpenCombatEngine** system engine (D&D SRD
+5.1): the `stat_block_ref`s, encounters, and level ranges assume it.
+Running one mechanically (dice, checks, stat blocks) needs a Master with
+`-system-engine-addr` pointed at an OpenCombatEngine sidecar; the
+narrative content itself is engine-agnostic.
+
 - **The Thornwell Verdict** (L3–8) — `framed-in-havenbrook`
 - **Harvest Hollow** (L3–8) — `harvest-hollow`
 - **The Beast of Blackwater** (L3–8) — `the-beast-of-blackwater`
