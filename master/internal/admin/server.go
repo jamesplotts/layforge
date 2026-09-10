@@ -63,6 +63,16 @@ const (
 	// scripted-acceptance path.
 	SystemKeyTermsAcceptedVersion = "terms_accepted_version"
 	SystemKeyTermsAcceptedAt      = "terms_accepted_at"
+	// SystemKeyActiveCampaignID/SystemKeyCampaignJoinLocked are the "one
+	// game is running" state the Session tab controls and the player
+	// client reads (see handleGetSession / server.SessionInfoHandler).
+	// Like the terms keys above, they're read straight from
+	// GetSystemSettings, not surfaced through systemKeys/systemSettingsDTO
+	// — they're not a System-tab field. ActiveCampaignID empty means no
+	// game is joinable; CampaignJoinLocked "true" blocks joins by anyone
+	// who doesn't already own a character in the active campaign.
+	SystemKeyActiveCampaignID   = "active_campaign_id"
+	SystemKeyCampaignJoinLocked = "campaign_join_locked"
 )
 
 // systemKeys is every recognized System-tab key, in the fixed order the
@@ -255,6 +265,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/characters/{characterId}", s.requireSameOrigin(s.handleDeleteCharacter))
 	mux.HandleFunc("GET /api/campaigns/{id}/players", s.handleListConnectedPlayers)
 	mux.HandleFunc("POST /api/campaigns/{id}/players/{senderId}/kick", s.requireSameOrigin(s.handleKickPlayer))
+	mux.HandleFunc("GET /api/session", s.handleGetSession)
+	mux.HandleFunc("PUT /api/session/active-campaign", s.requireSameOrigin(s.handleSetActiveCampaign))
+	mux.HandleFunc("PUT /api/session/join-lock", s.requireSameOrigin(s.handleSetJoinLock))
 	mux.HandleFunc("GET /api/system", s.handleGetSystem)
 	mux.HandleFunc("PUT /api/system", s.requireSameOrigin(s.handlePutSystem))
 	mux.HandleFunc("POST /api/system/restart", s.requireSameOrigin(s.handleRestart))
@@ -1734,6 +1747,121 @@ func (s *Server) handleListConnectedPlayers(w http.ResponseWriter, r *http.Reque
 		senderIDs = s.hub.ConnectedSenders(campaignID)
 	}
 	s.writeJSON(w, http.StatusOK, connectedPlayersDTO{SenderIDs: senderIDs})
+}
+
+// sessionStateDTO is GET /api/session's body — the "one game is running"
+// state the Session tab shows and edits. ActiveCampaignName falls back to
+// the id when the campaign was never named.
+type sessionStateDTO struct {
+	ActiveCampaignID   string         `json:"active_campaign_id"`
+	ActiveCampaignName string         `json:"active_campaign_name"`
+	JoinLocked         bool           `json:"join_locked"`
+	ConnectedPlayers   []string       `json:"connected_players"`
+	Characters         []characterDTO `json:"characters"`
+}
+
+// handleGetSession reports the active campaign, the join lock, and who is
+// connected to / has a character in it. Poll target for the Session tab.
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.store.GetSystemSettings(r.Context())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+	active := settings[SystemKeyActiveCampaignID]
+
+	out := sessionStateDTO{
+		ActiveCampaignID: active,
+		JoinLocked:       settings[SystemKeyCampaignJoinLocked] == "true",
+		ConnectedPlayers: []string{},
+		Characters:       []characterDTO{},
+	}
+	if active == "" {
+		s.writeJSON(w, http.StatusOK, out)
+		return
+	}
+
+	out.ActiveCampaignName = active
+	if summaries, err := s.store.ListCampaignSummaries(r.Context()); err == nil {
+		for _, sum := range summaries {
+			if sum.CampaignID == active && sum.DisplayName != "" {
+				out.ActiveCampaignName = sum.DisplayName
+			}
+		}
+	}
+	if s.hub != nil {
+		if senders := s.hub.ConnectedSenders(active); senders != nil {
+			out.ConnectedPlayers = senders
+		}
+	}
+	if s.characters != nil {
+		if chars, err := s.characters.ListCharacters(r.Context(), active); err == nil {
+			out.Characters = make([]characterDTO, len(chars))
+			for i, c := range chars {
+				out.Characters[i] = characterToDTO(c)
+			}
+		}
+	}
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+// setActiveCampaignDTO is PUT /api/session/active-campaign's body. An
+// empty CampaignID clears the active campaign (no game joinable).
+type setActiveCampaignDTO struct {
+	CampaignID string `json:"campaign_id"`
+}
+
+func (s *Server) handleSetActiveCampaign(w http.ResponseWriter, r *http.Request) {
+	var dto setActiveCampaignDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if dto.CampaignID != "" {
+		summaries, err := s.store.ListCampaignSummaries(r.Context())
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+		known := false
+		for _, sum := range summaries {
+			if sum.CampaignID == dto.CampaignID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			s.writeErrorMsg(w, http.StatusBadRequest, "no campaign with id "+dto.CampaignID)
+			return
+		}
+	}
+	if err := s.store.SaveSystemSettings(r.Context(), map[string]string{SystemKeyActiveCampaignID: dto.CampaignID}); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.handleGetSession(w, r)
+}
+
+// setJoinLockDTO is PUT /api/session/join-lock's body.
+type setJoinLockDTO struct {
+	Locked bool `json:"locked"`
+}
+
+func (s *Server) handleSetJoinLock(w http.ResponseWriter, r *http.Request) {
+	var dto setJoinLockDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		s.writeErrorMsg(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	value := ""
+	if dto.Locked {
+		value = "true"
+	}
+	if err := s.store.SaveSystemSettings(r.Context(), map[string]string{SystemKeyCampaignJoinLocked: value}); err != nil {
+		s.writeError(w, err)
+		return
+	}
+	s.handleGetSession(w, r)
 }
 
 // kickPlayerResultDTO is the response body of POST
