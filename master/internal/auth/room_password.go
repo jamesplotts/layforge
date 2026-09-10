@@ -40,7 +40,7 @@ func NewRoomPasswordProvider(passwords map[string]string) *RoomPasswordProvider 
 // password, which is reported through Result.OK/Reason, not err. The
 // Result carries no Identity: a room password says nothing about who the
 // player is.
-func (p *RoomPasswordProvider) Authorize(_ context.Context, campaignID, authToken string) (Result, error) {
+func (p *RoomPasswordProvider) Authorize(_ context.Context, campaignID string, creds Credentials) (Result, error) {
 	want, configured := p.passwords[campaignID]
 	if !configured {
 		return Result{OK: true}, nil
@@ -51,7 +51,7 @@ func (p *RoomPasswordProvider) Authorize(_ context.Context, campaignID, authToke
 	// public by design), so the password itself is the only thing
 	// standing between "anyone" and "authorized" — worth not leaking
 	// timing information about it.
-	if subtle.ConstantTimeCompare([]byte(authToken), []byte(want)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(creds.CampaignPassword), []byte(want)) != 1 {
 		return Result{OK: false, Reason: "incorrect password"}, nil
 	}
 	return Result{OK: true}, nil

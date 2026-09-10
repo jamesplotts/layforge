@@ -46,12 +46,12 @@ func NewDiscordOAuthProvider(sessions SessionLookuper, next Provider) *DiscordOA
 }
 
 // Authorize implements Provider.
-func (p *DiscordOAuthProvider) Authorize(ctx context.Context, campaignID, authToken string) (Result, error) {
-	if authToken == "" {
+func (p *DiscordOAuthProvider) Authorize(ctx context.Context, campaignID string, creds Credentials) (Result, error) {
+	if creds.AuthToken == "" {
 		return Result{OK: false, Reason: "log in with Discord to join this campaign"}, nil
 	}
 
-	sess, account, err := p.sessions.LookupOAuthSession(ctx, authToken)
+	sess, account, err := p.sessions.LookupOAuthSession(ctx, creds.AuthToken)
 	switch {
 	case errors.Is(err, store.ErrOAuthSessionNotFound):
 		return Result{OK: false, Reason: "your Discord login is not recognized — log in again"}, nil
@@ -71,7 +71,10 @@ func (p *DiscordOAuthProvider) Authorize(ctx context.Context, campaignID, authTo
 	}
 
 	if p.Next != nil {
-		res, err := p.Next.Authorize(ctx, campaignID, authToken)
+		// Pass the whole creds so a room-password link still sees the
+		// password; replace whatever Identity it returns with our
+		// verified one.
+		res, err := p.Next.Authorize(ctx, campaignID, creds)
 		if err != nil {
 			return Result{}, err
 		}

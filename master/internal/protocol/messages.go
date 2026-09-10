@@ -25,7 +25,15 @@ type SystemConnectPayload struct {
 	// "player_web_v1", or a third-party viewport's own identifier
 	// (design doc §4).
 	ClientKind string `json:"client_kind"`
-	AuthToken  string `json:"auth_token"`
+	// AuthToken is the identity credential: a Discord login session token
+	// when the Master runs Discord OAuth (design doc §6.6), otherwise
+	// unused. It is not the room password — that is CampaignPassword, a
+	// separate field so a campaign can require both.
+	AuthToken string `json:"auth_token"`
+	// CampaignPassword is the per-campaign room password (design doc
+	// §6.6's room-code provider), when the campaign has one set. Empty
+	// otherwise.
+	CampaignPassword string `json:"campaign_password,omitempty"`
 }
 
 // SystemConnectMessage is a system.connect Message.

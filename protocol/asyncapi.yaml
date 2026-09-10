@@ -1019,10 +1019,16 @@ components:
                   auth_token:
                     type: string
                     description: >-
-                      When the Master runs Discord OAuth (docs/design.md §6.6), a login session
-                      token minted by its /auth/discord/callback. When the Master uses room-code
-                      auth, the room password. Empty for an open campaign. A rejected token/password
-                      produces a system.error and the connection is closed.
+                      The identity credential: a Discord login session token minted by the
+                      Master's /auth/discord/callback when it runs Discord OAuth (docs/design.md
+                      §6.6), otherwise unused. Not the room password — that is campaign_password.
+                      A rejected credential produces a system.error and the connection is closed.
+                  campaign_password:
+                    type: string
+                    description: >-
+                      The per-campaign room password (docs/design.md §6.6's room-code provider),
+                      when the campaign has one set. Sent alongside auth_token so a campaign can
+                      require both a Discord login and a password. Empty otherwise.
 
     TermsAccept:
       name: terms.accept

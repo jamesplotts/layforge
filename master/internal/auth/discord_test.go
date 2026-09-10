@@ -40,7 +40,7 @@ type fakeAuthProvider struct {
 	reason string
 }
 
-func (f fakeAuthProvider) Authorize(context.Context, string, string) (auth.Result, error) {
+func (f fakeAuthProvider) Authorize(context.Context, string, auth.Credentials) (auth.Result, error) {
 	return auth.Result{OK: f.ok, Reason: f.reason}, nil
 }
 
@@ -76,7 +76,7 @@ func TestDiscordOAuthProvider_Authorize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := auth.NewDiscordOAuthProvider(sessions, tt.next)
-			res, err := p.Authorize(context.Background(), "camp", tt.token)
+			res, err := p.Authorize(context.Background(), "camp", auth.Credentials{AuthToken: tt.token})
 			if err != nil {
 				t.Fatalf("Authorize() error = %v", err)
 			}
@@ -96,9 +96,36 @@ func TestDiscordOAuthProvider_Authorize(t *testing.T) {
 	}
 }
 
+func TestDiscordOAuthProvider_Authorize_ComposesWithRoomPassword(t *testing.T) {
+	sessions := fakeSessions{byToken: map[string]store.Account{"good": bramAccount()}}
+	roomPw := auth.NewRoomPasswordProvider(map[string]string{"camp": "hunter2"})
+	p := auth.NewDiscordOAuthProvider(sessions, roomPw)
+
+	// Valid Discord token but wrong campaign password → rejected, identity
+	// still attached.
+	res, err := p.Authorize(context.Background(), "camp",
+		auth.Credentials{AuthToken: "good", CampaignPassword: "nope"})
+	if err != nil {
+		t.Fatalf("Authorize() error = %v", err)
+	}
+	if res.OK || !res.Identity.Authenticated() {
+		t.Errorf("wrong password with valid login = %+v, want !OK with identity", res)
+	}
+
+	// Both correct → in.
+	res, err = p.Authorize(context.Background(), "camp",
+		auth.Credentials{AuthToken: "good", CampaignPassword: "hunter2"})
+	if err != nil {
+		t.Fatalf("Authorize() error = %v", err)
+	}
+	if !res.OK || res.Identity.DisplayName != "Bram" {
+		t.Errorf("login + password = %+v, want OK with Bram", res)
+	}
+}
+
 func TestDiscordOAuthProvider_Authorize_ExpiredSession(t *testing.T) {
 	p := auth.NewDiscordOAuthProvider(fakeSessions{err: store.ErrOAuthSessionExpired}, nil)
-	res, err := p.Authorize(context.Background(), "camp", "stale")
+	res, err := p.Authorize(context.Background(), "camp", auth.Credentials{AuthToken: "stale"})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
@@ -110,7 +137,7 @@ func TestDiscordOAuthProvider_Authorize_ExpiredSession(t *testing.T) {
 func TestDiscordOAuthProvider_Authorize_LookupError_IsError(t *testing.T) {
 	sentinel := errors.New("db down")
 	p := auth.NewDiscordOAuthProvider(fakeSessions{err: sentinel}, nil)
-	if _, err := p.Authorize(context.Background(), "camp", "tok"); !errors.Is(err, sentinel) {
+	if _, err := p.Authorize(context.Background(), "camp", auth.Credentials{AuthToken: "tok"}); !errors.Is(err, sentinel) {
 		t.Fatalf("Authorize() error = %v, want it to wrap the lookup error", err)
 	}
 }

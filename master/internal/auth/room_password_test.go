@@ -18,19 +18,19 @@ func TestRoomPasswordProvider_Authorize(t *testing.T) {
 	tests := []struct {
 		name       string
 		campaignID string
-		authToken  string
+		password   string
 		wantOK     bool
 	}{
-		{name: "CorrectPassword_Authorized", campaignID: "protected-campaign", authToken: "hunter2", wantOK: true},
-		{name: "WrongPassword_NotAuthorized", campaignID: "protected-campaign", authToken: "wrong", wantOK: false},
-		{name: "EmptyToken_NotAuthorized", campaignID: "protected-campaign", authToken: "", wantOK: false},
-		{name: "UnconfiguredCampaign_OpenToAnyone", campaignID: "public-campaign", authToken: "", wantOK: true},
-		{name: "UnconfiguredCampaign_AnyTokenStillAuthorized", campaignID: "public-campaign", authToken: "anything", wantOK: true},
+		{name: "CorrectPassword_Authorized", campaignID: "protected-campaign", password: "hunter2", wantOK: true},
+		{name: "WrongPassword_NotAuthorized", campaignID: "protected-campaign", password: "wrong", wantOK: false},
+		{name: "EmptyPassword_NotAuthorized", campaignID: "protected-campaign", password: "", wantOK: false},
+		{name: "UnconfiguredCampaign_OpenToAnyone", campaignID: "public-campaign", password: "", wantOK: true},
+		{name: "UnconfiguredCampaign_AnyPasswordStillAuthorized", campaignID: "public-campaign", password: "anything", wantOK: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := p.Authorize(context.Background(), tt.campaignID, tt.authToken)
+			res, err := p.Authorize(context.Background(), tt.campaignID, auth.Credentials{CampaignPassword: tt.password})
 			if err != nil {
 				t.Fatalf("Authorize() error = %v, want nil", err)
 			}
@@ -62,7 +62,7 @@ func TestNewRoomPasswordProvider_DoesNotRetainCallersMap(t *testing.T) {
 	p := auth.NewRoomPasswordProvider(passwords)
 	passwords["campaign-1"] = "changed"
 
-	res, err := p.Authorize(context.Background(), "campaign-1", "secret")
+	res, err := p.Authorize(context.Background(), "campaign-1", auth.Credentials{CampaignPassword: "secret"})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v, want nil", err)
 	}
@@ -70,7 +70,7 @@ func TestNewRoomPasswordProvider_DoesNotRetainCallersMap(t *testing.T) {
 		t.Error("Authorize(campaign-1, \"secret\") = false, want true (the original password should still work)")
 	}
 
-	res, err = p.Authorize(context.Background(), "campaign-1", "changed")
+	res, err = p.Authorize(context.Background(), "campaign-1", auth.Credentials{CampaignPassword: "changed"})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v, want nil", err)
 	}

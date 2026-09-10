@@ -21,7 +21,7 @@ type fakeAuthProvider struct {
 	identity auth.Identity
 }
 
-func (f fakeAuthProvider) Authorize(context.Context, string, string) (auth.Result, error) {
+func (f fakeAuthProvider) Authorize(context.Context, string, auth.Credentials) (auth.Result, error) {
 	return auth.Result{OK: f.ok, Reason: f.reason, Identity: f.identity}, nil
 }
 
@@ -29,7 +29,7 @@ func TestAuthProvider_Authorize_NoStoredSettings_FallsBackToFallback(t *testing.
 	fallback := fakeAuthProvider{ok: false, reason: "fallback says no"}
 	p := admin.NewAuthProvider(newTestStore(t), fallback)
 
-	res, err := p.Authorize(context.Background(), "unconfigured-campaign", "whatever")
+	res, err := p.Authorize(context.Background(), "unconfigured-campaign", auth.Credentials{CampaignPassword: "whatever"})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
@@ -42,7 +42,7 @@ func TestAuthProvider_Authorize_PassesThroughFallbackIdentity(t *testing.T) {
 	fallback := fakeAuthProvider{ok: true, identity: auth.Identity{AccountID: "discord:1", DisplayName: "Bram"}}
 	p := admin.NewAuthProvider(newTestStore(t), fallback)
 
-	res, err := p.Authorize(context.Background(), "unconfigured-campaign", "tok")
+	res, err := p.Authorize(context.Background(), "unconfigured-campaign", auth.Credentials{CampaignPassword: "tok"})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestAuthProvider_Authorize_PassesThroughFallbackIdentity(t *testing.T) {
 func TestAuthProvider_Authorize_NoStoredSettingsOrFallback_ReturnsOpen(t *testing.T) {
 	p := admin.NewAuthProvider(newTestStore(t), nil)
 
-	res, err := p.Authorize(context.Background(), "unconfigured-campaign", "")
+	res, err := p.Authorize(context.Background(), "unconfigured-campaign", auth.Credentials{CampaignPassword: ""})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestAuthProvider_Authorize_StoredPassword_CorrectToken_Authorized(t *testin
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
 	}
 
-	res, err := p.Authorize(context.Background(), "campaign-1", "hunter2")
+	res, err := p.Authorize(context.Background(), "campaign-1", auth.Credentials{CampaignPassword: "hunter2"})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestAuthProvider_Authorize_StoredPassword_WrongToken_Rejected(t *testing.T)
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
 	}
 
-	res, err := p.Authorize(context.Background(), "campaign-1", "wrong")
+	res, err := p.Authorize(context.Background(), "campaign-1", auth.Credentials{CampaignPassword: "wrong"})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAuthProvider_Authorize_StoredEmptyPassword_FallsBackToFallback(t *testi
 		t.Fatalf("SaveCampaignSettings() error = %v", err)
 	}
 
-	res, err := p.Authorize(context.Background(), "campaign-1", "")
+	res, err := p.Authorize(context.Background(), "campaign-1", auth.Credentials{CampaignPassword: ""})
 	if err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}

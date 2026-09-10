@@ -1038,7 +1038,7 @@ func TestHandleWebSocket_AuthProvider_CorrectPassword_Joins(t *testing.T) {
 			CampaignID:      "protected-campaign",
 			Type:            protocol.MessageTypeSystemConnect,
 		},
-		Payload: protocol.SystemConnectPayload{ClientKind: "test_client", AuthToken: "hunter2"},
+		Payload: protocol.SystemConnectPayload{ClientKind: "test_client", CampaignPassword: "hunter2"},
 	}
 	if err := wsjson.Write(ctx, conn, connect); err != nil {
 		t.Fatalf("Write(connect) error = %v", err)
@@ -1077,7 +1077,7 @@ func TestHandleWebSocket_AuthProvider_WrongPassword_RejectsHandshake(t *testing.
 			CampaignID:      "protected-campaign",
 			Type:            protocol.MessageTypeSystemConnect,
 		},
-		Payload: protocol.SystemConnectPayload{ClientKind: "test_client", AuthToken: "wrong-password"},
+		Payload: protocol.SystemConnectPayload{ClientKind: "test_client", CampaignPassword: "wrong-password"},
 	}
 	if err := wsjson.Write(ctx, conn, connect); err != nil {
 		t.Fatalf("Write(connect) error = %v", err)

@@ -37,14 +37,14 @@ func NewAuthProvider(s store.AdminSettingsStore, fallback auth.Provider) *AuthPr
 // a room password says nothing about who the player is — but passes
 // through whatever Identity the Fallback returns (a DiscordOAuthProvider
 // wrapping this one supplies its identity before delegating here).
-func (p *AuthProvider) Authorize(ctx context.Context, campaignID, authToken string) (auth.Result, error) {
+func (p *AuthProvider) Authorize(ctx context.Context, campaignID string, creds auth.Credentials) (auth.Result, error) {
 	settings, ok, err := p.store.GetCampaignSettings(ctx, campaignID)
 	if err != nil {
 		return auth.Result{}, err
 	}
 	if !ok || settings.RoomPassword == "" {
 		if p.Fallback != nil {
-			return p.Fallback.Authorize(ctx, campaignID, authToken)
+			return p.Fallback.Authorize(ctx, campaignID, creds)
 		}
 		return auth.Result{OK: true}, nil
 	}
@@ -52,7 +52,7 @@ func (p *AuthProvider) Authorize(ctx context.Context, campaignID, authToken stri
 	// auth.RoomPasswordProvider.Authorize: campaign_id is often
 	// guessable/advertised, so the password is the only real barrier —
 	// worth not leaking timing information about it.
-	if subtle.ConstantTimeCompare([]byte(authToken), []byte(settings.RoomPassword)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(creds.CampaignPassword), []byte(settings.RoomPassword)) != 1 {
 		return auth.Result{OK: false, Reason: "incorrect password"}, nil
 	}
 	return auth.Result{OK: true}, nil

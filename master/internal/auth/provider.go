@@ -38,6 +38,18 @@ type Identity struct {
 // room-password-only join produces.
 func (i Identity) Authenticated() bool { return i.AccountID != "" }
 
+// Credentials is everything a system.connect handshake presents for a
+// join decision. A given campaign/Master may use one, both, or neither
+// field.
+type Credentials struct {
+	// AuthToken is the identity credential — a Discord login session
+	// token when the Master runs Discord OAuth, otherwise "".
+	AuthToken string
+	// CampaignPassword is the per-campaign room password, when the
+	// campaign has one set, otherwise "".
+	CampaignPassword string
+}
+
 // Result is the outcome of a Provider.Authorize call.
 type Result struct {
 	// OK reports whether the join is authorized.
@@ -55,13 +67,13 @@ type Result struct {
 // Master calls it, if configured, before admitting a handshake — see
 // package server's use of it.
 type Provider interface {
-	// Authorize reports whether authToken authorizes joining campaignID,
-	// and — when a provider can — who the player is.
+	// Authorize reports whether creds authorize joining campaignID, and —
+	// when a provider can — who the player is.
 	//
 	// A non-nil error is reserved for the provider being unable to even
 	// perform the check (a database read failing, an OAuth provider's API
 	// being unreachable). An expected "not authorized" outcome (wrong
 	// password, expired token, declined OAuth consent) is Result{OK:
 	// false, Reason: ...} with a nil error.
-	Authorize(ctx context.Context, campaignID, authToken string) (Result, error)
+	Authorize(ctx context.Context, campaignID string, creds Credentials) (Result, error)
 }

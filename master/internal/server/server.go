@@ -418,7 +418,10 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 
 	var identity auth.Identity
 	if s.auth != nil {
-		result, authErr := s.auth.Authorize(ctx, campaignID, connect.Payload.AuthToken)
+		result, authErr := s.auth.Authorize(ctx, campaignID, auth.Credentials{
+			AuthToken:        connect.Payload.AuthToken,
+			CampaignPassword: connect.Payload.CampaignPassword,
+		})
 		if authErr != nil {
 			return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
 				fmt.Errorf("checking authorization: %w", authErr))
