@@ -586,6 +586,10 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", srv.Handler())
+	// The reworked join screen reads this to show which campaign is
+	// running, whether it needs a password, and whether it's closed —
+	// no secrets, see server.SessionInfoHandler.
+	mux.Handle("/api/session", srv.SessionInfoHandler())
 
 	// Discord OAuth's browser-facing routes live on the player-facing
 	// listener (a player's browser hits them), not the localhost admin

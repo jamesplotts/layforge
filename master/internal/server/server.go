@@ -447,6 +447,18 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 		effectiveSender = identity.AccountID
 	}
 
+	// Session gate (design doc §3.3's "one game running" model): once the
+	// Host has set an active campaign, only that campaign is joinable, and
+	// a "closed to new players" lock admits only players who already have
+	// a character in it.
+	if ok, reason, gateErr := s.sessionGate(ctx, campaignID, effectiveSender); gateErr != nil {
+		return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
+			fmt.Errorf("checking session state: %w", gateErr))
+	} else if !ok {
+		return s.rejectHandshake(ctx, conn, connect.MessageID, campaignID,
+			errors.New(reason))
+	}
+
 	if err := s.sendSessionState(ctx, conn, campaignID, protocol.SessionStateJoined, identity); err != nil {
 		return err
 	}
