@@ -46,6 +46,12 @@ const el = {
   termsModalAgree: document.getElementById("terms-modal-agree"),
   campaignPickerBar: document.getElementById("campaign-picker-bar"),
   campaignManage: document.getElementById("campaign-manage"),
+  sessionCampaignSelect: document.getElementById("session-campaign-select"),
+  sessionActiveStatus: document.getElementById("session-active-status"),
+  sessionStatusLine: document.getElementById("session-status-line"),
+  sessionJoinLock: document.getElementById("session-join-lock"),
+  sessionRosterBody: document.getElementById("session-roster-body"),
+  sessionRosterEmpty: document.getElementById("session-roster-empty"),
   campaignSelect: document.getElementById("campaign-select"),
   campaignTableBody: document.getElementById("campaign-table-body"),
   campaignListNote: document.getElementById("campaign-list-note"),
@@ -174,7 +180,115 @@ function selectTab(tabId) {
   el.campaignPickerBar.hidden = !pickerTabs.includes(tabId);
   el.campaignManage.hidden = tabId !== "campaign";
   if (tabId === "characters") loadAllCharacters();
+  setSessionPolling(tabId === "session");
 }
+
+// --- Session tab ---
+
+let sessionPollTimer = null;
+
+function setSessionPolling(on) {
+  if (sessionPollTimer) {
+    clearInterval(sessionPollTimer);
+    sessionPollTimer = null;
+  }
+  if (on) {
+    loadSession();
+    sessionPollTimer = setInterval(loadSession, 5000);
+  }
+}
+
+async function loadSession() {
+  let data;
+  try {
+    const resp = await fetch("/api/session");
+    if (!resp.ok) return;
+    data = await resp.json();
+  } catch {
+    return;
+  }
+  renderSession(data);
+}
+
+function renderSession(data) {
+  // Populate the active-campaign options from the campaign list cache
+  // (loadCampaignList keeps state.campaigns current).
+  const active = data.active_campaign_id || "";
+  el.sessionCampaignSelect.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "— none (players can't join yet) —";
+  el.sessionCampaignSelect.appendChild(none);
+  for (const c of state.campaigns) {
+    const opt = document.createElement("option");
+    opt.value = c.campaign_id;
+    opt.textContent = c.display_name || c.campaign_id;
+    el.sessionCampaignSelect.appendChild(opt);
+  }
+  el.sessionCampaignSelect.value = active;
+
+  el.sessionJoinLock.checked = Boolean(data.join_locked);
+  el.sessionJoinLock.disabled = !active;
+
+  const players = data.connected_players || [];
+  const characters = data.characters || [];
+  if (!active) {
+    el.sessionStatusLine.textContent = "No campaign is running.";
+  } else {
+    el.sessionStatusLine.textContent =
+      `Running "${data.active_campaign_name || active}" — ${players.length} connected, ${characters.length} character${characters.length === 1 ? "" : "s"}.`;
+  }
+
+  const online = new Set(players);
+  el.sessionRosterBody.replaceChildren();
+  for (const c of characters) {
+    const tr = document.createElement("tr");
+    for (const text of [
+      c.name || characterName(c.character_json) || c.id,
+      c.owner_id || "—",
+      c.status || "—",
+      online.has(c.owner_id) || online.has(c.id) ? "online" : "",
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    el.sessionRosterBody.appendChild(tr);
+  }
+  el.sessionRosterEmpty.hidden = characters.length > 0 || !active;
+}
+
+el.sessionCampaignSelect.addEventListener("change", async () => {
+  setStatus(el.sessionActiveStatus, "Saving…");
+  try {
+    const resp = await fetch("/api/session/active-campaign", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaign_id: el.sessionCampaignSelect.value }),
+    });
+    if (!resp.ok) {
+      setStatus(el.sessionActiveStatus, `Failed: ${await errorText(resp)}`, true);
+      return;
+    }
+    setStatus(el.sessionActiveStatus, "Saved.");
+    renderSession(await resp.json());
+  } catch (err) {
+    setStatus(el.sessionActiveStatus, `Failed: ${err}`, true);
+  }
+});
+
+el.sessionJoinLock.addEventListener("change", async () => {
+  try {
+    const resp = await fetch("/api/session/join-lock", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locked: el.sessionJoinLock.checked }),
+    });
+    if (resp.ok) renderSession(await resp.json());
+  } catch {
+    // leave the checkbox as the user set it; next poll corrects it
+  }
+});
 
 // --- Campaign list, picker, and creation ---
 
@@ -1291,5 +1405,8 @@ el.termsModalAgree.addEventListener("click", async () => {
 });
 
 loadTerms();
-loadCampaignList();
 loadSystemSettings();
+// Session is the default tab; load the campaign list first so its
+// active-campaign dropdown is populated, then kick off the tab (which
+// starts the 5s poll).
+loadCampaignList().then(() => selectTab("session"));

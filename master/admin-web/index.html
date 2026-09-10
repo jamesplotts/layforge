@@ -22,7 +22,8 @@
        Pregens/Character Review all assume a working AI DM already
        exists). -->
   <nav class="tabs" role="tablist">
-    <button class="tab-button active" data-tab="system" type="button" role="tab">System</button>
+    <button class="tab-button active" data-tab="session" type="button" role="tab">Session</button>
+    <button class="tab-button" data-tab="system" type="button" role="tab">System</button>
     <button class="tab-button" data-tab="campaign" type="button" role="tab">Campaign</button>
     <button class="tab-button" data-tab="security" type="button" role="tab">Security</button>
     <button class="tab-button" data-tab="pregens" type="button" role="tab">Pregens</button>
@@ -148,6 +149,46 @@
       </details>
 
     </div>
+
+    <!-- SESSION: the "one game running" surface. The Active Campaign here
+         is what players join — separate from the Campaign tab's picker,
+         which is only for editing/creating/deleting any campaign. -->
+    <section class="tab-panel" data-tab="session">
+      <p class="panel-hint">
+        Pick the campaign players join, see who's connected, and open or close it to
+        newcomers. Editing a campaign's settings (Campaign / Security / Pregens tabs)
+        does not change what's running here.
+      </p>
+
+      <label>
+        Active campaign — what players join
+        <select id="session-campaign-select">
+          <option value="">— none (players can't join yet) —</option>
+        </select>
+      </label>
+      <span id="session-active-status" class="save-status"></span>
+
+      <h3 class="section-heading">Status</h3>
+      <p class="note" id="session-status-line">No campaign is running.</p>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="session-join-lock" />
+        Closed to new players
+      </label>
+      <p class="note">
+        When closed, players who already have a character in this campaign can still
+        reconnect; anyone new is turned away until you re-open it.
+      </p>
+
+      <h3 class="section-heading">Who's here</h3>
+      <table class="campaign-table">
+        <thead>
+          <tr><th>Character</th><th>Owner</th><th>Status</th><th>Online</th></tr>
+        </thead>
+        <tbody id="session-roster-body"></tbody>
+      </table>
+      <p class="note" id="session-roster-empty" hidden>No characters in this campaign yet.</p>
+    </section>
 
     <section class="tab-panel" data-tab="campaign" hidden>
       <p class="panel-hint">Applies immediately — no restart needed.</p>
@@ -392,7 +433,7 @@
       </div>
     </section>
 
-    <section class="tab-panel" data-tab="system">
+    <section class="tab-panel" data-tab="system" hidden>
       <p class="panel-hint panel-hint-warning">
         Every setting on this tab requires a restart to take effect, which disconnects every
         currently connected player — the web client reconnects automatically once Master is
