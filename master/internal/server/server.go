@@ -711,9 +711,13 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// the durable log, the same as typed input already does.
 		return s.handleAudioChunk(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), envelope.MessageID, req.Payload)
 	case protocol.MessageTypeCharacterCreationStart:
+		var req protocol.CharacterCreationStartMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.creation_start payload: %w", err))
+		}
 		// Not recorded: like character.schema_request/character.get, this
 		// is a query kicking off a flow, not itself a game event.
-		return s.handleCreationStart(ctx, conn, campaignID, actingSender(cs, envelope.SenderID))
+		return s.handleCreationStart(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req.Payload.CharacterName)
 	case protocol.MessageTypeCharacterCreationAnswer:
 		var req protocol.CharacterCreationAnswerMessage
 		if err := json.Unmarshal(data, &req); err != nil {

@@ -665,10 +665,9 @@ components:
       title: Begin choosing/creating a character
       summary: >
         The first message a player sends after joining, in place of an
-        auto-generated stopgap character (design doc §9.4). Empty payload
-        — Master replies with its own fixed top-level character.
-        creation_prompt (import / quick roll / detailed roll / pick a
-        pregen).
+        auto-generated stopgap character (design doc §9.4). Master replies
+        with its own fixed top-level character.creation_prompt (import /
+        quick roll / detailed roll / pick a pregen).
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -679,6 +678,15 @@ components:
                 const: character.creation_start
               payload:
                 type: object
+                properties:
+                  character_name:
+                    type: string
+                    description: >
+                      The display name the player chose for their character (the
+                      reworked join flow asks for it as the first step). Used as the
+                      roll flow's character name; ignored for import (the name is in
+                      the pasted JSON) and pregen. May be omitted by an older client,
+                      which falls back to the sender id.
 
     CharacterCreationPrompt:
       name: character.creation_prompt

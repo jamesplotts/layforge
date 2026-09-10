@@ -45,6 +45,10 @@ func newTestServerForCreation(t *testing.T, fakeEngine *fakeSystemEngineClient) 
 }
 
 func sendCreationStart(ctx context.Context, conn *websocket.Conn, campaignID, sender string) error {
+	return sendCreationStartNamed(ctx, conn, campaignID, sender, "")
+}
+
+func sendCreationStartNamed(ctx context.Context, conn *websocket.Conn, campaignID, sender, characterName string) error {
 	msg := protocol.CharacterCreationStartMessage{
 		Envelope: protocol.Envelope{
 			ProtocolVersion: protocol.CurrentProtocolVersion,
@@ -54,6 +58,7 @@ func sendCreationStart(ctx context.Context, conn *websocket.Conn, campaignID, se
 			CampaignID:      campaignID,
 			Type:            protocol.MessageTypeCharacterCreationStart,
 		},
+		Payload: protocol.CharacterCreationStartPayload{CharacterName: characterName},
 	}
 	return wsjson.Write(ctx, conn, msg)
 }
@@ -366,8 +371,8 @@ func TestServe_CreationRoll_RelaysEnginePromptsUntilDoneAndSavesCharacter(t *tes
 			if req.Mode != systemenginepb.CharacterCreationMode_CHARACTER_CREATION_MODE_DETAILED {
 				t.Errorf("StartCharacterCreation Mode = %v, want DETAILED", req.Mode)
 			}
-			if req.CharacterName != "player-a" {
-				t.Errorf("StartCharacterCreation CharacterName = %q, want player-a (the sender's own display name)", req.CharacterName)
+			if req.CharacterName != "Bram the Bold" {
+				t.Errorf("StartCharacterCreation CharacterName = %q, want the name from character.creation_start", req.CharacterName)
 			}
 			return &systemenginepb.CharacterCreationPromptResponse{
 				Success: true, PromptText: "Choose your race.", Choices: []string{"Human", "Elf", "Dwarf", "Halfling"},
@@ -393,7 +398,7 @@ func TestServe_CreationRoll_RelaysEnginePromptsUntilDoneAndSavesCharacter(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := sendCreationStart(ctx, conn, "campaign-creation-roll", "player-a"); err != nil {
+	if err := sendCreationStartNamed(ctx, conn, "campaign-creation-roll", "player-a", "Bram the Bold"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
 	var topPrompt protocol.CharacterCreationPromptMessage

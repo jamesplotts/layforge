@@ -496,14 +496,19 @@ type CharacterStateMessage = Message[CharacterStatePayload]
 
 // CharacterCreationStartPayload is the payload of a
 // character.creation_start message: a player, right after joining,
-// asking to begin choosing/creating their character. Empty — the
-// campaign/sender are already on the envelope, and this is the first
-// message of the flow, so there's nothing else to say yet. Master
-// replies with its own fixed top-level character.creation_prompt
-// ("Import a character / Roll a new one / Pick a pregen") — this
-// message is Master's own concept, not something the System Engine
-// has any part in.
-type CharacterCreationStartPayload struct{}
+// asking to begin choosing/creating their character. Master replies
+// with its own fixed top-level character.creation_prompt ("Import a
+// character / Roll a new one / Pick a pregen") — this message is
+// Master's own concept, not something the System Engine has any part in.
+type CharacterCreationStartPayload struct {
+	// CharacterName is the display name the player chose for their
+	// character (the reworked join flow asks for it as the first step,
+	// design doc §9.4). Used as the roll flow's character name; ignored
+	// for import (the name is in the pasted JSON) and pregen (it has its
+	// own). May be empty from an older client, which falls back to the
+	// sender id.
+	CharacterName string `json:"character_name,omitempty"`
+}
 
 // CharacterCreationStartMessage is a character.creation_start Message.
 type CharacterCreationStartMessage = Message[CharacterCreationStartPayload]

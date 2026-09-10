@@ -54,6 +54,10 @@ const (
 type creationSession struct {
 	senderID string
 	stage    creationStage
+	// characterName is the display name the player supplied with
+	// character.creation_start; "" from an older client. Preserved across
+	// stage transitions and used as the roll flow's CharacterName.
+	characterName string
 }
 
 func (s *Server) getCreationSession(sessionID string) (creationSession, bool) {
@@ -81,12 +85,12 @@ func (s *Server) deleteCreationSession(sessionID string) {
 // Master's own fixed top-level prompt — nothing here depends on the
 // System Engine or any other optional dependency, since choosing
 // *which* path to take shouldn't itself require one.
-func (s *Server) handleCreationStart(ctx context.Context, conn *websocket.Conn, campaignID, senderID string) error {
+func (s *Server) handleCreationStart(ctx context.Context, conn *websocket.Conn, campaignID, senderID, characterName string) error {
 	sessionID, err := newRandomID()
 	if err != nil {
 		return err
 	}
-	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageTopLevel})
+	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageTopLevel, characterName: strings.TrimSpace(characterName)})
 	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID,
 		"How would you like to create your character? Import an existing character, quick roll a new one (you pick race/class/gender, the rest is rolled), detailed roll a new one (you make every choice), or pick a pregenerated character your Host has offered.",
 		[]string{creationChoiceImport, creationChoiceQuickRoll, creationChoiceDetailedRoll, creationChoicePregen},
@@ -108,7 +112,7 @@ func (s *Server) handleCreationAnswer(ctx context.Context, conn *websocket.Conn,
 
 	switch sess.stage {
 	case creationStageTopLevel:
-		return s.handleCreationTopLevelAnswer(ctx, conn, campaignID, senderID, req.Payload.SessionID, req.Payload.Answer)
+		return s.handleCreationTopLevelAnswer(ctx, conn, campaignID, senderID, req.Payload.SessionID, req.Payload.Answer, sess.characterName)
 	case creationStageImport:
 		s.deleteCreationSession(req.Payload.SessionID)
 		return s.importCharacter(ctx, conn, campaignID, senderID, protocol.CharacterUploadMessage{
@@ -133,17 +137,17 @@ func (s *Server) handleCreationAnswer(ctx context.Context, conn *websocket.Conn,
 
 // handleCreationTopLevelAnswer handles the player's answer to Master's
 // own fixed top-level prompt.
-func (s *Server) handleCreationTopLevelAnswer(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID, answer string) error {
+func (s *Server) handleCreationTopLevelAnswer(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID, answer, characterName string) error {
 	switch answer {
 	case creationChoiceImport:
-		s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageImport})
+		s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageImport, characterName: characterName})
 		return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, "Paste your character's JSON.", nil, true)
 
 	case creationChoicePregen:
 		return s.startCreationPregenChoice(ctx, conn, campaignID, senderID, sessionID)
 
 	case creationChoiceQuickRoll, creationChoiceDetailedRoll:
-		return s.startCreationRoll(ctx, conn, campaignID, senderID, sessionID, answer == creationChoiceDetailedRoll)
+		return s.startCreationRoll(ctx, conn, campaignID, senderID, sessionID, answer == creationChoiceDetailedRoll, characterName)
 
 	default:
 		s.deleteCreationSession(sessionID)
@@ -219,14 +223,19 @@ func (s *Server) handleCreationPregenAnswer(ctx context.Context, conn *websocket
 
 // startCreationRoll begins an engine-driven roll (design doc §9.4's
 // quick/detailed options) — the System Engine owns the entire question
-// sequence from here; Master only relays. characterName is the
-// player's own already-typed display name (senderID doubles as it,
-// same as everywhere else in this codebase — see web/app.js's
-// onJoinClick) — never asked as a separate prompt.
-func (s *Server) startCreationRoll(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID string, detailed bool) error {
+// sequence from here; Master only relays. characterName is the name the
+// player chose as the first step of the flow (character.creation_start's
+// payload); it falls back to senderID for an older client that sent
+// none. The engine is given it up front, so it is never asked as a
+// prompt.
+func (s *Server) startCreationRoll(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID string, detailed bool, characterName string) error {
 	if s.systemEngine == nil {
 		s.deleteCreationSession(sessionID)
 		return s.sendError(ctx, conn, campaignID, "", errors.New("character rolling unavailable: no system engine configured"))
+	}
+	name := characterName
+	if name == "" {
+		name = senderID
 	}
 	mode := systemenginepb.CharacterCreationMode_CHARACTER_CREATION_MODE_QUICK
 	if detailed {
@@ -236,7 +245,7 @@ func (s *Server) startCreationRoll(ctx context.Context, conn *websocket.Conn, ca
 		SessionId:     sessionID,
 		CampaignId:    campaignID,
 		Mode:          mode,
-		CharacterName: senderID,
+		CharacterName: name,
 	})
 	if err != nil {
 		s.deleteCreationSession(sessionID)

@@ -835,12 +835,59 @@ function onJoined() {
   // — "where things stand now," the natural first page for a chat-style
   // scrollback, not the campaign's very first message.
   requestHistory({});
-  // Replaces the old auto-generated stopgap character (uploadStockCharacter,
-  // removed) with a real choice, design doc §9.4: Master's own
-  // character.creation_prompt (import / quick roll / detailed roll /
-  // pregen) arrives as a reply to this and renders as a chat-bubble-style
-  // prompt — see onCreationPrompt.
-  send({ ...newEnvelope("character.creation_start"), payload: {} });
+  // Character creation (design doc §9.4) starts by asking the player to
+  // name their character — the first step now that the join screen no
+  // longer collects a name. Submitting sends character.creation_start
+  // with the name; Master then replies with its own top-level
+  // import/roll/pregen prompt (onCreationPrompt).
+  promptForCharacterName();
+}
+
+// promptForCharacterName renders the first character-creation step as a
+// chat bubble with a text field. On submit it sends
+// character.creation_start carrying the name and records it for local
+// display (state.characterId).
+function promptForCharacterName() {
+  const wrap = document.createElement("div");
+  wrap.className = "creation-prompt";
+
+  const text = document.createElement("div");
+  text.className = "creation-prompt-text";
+  text.textContent = "What's your character's name?";
+  wrap.appendChild(text);
+
+  const controls = document.createElement("div");
+  controls.className = "creation-prompt-controls";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "creation-prompt-input";
+  input.placeholder = "e.g. Kestrel";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Continue";
+
+  const submit = () => {
+    const name = input.value.trim();
+    if (!name) {
+      input.focus();
+      return;
+    }
+    state.characterId = name;
+    input.disabled = true;
+    button.disabled = true;
+    send({ ...newEnvelope("character.creation_start"), payload: { character_name: name } });
+  };
+  button.addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit();
+  });
+
+  controls.appendChild(input);
+  controls.appendChild(button);
+  wrap.appendChild(controls);
+  el.log.appendChild(wrap);
+  el.log.scrollTop = el.log.scrollHeight;
+  input.focus();
 }
 
 function onSystemError(msg) {
@@ -1237,7 +1284,8 @@ function onSafetyFlagSend() {
 
 // --- Character creation (design doc §9.4) ---
 //
-// character.creation_start (sent once, from onJoined) kicks off a
+// character.creation_start (sent once, from the "name your character"
+// step promptForCharacterName shows on join) kicks off a
 // conversation entirely driven by character.creation_prompt/
 // character.creation_answer pairs: Master's own top-level choice
 // (import / quick roll / detailed roll / pregen), then either the
