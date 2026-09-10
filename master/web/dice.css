@@ -3,10 +3,10 @@
 
    Dice tray layout only — the die itself is a WebGL canvas dice.js
    renders into #dice-overlay (which sits over the message log, see
-   style.css), not into the tray. The tray below holds only the roll
-   controls and the last-result readout. Die material/color comes from a
-   skin entry in dice-skins.js, not CSS (see that file for how to add a
-   community skin). */
+   style.css), not into the tray. The tray below holds only the
+   last-result readout. Die material/color comes from a skin entry in
+   dice-skins.js, not CSS (see that file for how to add a community
+   skin). */
 
 .dice-tray {
   display: flex;
@@ -18,34 +18,12 @@
   flex-wrap: wrap;
 }
 
-/* --- Roll controls --- */
-
 .dice-tray-controls {
   display: flex;
   flex-direction: column;
   gap: 8px;
   flex: 1 1 auto;
   min-width: 200px;
-}
-
-.dice-tray-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.dice-tray-row select {
-  padding: 8px 10px;
-  background: #221a11;
-  border: 1px solid var(--panel-border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 13px;
-}
-
-#roll-check-button {
-  padding: 8px 14px;
 }
 
 .dice-tray-result {
@@ -61,12 +39,4 @@
 
 .dice-tray-result strong {
   color: var(--text);
-}
-
-.dice-skin-picker {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-dim);
 }

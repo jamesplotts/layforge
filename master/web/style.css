@@ -838,32 +838,6 @@ button.secondary {
   margin-bottom: 6px;
 }
 
-.character-sheet-effect-row {
-  display: flex;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-  gap: 6px;
-  align-items: center;
-  padding: 10px 16px;
-  border-top: 1px solid var(--panel-border);
-}
-
-#effect-amount {
-  width: 56px;
-  padding: 7px 8px;
-  background: var(--bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 13px;
-}
-
-.character-sheet-effect-row button {
-  flex: 1 1 auto;
-  padding: 7px 10px;
-  font-size: 12px;
-}
-
 .input-form {
   display: flex;
   gap: 8px;

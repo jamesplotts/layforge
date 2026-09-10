@@ -140,35 +140,14 @@ If you do not agree, do not join this game.</pre>
           <div id="dice-overlay" class="dice-overlay" aria-hidden="true"></div>
         </div>
 
-        <!-- Dice tray: authoritative server roll, cosmetic client
-             animation (design doc §3.1, §4) — roll.check_request in,
-             roll.request/roll.result out. Disabled until join's stopgap
-             character upload (see app.js) resolves, since a check needs
-             a real character_id Master's store recognizes, not just the
-             display name typed at join. The die itself tumbles in
-             #dice-overlay above; the tray holds only the controls and
-             the last-result readout. -->
+        <!-- Dice tray: the last-result readout for every roll in the
+             campaign (design doc §3.1, §4 — roll.request/roll.result
+             broadcasts, whoever or whatever triggered them). The die
+             itself tumbles in #dice-overlay above; players don't roll
+             their own checks from here — the DM's mechanics pass does
+             that via resolve_check. -->
         <div class="dice-tray">
           <div class="dice-tray-controls">
-            <div class="dice-tray-row">
-              <select id="roll-ability">
-                <option value="Strength">Strength</option>
-                <option value="Dexterity">Dexterity</option>
-                <option value="Constitution">Constitution</option>
-                <option value="Intelligence">Intelligence</option>
-                <option value="Wisdom">Wisdom</option>
-                <option value="Charisma">Charisma</option>
-              </select>
-              <button id="roll-check-button" type="button" disabled>Roll Check</button>
-              <label class="dice-skin-picker">
-                Skin
-                <!-- Options populated at load from Dice.listSkins() (see
-                     dice-skins.js) rather than hardcoded here, so adding
-                     a community skin never requires touching this
-                     file. -->
-                <select id="dice-skin-select"></select>
-              </label>
-            </div>
             <div id="dice-tray-result" class="dice-tray-result"></div>
           </div>
         </div>
@@ -197,11 +176,9 @@ If you do not agree, do not join this game.</pre>
            themselves, which are derived from the schema's own top-level
            property shapes rather than a hardcoded "Stats/Abilities/
            Spells/Inventory" list (see renderCharacterSheetTabs's doc
-           comment). The sheet itself is read-only (no per-field
-           editing/write-back); the effect row below the tabs is a
-           separate, narrower path that mutates the character via
-           character.apply_effect (design doc §6.1's apply_effect()) and
-           re-renders the sheet from the result. -->
+           comment). The sheet is read-only — character mutation happens
+           through the DM's mechanics pass (design doc §7, §8), not a
+           player-facing control here. -->
       <aside class="character-sidebar">
         <!-- Combat map: a current-state widget (map.token_state,
              design doc §6.2), not part of the scrolling narrative log —
@@ -224,11 +201,6 @@ If you do not agree, do not join this game.</pre>
         <p id="character-identity" class="character-identity" hidden></p>
         <div id="character-tabs" class="character-tabs" role="tablist"></div>
         <div id="character-tab-panels" class="character-tab-panels"></div>
-        <div class="character-sheet-effect-row">
-          <input id="effect-amount" type="number" min="1" value="5" />
-          <button id="effect-damage-button" type="button" class="secondary" disabled>Take Damage</button>
-          <button id="effect-heal-button" type="button" class="secondary" disabled>Heal</button>
-        </div>
       </aside>
     </div>
   </section>

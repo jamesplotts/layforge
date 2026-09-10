@@ -205,7 +205,6 @@ const state = {
   // slow pass (design doc §8) hands that value straight to the System
   // Engine, and "Kestrel" isn't a lookup key.
   rollCharacterId: null,
-  pendingRollMessageId: null,
   dieHandle: null,
   // --- Character sheet ---
   // characterSchema (parsed JSON Schema) and characterData (the raw
@@ -267,16 +266,10 @@ const el = {
   inputSend: document.getElementById("input-send"),
   micButton: document.getElementById("mic-button"),
   diceOverlay: document.getElementById("dice-overlay"),
-  rollAbility: document.getElementById("roll-ability"),
-  rollCheckButton: document.getElementById("roll-check-button"),
-  diceSkinSelect: document.getElementById("dice-skin-select"),
   diceTrayResult: document.getElementById("dice-tray-result"),
   characterIdentity: document.getElementById("character-identity"),
   characterTabs: document.getElementById("character-tabs"),
   characterTabPanels: document.getElementById("character-tab-panels"),
-  effectAmount: document.getElementById("effect-amount"),
-  effectDamageButton: document.getElementById("effect-damage-button"),
-  effectHealButton: document.getElementById("effect-heal-button"),
   combatMapWidget: document.getElementById("combat-map-widget"),
   combatMapThumbButton: document.getElementById("combat-map-thumb-button"),
   combatMapThumb: document.getElementById("combat-map-thumb"),
@@ -316,13 +309,6 @@ el.inputText.addEventListener("input", () => {
 });
 initMicButton();
 el.loadEarlierButton.addEventListener("click", onLoadEarlierClick);
-el.rollCheckButton.addEventListener("click", onRollCheckClick);
-el.effectDamageButton.addEventListener("click", () => onApplyEffectClick("damage"));
-el.effectHealButton.addEventListener("click", () => onApplyEffectClick("heal"));
-el.diceSkinSelect.addEventListener("change", () => {
-  Dice.applyDiceSkin(state.dieHandle, el.diceSkinSelect.value);
-  Dice.saveDiceSkin(el.diceSkinSelect.value);
-});
 el.combatMapThumbButton.addEventListener("click", openCombatMapLightbox);
 el.combatMapLightboxBackdrop.addEventListener("click", closeCombatMapLightbox);
 el.combatMapLightboxClose.addEventListener("click", closeCombatMapLightbox);
@@ -330,17 +316,11 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !el.combatMapLightbox.hidden) closeCombatMapLightbox();
 });
 
-// Populate the skin picker from the manifest (dice-skins.js) rather than
-// hardcoding <option>s in index.html — see that file for how a community
-// skin gets added.
-for (const skin of Dice.listSkins()) {
-  const option = document.createElement("option");
-  option.value = skin.id;
-  option.textContent = skin.label;
-  el.diceSkinSelect.appendChild(option);
-}
+// The dice tray has no player-facing skin picker; the die just uses
+// whatever skin was last saved (or the default). Community skins still
+// ship in dice-skins.js and can be selected via Dice.saveDiceSkin() from
+// the console.
 const savedSkin = Dice.loadSavedDiceSkin(Dice.DEFAULT_SKIN_ID);
-el.diceSkinSelect.value = savedSkin;
 // The die is mounted once at load into #dice-overlay, the canvas layered
 // over the message log (see index.html). While the chat screen is still
 // hidden the overlay measures 0×0 — Dice.mountDie falls back to a stub
@@ -929,10 +909,6 @@ function onSystemError(msg) {
   if (inReplyTo && inReplyTo === state.pendingInputMessageId) {
     clearPendingBubble();
   }
-  if (inReplyTo && inReplyTo === state.pendingRollMessageId) {
-    state.pendingRollMessageId = null;
-    el.rollCheckButton.disabled = false;
-  }
   // A character-creation failure (e.g. the chosen path needs a system
   // engine the Host hasn't configured) deletes the session server-side
   // and disables the prompt's buttons — leaving the player with no way
@@ -1442,14 +1418,11 @@ function creationPromptEl(payload) {
 function onCharacterValidationResult(msg) {
   const payload = msg.payload || {};
   if (!payload.character_id) {
-    el.diceTrayResult.textContent = "Dice tray unavailable: character setup failed.";
+    el.diceTrayResult.textContent = "Character setup failed.";
     return;
   }
   state.rollCharacterId = payload.character_id;
   state.characterCreated = true;
-  el.rollCheckButton.disabled = false;
-  el.effectDamageButton.disabled = false;
-  el.effectHealButton.disabled = false;
 
   // Schema is engine-wide, not per-character — fetch it once and reuse
   // it for every character.state that comes in afterward.
@@ -1541,45 +1514,15 @@ function closeCombatMapLightbox() {
   el.combatMapLightbox.hidden = true;
 }
 
-// onApplyEffectClick sends character.apply_effect for a "damage" or
-// "heal" effect — effectType/amount here match OpenCombatEngine's own
-// GrpcSidecar ApplyEffect switch (see that repo's
-// SystemEngineGrpcService.cs); a different system engine's client UI
-// would send whatever effect shape that engine expects instead, since
-// Master forwards this object opaquely (protocol/asyncapi.yaml
-// components.messages.CharacterApplyEffect).
-function onApplyEffectClick(effectType) {
-  if (!state.rollCharacterId) return;
-  const amount = Number(el.effectAmount.value);
-  if (!Number.isFinite(amount) || amount <= 0) return;
-
-  send({
-    ...newEnvelope("character.apply_effect"),
-    payload: { character_id: state.rollCharacterId, effect: { effectType, amount } },
-  });
-}
-
-function onRollCheckClick() {
-  if (!state.rollCharacterId || state.pendingRollMessageId) return;
-
-  const envelope = newEnvelope("roll.check_request");
-  state.pendingRollMessageId = envelope.message_id;
-  el.rollCheckButton.disabled = true;
-  el.diceTrayResult.textContent = "Rolling…";
-  send({
-    ...envelope,
-    payload: { character_id: state.rollCharacterId, check_type: "ability_check", ability: el.rollAbility.value },
-  });
-}
-
+// onRollRequest / onRollResult handle roll.request / roll.result
+// broadcasts — every roll in the campaign, whoever triggered it (a DM
+// mechanics-pass resolve_check, an automatic death save, ...). The
+// client never initiates a roll itself.
 function onRollRequest() {
   Dice.startTumble(state.dieHandle);
 }
 
 function onRollResult(msg) {
-  state.pendingRollMessageId = null;
-  el.rollCheckButton.disabled = false;
-
   const payload = msg.payload || {};
   const rolls = payload.rolls || [];
   const firstDie = rolls[0];
@@ -1593,10 +1536,6 @@ function onRollResult(msg) {
   });
 
   appendRollNote(payload);
-
-  // Nothing mutates a character from a bare ability check yet (no
-  // ApplyEffect wired to check results), but refreshing here is cheap
-  // and keeps the sheet correct once something eventually does.
   requestCharacterState();
 }
 
@@ -1742,15 +1681,11 @@ function appendCharacterReviewNote(payload) {
 }
 
 // appendRollNote renders a roll.result broadcast — every roll in the
-// campaign, not just this client's own, per the shared-dice-tray design
-// (design doc §3.1, §4: every client animates every roll). Deliberately
-// doesn't claim a specific ability (e.g. "Strength check") the way an
-// earlier version did: that text used to come from this client's own
-// roll-ability dropdown, which is simply wrong for anyone else's roll or
-// a DM-triggered one (initiative, resolve_check) — RollResultPayload
-// carries no ability field to report correctly instead (see
-// protocol.RollResultPayload), so result_summary (if the engine set one)
-// is the only characterization used, rather than guessing.
+// campaign, per the shared-dice-tray design (design doc §3.1, §4: every
+// client animates every roll). It doesn't claim a specific ability
+// (e.g. "Strength check"): RollResultPayload carries no ability field
+// (see protocol.RollResultPayload), so result_summary (if the engine
+// set one) is the only characterization used, rather than guessing.
 function appendRollNote(payload) {
   const note = document.createElement("div");
   note.className = "note";
