@@ -307,14 +307,14 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 	// would get baked into what handleGetSystem treats as "the flag
 	// default" on the next restart.
 	systemSeed := map[string]string{
-		admin.SystemKeyAddr:             addr,
-		admin.SystemKeyLLMURL:           llmURL,
-		admin.SystemKeyLLMModel:         llmModel,
-		admin.SystemKeyLLMProvider:      llmProviderFlag,
-		admin.SystemKeyLLMAPIKey:        llmAPIKey,
-		admin.SystemKeySystemEngineAddr: systemEngineAddr,
-		admin.SystemKeyComfyUIURL:       comfyUIURL,
-		admin.SystemKeyComfyUIWorkflow:  comfyUIWorkflowPath,
+		admin.SystemKeyAddr:                addr,
+		admin.SystemKeyLLMURL:              llmURL,
+		admin.SystemKeyLLMModel:            llmModel,
+		admin.SystemKeyLLMProvider:         llmProviderFlag,
+		admin.SystemKeyLLMAPIKey:           llmAPIKey,
+		admin.SystemKeySystemEngineAddr:    systemEngineAddr,
+		admin.SystemKeyComfyUIURL:          comfyUIURL,
+		admin.SystemKeyComfyUIWorkflow:     comfyUIWorkflowPath,
 		admin.SystemKeyDiscordClientID:     discordClientID,
 		admin.SystemKeyDiscordClientSecret: discordClientSecret,
 		admin.SystemKeyDiscordRedirectURL:  discordRedirectURL,
@@ -661,53 +661,74 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 		}()
 	}
 
-	select {
-	case err := <-serveErr:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
-	case <-ctx.Done():
-		logger.Info("shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if adminHTTPServer != nil {
-			if err := adminHTTPServer.Shutdown(shutdownCtx); err != nil {
-				logger.Warn("shutting down admin listener", "error", err)
+	// A loop, not a bare select, only so the restart case can decline to
+	// restart (a `go run .` binary that has vanished from disk) and go
+	// back to waiting rather than killing Master — every other path here
+	// returns.
+	for {
+		select {
+		case err := <-serveErr:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return err
 			}
-		}
-		return httpServer.Shutdown(shutdownCtx)
-	case <-restartRequested:
-		// design doc §3.3: a System-tab settings change was just
-		// persisted (by adminServer's own restart handler) and needs a
-		// fresh process to take effect — every such setting is wired
-		// into a long-lived client/listener exactly once, above. Spawn a
-		// replacement with the same argv (so it re-reads the same flags
-		// plus whatever was just saved to the settings DB) and exit this
-		// one cleanly, rather than syscall.Exec-style image replacement,
-		// which would skip this function's deferred DB/gRPC cleanup and
-		// has no real equivalent on Windows.
-		logger.Info("restarting for a settings change")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if adminHTTPServer != nil {
-			if err := adminHTTPServer.Shutdown(shutdownCtx); err != nil {
-				logger.Warn("shutting down admin listener for restart", "error", err)
+			return nil
+		case <-ctx.Done():
+			logger.Info("shutting down")
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if adminHTTPServer != nil {
+				if err := adminHTTPServer.Shutdown(shutdownCtx); err != nil {
+					logger.Warn("shutting down admin listener", "error", err)
+				}
 			}
+			return httpServer.Shutdown(shutdownCtx)
+		case <-restartRequested:
+			// design doc §3.3: a System-tab settings change was just
+			// persisted (by adminServer's own restart handler) and needs a
+			// fresh process to take effect — every such setting is wired
+			// into a long-lived client/listener exactly once, above. Spawn a
+			// replacement with the same argv (so it re-reads the same flags
+			// plus whatever was just saved to the settings DB) and exit this
+			// one cleanly, rather than syscall.Exec-style image replacement,
+			// which would skip this function's deferred DB/gRPC cleanup and
+			// has no real equivalent on Windows.
+			logger.Info("restarting for a settings change")
+
+			// Resolve and stat the replacement binary BEFORE tearing anything
+			// down. Under `go run .`, os.Executable() points at a throwaway
+			// go-build temp binary that is deleted once the first restart's
+			// parent `go run` process exits — so a second restart would
+			// fork/exec a path that no longer exists and take Master down for
+			// good. Catch that here and keep serving instead, with a clear
+			// message: the settings are already saved and will apply next
+			// time Master is started from a real binary.
+			exe, err := os.Executable()
+			if err != nil {
+				logger.Error("restart skipped: cannot resolve this process's executable path — Master keeps running; the saved settings apply on the next manual start", "error", err)
+				continue
+			}
+			if _, statErr := os.Stat(exe); statErr != nil {
+				logger.Error("restart skipped: the running binary no longer exists on disk (expected under `go run .` — build a real binary with `go build -o master .` for working Save & Restart). Master keeps running; the saved settings apply on the next manual start", "path", exe, "error", statErr)
+				continue
+			}
+
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if adminHTTPServer != nil {
+				if err := adminHTTPServer.Shutdown(shutdownCtx); err != nil {
+					logger.Warn("shutting down admin listener for restart", "error", err)
+				}
+			}
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				logger.Warn("shutting down main listener for restart", "error", err)
+			}
+			cmd := exec.Command(exe, os.Args[1:]...)
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			if err := cmd.Start(); err != nil {
+				return fmt.Errorf("restarting: spawning replacement process: %w", err)
+			}
+			logger.Info("spawned replacement process", "pid", cmd.Process.Pid)
+			return nil
 		}
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			logger.Warn("shutting down main listener for restart", "error", err)
-		}
-		exe, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("restarting: resolving executable path: %w", err)
-		}
-		cmd := exec.Command(exe, os.Args[1:]...)
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("restarting: spawning replacement process: %w", err)
-		}
-		logger.Info("spawned replacement process", "pid", cmd.Process.Pid)
-		return nil
 	}
 }
