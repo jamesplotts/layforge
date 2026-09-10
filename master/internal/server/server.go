@@ -18,7 +18,7 @@
 //     (resolve_check/apply_effect/get_character_status, see dm_tools.go)
 //     to resolve mechanical uncertainty rather than inventing outcomes,
 //     broadcasting a tool.result per call and the final reaction as
-//     narrative.dm_prose. Neither pass is fed campaign/character context
+//     client.display. Neither pass is fed campaign/character context
 //     beyond the player's own input yet — no persistent context-assembly
 //     exists in Master to feed it.
 //   - character.upload (§9.4, see importCharacter): validated via
@@ -78,7 +78,7 @@
 //     dmGenerateSceneImage in dm_tools.go): the generate_scene_image DM
 //     tool calls a pluggable imagegen.Provider (a self-hosted ComfyUI
 //     instance is the reference implementation) and broadcasts the
-//     result as narrative.scene_image. Not offered as a DM tool at all
+//     result as client.image. Not offered as a DM tool at all
 //     when no provider is configured (s.imageGen == nil), same pattern
 //     as tools requiring a system engine.
 //   - The combat map (§6.2, see internal/combatmap and combat_map.go):
@@ -1355,10 +1355,11 @@ func (s *Server) sendHistory(ctx context.Context, conn *websocket.Conn, campaign
 // own default for "no scope recorded at all" — privacy-sensitive
 // filtering should never silently open up on an error.
 func (s *Server) eventVisibleTo(ctx context.Context, senderID string, raw json.RawMessage) bool {
-	// Visibility lives under payload (protocol.NarrativeDmProsePayload's
-	// own field), not on the envelope itself — every message type nests
-	// its Visibility the same way, so this generic payload wrapper works
-	// regardless of which message type raw actually is.
+	// Visibility lives under payload (protocol.ClientDisplayPayload's own
+	// field — narrate_privately's client.display), not on the envelope
+	// itself — every message type that scopes visibility nests it the same
+	// way, so this generic payload wrapper works regardless of which
+	// message type raw actually is.
 	var envelope struct {
 		Payload struct {
 			Visibility *protocol.VisibilityScope `json:"visibility"`

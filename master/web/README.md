@@ -96,12 +96,13 @@ rejection reason (e.g. not owning the character); there's no dedicated
 buttons aren't disabled out of turn — a player can still click them,
 they just get told no.
 
-There's also now `narrative.scene_image` rendering — a DM-generated
-illustration (design doc §6.3) appears inline in the log as a bordered
-`<figure>` with the image and its prompt as a caption. Verified live
-against a real, running self-hosted ComfyUI instance: a real generated
-image loads correctly via its `/view` endpoint like any other `<img
-src>`, with no code changes needed after the fact.
+There's also now `client.image` rendering — a DM-generated illustration
+(design doc §6.3) appears inline in the log as a bordered `<figure>`
+with the image and its caption (or, failing that, the generator prompt)
+underneath. Verified live against a real, running self-hosted ComfyUI
+instance: a real generated image loads correctly via its `/view`
+endpoint like any other `<img src>`, with no code changes needed after
+the fact.
 
 There's also now a real character-creation flow (design doc §9.4) in
 place of the old stopgap stock-character upload. `onJoined` sends

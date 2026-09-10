@@ -1232,6 +1232,16 @@ components:
                     type: string
                   in_reply_to_message_id:
                     type: string
+                  visibility:
+                    $ref: '#/components/schemas/VisibilityScope'
+                    description: >
+                      Private scope recorded on the persisted event so
+                      log.history_request filters this bubble out for
+                      everyone it was not for (docs/design.md §9.7) —
+                      set by narrate_privately, which delivers one
+                      identical bubble to several recipients and records
+                      it once. Omitted for an ordinary broadcast or a
+                      single-recipient send.
 
     ClientQuery:
       name: client.query

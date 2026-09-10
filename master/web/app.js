@@ -780,7 +780,7 @@ function handleMessage(msg) {
     case "character.state":
       onCharacterStateResponse(msg);
       break;
-    case "narrative.dm_prose":
+    case "client.display":
       appendDmBubble(msg.payload ? msg.payload.text : "");
       break;
     case "tool.result":
@@ -789,7 +789,7 @@ function handleMessage(msg) {
     case "turn.state":
       appendTurnStateNote(msg.payload || {});
       break;
-    case "narrative.scene_image":
+    case "client.image":
       appendSceneImage(msg.payload || {});
       break;
     case "map.token_state":
@@ -1067,13 +1067,13 @@ function renderHistoryEvent(raw) {
   switch (raw.type) {
     case "narrative.player_bubble":
       return bubbleEl(bubbleDisplayName(raw.payload.character_id), raw.payload.text);
-    case "narrative.dm_prose":
+    case "client.display":
       return dmBubbleEl(raw.payload ? raw.payload.text : "");
     case "tool.result":
       return toolResultNoteEl(raw.payload || {});
     case "turn.state":
       return turnStateNoteEl(raw.payload || {});
-    case "narrative.scene_image":
+    case "client.image":
       return sceneImageEl(raw.payload || {});
     case "safety.flag_broadcast":
       return safetyBannerEl(raw.payload ? raw.payload.topic : "");
@@ -1517,7 +1517,7 @@ function renderCharacterIdentity(data) {
 
 // onMapTokenState handles map.token_state (design doc §6.2) — a
 // current-state replace, the same semantics onCharacterStateResponse
-// above already has, not narrative.scene_image's append-to-history
+// above already has, not client.image's append-to-history
 // pattern below: each message is this recipient's own complete,
 // already-fog-of-war-filtered view (see combat_map.go's doc comments on
 // the Master side), so the sidebar thumbnail simply swaps to whatever
@@ -1592,7 +1592,7 @@ function bubbleEl(characterId, text, extraClass) {
   return bubble;
 }
 
-// dmBubbleEl is narrative.dm_prose's rendering (design doc §7's slow
+// dmBubbleEl is client.display's rendering (design doc §7's slow
 // pass) — visually distinguished from a player's own narrative bubble
 // (bubbleEl's plain case) via the dm-bubble class, since it's DM/NPC
 // narration the player didn't write, not their own action rendered back
@@ -1657,19 +1657,20 @@ function appendTurnStateNote(payload) {
   el.log.scrollTop = el.log.scrollHeight;
 }
 
-// sceneImageEl renders a narrative.scene_image broadcast (design doc
-// §6.3) as an inline image with its prompt as a caption — Master
-// neither authors nor hosts the image itself, this just displays
-// whatever URL the configured imagegen.Provider returned.
+// sceneImageEl renders a client.image broadcast (design doc §6.3) as an
+// inline image with its caption (falling back to the generator prompt)
+// underneath — Master neither authors nor hosts the image itself, this
+// just displays whatever URL the configured imagegen.Provider returned.
 function sceneImageEl(payload) {
   const figure = document.createElement("figure");
   figure.className = "scene-image";
   const img = document.createElement("img");
   img.src = payload.image_url || "";
-  img.alt = payload.prompt || "DM-generated scene illustration";
+  const label = payload.caption || payload.prompt || "";
+  img.alt = label || "DM-generated scene illustration";
   img.loading = "lazy";
   const caption = document.createElement("figcaption");
-  caption.textContent = payload.prompt || "";
+  caption.textContent = label;
   figure.append(img, caption);
   return figure;
 }

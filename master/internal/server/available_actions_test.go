@@ -144,7 +144,7 @@ func TestServe_NarrativePlayerInput_SlowPass_GetAvailableActions_DuringCombat_Su
 		if err != nil {
 			t.Fatalf("reading message %d: %v", i, err)
 		}
-		if typ == protocol.MessageTypeNarrativeDmProse {
+		if typ == protocol.MessageTypeClientDisplay {
 			break
 		}
 	}

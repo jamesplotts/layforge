@@ -24,18 +24,18 @@ import (
 // tool.result) or private sends interleave before it on a given
 // connection. Returns every dm_prose payload seen along the way,
 // including the terminating public one.
-func readDMProseMessages(ctx context.Context, t *testing.T, conn *websocket.Conn) []protocol.NarrativeDmProsePayload {
+func readDMProseMessages(ctx context.Context, t *testing.T, conn *websocket.Conn) []protocol.ClientDisplayPayload {
 	t.Helper()
-	var found []protocol.NarrativeDmProsePayload
+	var found []protocol.ClientDisplayPayload
 	for i := 0; i < 20; i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
 		if err != nil {
 			t.Fatalf("reading message %d: %v", i, err)
 		}
-		if typ != protocol.MessageTypeNarrativeDmProse {
+		if typ != protocol.MessageTypeClientDisplay {
 			continue
 		}
-		var msg protocol.NarrativeDmProseMessage
+		var msg protocol.ClientDisplayMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			t.Fatalf("unmarshaling narrative.dm_prose: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestServe_NarrativePlayerInput_SlowPass_NarratePrivately_SharedKnowledgeNot
 	// Wait for the slow pass to actually finish before asserting on
 	// fakeLLM's recorded calls, same reasoning as the imagegen
 	// ToolIsOffered/ToolNotOffered tests.
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}

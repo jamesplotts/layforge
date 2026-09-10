@@ -104,7 +104,7 @@ const slowPassTimeout = 90 * time.Second
 
 // runSlowPass runs design doc §7's slow pass for input: build the
 // shared grounding context once, run the mechanics pass, then the
-// narration pass, then broadcast the result as narrative.dm_prose (or
+// narration pass, then broadcast the result as client.display (or
 // nothing, if either pass fails or the narration fails one of the
 // gates below). Meant to be called via `go s.runSlowPass(...)` — see
 // renderPlayerBubble — so it recovers its own panics rather than
@@ -164,17 +164,8 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		return
 	}
 
-	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeDmProse, protocol.NarrativeDmProsePayload{
-		Text:               finalText,
-		InReplyToMessageID: input.MessageID,
-	})
-	if err != nil {
-		s.logger.Warn("failed to build narrative.dm_prose message", "error", err, "campaign_id", campaignID)
-		return
-	}
-	recordEvent(ctx, s, msg)
-	if err := broadcastMessage(s, msg); err != nil {
-		s.logger.Warn("failed to broadcast narrative.dm_prose", "error", err, "campaign_id", campaignID)
+	if err := s.sendClientDisplay(ctx, campaignID, "", finalText, input.MessageID); err != nil {
+		s.logger.Warn("failed to broadcast DM narration as client.display", "error", err, "campaign_id", campaignID)
 	}
 }
 

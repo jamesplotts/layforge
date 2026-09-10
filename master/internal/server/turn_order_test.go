@@ -57,8 +57,8 @@ func readTurnStateCollectingProse(ctx context.Context, t *testing.T, conn *webso
 		if err != nil {
 			t.Fatalf("reading message %d: %v", i, err)
 		}
-		if typ == protocol.MessageTypeNarrativeDmProse {
-			var msg protocol.NarrativeDmProseMessage
+		if typ == protocol.MessageTypeClientDisplay {
+			var msg protocol.ClientDisplayMessage
 			if err := json.Unmarshal(data, &msg); err != nil {
 				t.Fatalf("unmarshaling narrative.dm_prose: %v", err)
 			}

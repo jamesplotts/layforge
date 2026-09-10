@@ -75,7 +75,7 @@ func (s *Server) dmNarratePrivately(ctx context.Context, campaignID string, args
 		owners[character.OwnerID] = struct{}{}
 	}
 
-	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeDmProse, protocol.NarrativeDmProsePayload{
+	msg, err := newMessage(campaignID, protocol.MessageTypeClientDisplay, protocol.ClientDisplayPayload{
 		Text: args.Text,
 		Visibility: &protocol.VisibilityScope{
 			Scope:                 protocol.VisibilityScopePrivate,

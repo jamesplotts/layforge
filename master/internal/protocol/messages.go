@@ -822,6 +822,13 @@ type ClientDisplayPayload struct {
 	// InReplyToMessageID is the message_id of the player input this
 	// responds to, if any.
 	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
+	// Visibility, when set to a private scope, is what the persisted event
+	// log carries so log.history_request can filter this bubble out for
+	// everyone it wasn't for (design doc §9.7) — used by narrate_privately,
+	// which delivers one identical bubble to several recipients' own
+	// connections and records it once with this scope. nil (omitted) for an
+	// ordinary broadcast or a single-Recipient send.
+	Visibility *VisibilityScope `json:"visibility,omitempty"`
 }
 
 // ClientDisplayMessage is a client.display Message.

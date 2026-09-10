@@ -78,7 +78,7 @@ func TestServe_NarrativePlayerInput_SlowPass_GenerateSceneImage_Succeeds_Broadca
 	// broadcastToolResult only runs after callDMTool returns, so the
 	// real wire order is scene_image, then tool.result (not the other
 	// way around).
-	var sceneImage protocol.NarrativeSceneImageMessage
+	var sceneImage protocol.ClientImageMessage
 	if err := wsjson.Read(ctx, conn, &sceneImage); err != nil {
 		t.Fatalf("Read(narrative.scene_image) error = %v", err)
 	}
@@ -140,7 +140,7 @@ func TestServe_NarrativePlayerInput_SlowPass_GenerateSceneImage_ProviderError_Re
 
 	// No narrative.scene_image should follow a failed generation — the
 	// next message should be the final narration instead.
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -218,7 +218,7 @@ func TestServe_NarrativePlayerInput_SlowPass_ImageGenConfigured_ToolIsOffered(t 
 	// otherwise this races the goroutine and is flaky depending on
 	// exactly how much synchronous work runSlowPass does before its own
 	// Complete() call.
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -258,7 +258,7 @@ func TestServe_NarrativePlayerInput_SlowPass_NoImageGenProvider_ToolNotOffered(t
 	}
 	// See the sibling ImageGenConfigured test for why this read (and not
 	// asserting on fakeLLM immediately after the bubble) is required.
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}

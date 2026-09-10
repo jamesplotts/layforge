@@ -384,7 +384,7 @@ func TestServe_NarrativePlayerInput_SlowPass_MeleeAttack_WithCombatMap_Populates
 		if err != nil {
 			t.Fatalf("reading message %d: %v", i, err)
 		}
-		if typ == protocol.MessageTypeNarrativeDmProse {
+		if typ == protocol.MessageTypeClientDisplay {
 			break
 		}
 	}

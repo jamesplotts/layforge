@@ -580,7 +580,7 @@ func TestServe_NarrativePlayerInput_SlowPass_DMPromptIncludesCurrentLocationCont
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}

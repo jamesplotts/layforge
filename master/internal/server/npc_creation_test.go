@@ -216,7 +216,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CreateNPC_WithoutSchemaFetch_Reject
 		t.Errorf("tool.result ReasonCode = %q, want %q", toolResult.Payload.ReasonCode, "schema_not_fetched")
 	}
 
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}

@@ -145,7 +145,7 @@ func TestServe_NarrativePlayerInput_SlowPass_NoSystemEngine_OmitsToolsAndBroadca
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
 
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -203,7 +203,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CharacterFound_IncludesCharacterDat
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CharacterNotFound_OmitsDataButStill
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -352,7 +352,7 @@ func TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAn
 	// — read generically by type rather than assuming a strict order,
 	// since only "all four eventually arrive" is the actual contract.
 	var sawRollRequest, sawRollResult, sawToolResult bool
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	for i := 0; i < 10; i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
 		if err != nil {
@@ -385,7 +385,7 @@ func TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAn
 			if tr.Payload.Caller != "dm" {
 				t.Errorf("tool.result Caller = %q, want %q", tr.Payload.Caller, "dm")
 			}
-		case protocol.MessageTypeNarrativeDmProse:
+		case protocol.MessageTypeClientDisplay:
 			if err := json.Unmarshal(data, &prose); err != nil {
 				t.Fatalf("unmarshaling narrative.dm_prose error = %v", err)
 			}
@@ -542,7 +542,7 @@ func TestServe_NarrativePlayerInput_SlowPass_MechanicsPass_HasNoLoreOrNarrationT
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -581,7 +581,7 @@ func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_HasNoMechanicalTools(
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -640,7 +640,7 @@ func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_CanCallListNpcsBefore
 
 	var sawToolResult bool
 	var toolResult protocol.ToolResultMessage
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	for i := 0; i < 10; i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
 		if err != nil {
@@ -652,7 +652,7 @@ func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_CanCallListNpcsBefore
 				t.Fatalf("unmarshaling tool.result error = %v", err)
 			}
 		}
-		if typ == protocol.MessageTypeNarrativeDmProse {
+		if typ == protocol.MessageTypeClientDisplay {
 			if err := json.Unmarshal(data, &prose); err != nil {
 				t.Fatalf("unmarshaling narrative.dm_prose error = %v", err)
 			}
@@ -697,7 +697,7 @@ func TestServe_NarrativePlayerInput_SlowPass_MechanicsPassOwnText_NeverBroadcast
 	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	if err := wsjson.Read(ctx, conn, &prose); err != nil {
 		t.Fatalf("Read(narrative.dm_prose) error = %v", err)
 	}
@@ -746,13 +746,13 @@ func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_ReceivesMechanicsTran
 	// generically by type, same as
 	// TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAndDmProse
 	// above, rather than assuming a fixed message count.
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	for i := 0; i < 10; i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
 		if err != nil {
 			t.Fatalf("reading message %d error = %v", i, err)
 		}
-		if typ == protocol.MessageTypeNarrativeDmProse {
+		if typ == protocol.MessageTypeClientDisplay {
 			if err := json.Unmarshal(data, &prose); err != nil {
 				t.Fatalf("unmarshaling narrative.dm_prose error = %v", err)
 			}
@@ -808,7 +808,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CampaignPackLoreTools_AvailableWith
 
 	var sawToolResult bool
 	var toolResult protocol.ToolResultMessage
-	var prose protocol.NarrativeDmProseMessage
+	var prose protocol.ClientDisplayMessage
 	for i := 0; i < 10; i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
 		if err != nil {
@@ -820,7 +820,7 @@ func TestServe_NarrativePlayerInput_SlowPass_CampaignPackLoreTools_AvailableWith
 				t.Fatalf("unmarshaling tool.result error = %v", err)
 			}
 		}
-		if typ == protocol.MessageTypeNarrativeDmProse {
+		if typ == protocol.MessageTypeClientDisplay {
 			if err := json.Unmarshal(data, &prose); err != nil {
 				t.Fatalf("unmarshaling narrative.dm_prose error = %v", err)
 			}

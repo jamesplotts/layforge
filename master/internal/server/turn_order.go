@@ -182,14 +182,7 @@ func (s *Server) broadcastIncapacitatedSkip(ctx context.Context, campaignID stri
 			name = n
 		}
 	}
-	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeDmProse, protocol.NarrativeDmProsePayload{
-		Text: fmt.Sprintf("%s is %s and cannot act this turn.", name, reason),
-	})
-	if err != nil {
-		return fmt.Errorf("building narrative.dm_prose message: %w", err)
-	}
-	recordEvent(ctx, s, msg)
-	return broadcastMessage(s, msg)
+	return s.sendClientDisplay(ctx, campaignID, "", fmt.Sprintf("%s is %s and cannot act this turn.", name, reason), "")
 }
 
 // advanceToNextActionableCharacter moves state to the next character in

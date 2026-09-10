@@ -79,7 +79,7 @@ func drainUntilDMProse(ctx context.Context, t *testing.T, conn *websocket.Conn) 
 		if err != nil {
 			t.Fatalf("reading message %d: %v", i, err)
 		}
-		if typ == protocol.MessageTypeNarrativeDmProse {
+		if typ == protocol.MessageTypeClientDisplay {
 			return
 		}
 	}

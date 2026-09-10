@@ -15,7 +15,6 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/policy"
-	"github.com/jamesplotts/layforge/master/internal/protocol"
 	"github.com/jamesplotts/layforge/master/internal/store"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
@@ -2079,9 +2078,8 @@ func npcCreationFailureMessage(warnings []*systemenginepb.ValidationWarning) str
 // effective image maturity-tier constraint (policy.CampaignPolicy.
 // EffectiveImageMaturityTierPrompt — never more permissive than the
 // campaign's text tier by default, see that method's doc comment), then
-// broadcasts the result as narrative.scene_image so the whole table sees
-// it, the same transparency principle as tool.result logging every DM
-// tool call.
+// broadcasts the result as client.image so the whole table sees it, the
+// same transparency principle as tool.result logging every DM tool call.
 func (s *Server) dmGenerateSceneImage(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
 	var args struct {
 		Prompt string `json:"prompt"`
@@ -2105,21 +2103,16 @@ func (s *Server) dmGenerateSceneImage(ctx context.Context, campaignID string, ar
 		fullPrompt = args.Prompt + "\n\nContent guidance: " + tierPrompt
 	}
 
-	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeSceneImage, protocol.NarrativeSceneImagePayload{
+	if err := s.sendClientImage(ctx, campaignID, clientImageArgs{
 		ImageURL: imageURL,
 		Prompt:   fullPrompt,
-	})
-	if err != nil {
-		return fmt.Sprintf("building narrative.scene_image message: %v", err), false, "internal_error"
-	}
-	recordEvent(ctx, s, msg)
-	if err := broadcastMessage(s, msg); err != nil {
-		return fmt.Sprintf("broadcasting narrative.scene_image: %v", err), false, "internal_error"
+	}); err != nil {
+		return fmt.Sprintf("broadcasting client.image: %v", err), false, "internal_error"
 	}
 
 	// Deliberately doesn't include imageURL in the tool result content:
 	// the model has no use for the raw URL (Master already broadcasts
-	// narrative.scene_image separately), and including it invited the
+	// client.image separately), and including it invited the
 	// model to echo a markdown image link into its own narration text —
 	// a real artifact observed live. A bare confirmation removes the
 	// temptation at the source rather than only asking the system prompt
