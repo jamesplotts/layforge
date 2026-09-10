@@ -50,28 +50,61 @@ listed.
 
 ## Quick Start
 
+Both paths below start the same way — clone Layforge and generate the
+gRPC stubs (a fresh clone will not compile until you do this once):
+
 ```
 git clone https://github.com/jamesplotts/layforge.git
 cd layforge
 ./protocol/generate.sh   # one-time: generates master/internal/systemenginepb/
+```
+
+Then pick a path.
+
+### Path A — full setup (rules engine included)
+
+Everything works: rolling and importing characters, dice, ability
+checks, combat. Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+and an [Ollama](https://ollama.com) server (or another LLM provider).
+
+```
+# 1. Clone and start the System Engine sidecar (a separate repo).
+#    It listens on localhost:5265 by default (GRPC_SIDECAR_PORT to change).
+#    Keep this running in its own terminal.
+git clone https://github.com/jamesplotts/opencombatengine.git
+cd opencombatengine
+dotnet run --project src/OpenCombatEngine.GrpcSidecar/OpenCombatEngine.GrpcSidecar.csproj
+
+# 2. In another terminal, start Master pointed at both the sidecar and an LLM.
+cd ../layforge/master
+go run . -system-engine-addr localhost:5265 \
+         -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
+```
+
+The sidecar listens on loopback only, so Master and the sidecar must run
+on the same host. (`-system-engine-addr` / `-llm-url` can also be set on
+the admin panel's **System** tab instead of as flags.)
+
+### Path B — chat only (no rules engine)
+
+Skips the .NET dependency. You get the AI DM's narration and the chat
+scrollback, but **no dice, no ability checks, and no way to roll or
+import a character** — a player can only claim a pregenerated character
+the Host pastes in on the admin **Pregens** tab. Good for trying the
+narration pipeline or the client UI.
+
+```
 cd master
-go run .
+go run . -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
 ```
 
-Then open `http://localhost:8080/`. Master starts, serves the web client,
-and the admin panel (`http://127.0.0.1:8090/`) — but until you point it
-at an LLM and a System Engine (see Prerequisites) there's no AI DM and no
-way to roll a character. Configure both on the admin panel's **System**
-tab, or pass them as flags:
+### Either way
 
-```
-go run . -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b \
-         -system-engine-addr <opencombatengine-host>:5265
-```
-
-Then, on the admin panel's **Session** tab, set an **Active campaign**
-(create one, or use the Campaign tab's "Download Campaign Pack" to pull
-the pregenerated library) — players can't join until one is set. See
+Open `http://localhost:8080/` for the player client and
+`http://127.0.0.1:8090/` for the admin panel. On the admin panel's
+**Session** tab, set an **Active campaign** (create one, or use the
+Campaign tab's "Download Campaign Pack" to pull the pregenerated
+library) — players can't join until one is set. See
 [`master/README.md`](master/README.md#running) for every flag.
 
 **`go run .` and "Save & Restart":** the first restart works but the
