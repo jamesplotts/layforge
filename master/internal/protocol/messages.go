@@ -497,9 +497,10 @@ type CharacterStateMessage = Message[CharacterStatePayload]
 // CharacterCreationStartPayload is the payload of a
 // character.creation_start message: a player, right after joining,
 // asking to begin choosing/creating their character. Master replies
-// with its own fixed top-level character.creation_prompt ("Import a
-// character / Roll a new one / Pick a pregen") — this message is
-// Master's own concept, not something the System Engine has any part in.
+// with its own fixed top-level client.choice ("Import a character / Roll
+// a new one / Pick a pregen") and drives the rest of the conversation
+// over client.query / client.choice — this message is Master's own
+// concept, not something the System Engine has any part in.
 type CharacterCreationStartPayload struct {
 	// CharacterName is the display name the player chose for their
 	// character (the reworked join flow asks for it as the first step,
@@ -512,51 +513,6 @@ type CharacterCreationStartPayload struct {
 
 // CharacterCreationStartMessage is a character.creation_start Message.
 type CharacterCreationStartMessage = Message[CharacterCreationStartPayload]
-
-// CharacterCreationPromptPayload is the payload of a
-// character.creation_prompt message: one question in the character-
-// creation conversation, sent back to the requesting player's own
-// connection only (see internal/server/character_creation.go's doc
-// comment for why this needs no new privacy mechanism — it's a direct
-// reply on that connection, exactly like character.get already is).
-// The client renders this as a chat-bubble-style prompt: PromptText
-// plus one button per Choices entry, or a free-text input when Choices
-// is empty (today, only the gender question during rolling). SessionID
-// correlates the player's eventual character.creation_answer back to
-// this exact question — a player may have only one creation flow in
-// progress at a time, but the ID still makes the pairing explicit
-// rather than implicit in connection state.
-type CharacterCreationPromptPayload struct {
-	SessionID  string   `json:"session_id"`
-	PromptText string   `json:"prompt_text"`
-	Choices    []string `json:"choices,omitempty"`
-	// AcceptsFileUpload is set only on the "import" sub-flow's free-text
-	// prompt (Choices empty) — it tells the client to offer a file picker
-	// alongside the plain textarea, since this specific free-text prompt
-	// expects pasted/uploaded character JSON, unlike the roll flow's own
-	// free-text prompt (gender), which never sets this.
-	AcceptsFileUpload bool `json:"accepts_file_upload,omitempty"`
-}
-
-// CharacterCreationPromptMessage is a character.creation_prompt Message.
-type CharacterCreationPromptMessage = Message[CharacterCreationPromptPayload]
-
-// CharacterCreationAnswerPayload is the payload of a
-// character.creation_answer message: the player's response to the most
-// recent character.creation_prompt they received. Answer is either one
-// of that prompt's own Choices verbatim, or free text when the prompt
-// had none — Master (for its own top-level prompt and the import/pregen
-// sub-flows) or the System Engine (for an in-progress roll, via
-// AnswerCharacterCreationPrompt) validates it belongs to the pending
-// question; an answer that doesn't is a real rejection (system.error),
-// not a guess at what was meant.
-type CharacterCreationAnswerPayload struct {
-	SessionID string `json:"session_id"`
-	Answer    string `json:"answer"`
-}
-
-// CharacterCreationAnswerMessage is a character.creation_answer Message.
-type CharacterCreationAnswerMessage = Message[CharacterCreationAnswerPayload]
 
 // CharacterApplyEffectPayload is the payload of a character.apply_effect
 // message: a player applying a mechanical effect to a character they
@@ -574,23 +530,6 @@ type CharacterApplyEffectPayload struct {
 
 // CharacterApplyEffectMessage is a character.apply_effect Message.
 type CharacterApplyEffectMessage = Message[CharacterApplyEffectPayload]
-
-// NarrativeDmProsePayload is the payload of a narrative.dm_prose
-// message: DM/NPC narration, the slow-pass output of the narrative-
-// transform pipeline (design doc §7) — see server's runSlowPass.
-// Visibility is nil (omitted) until knowledge scoping (design doc §9.7)
-// is actually enforced, same as NarrativePlayerBubblePayload's. See
-// protocol/asyncapi.yaml components.messages.NarrativeDmProse.
-type NarrativeDmProsePayload struct {
-	Text       string           `json:"text"`
-	Visibility *VisibilityScope `json:"visibility,omitempty"`
-	// InReplyToMessageID is the message_id of the player input this
-	// narrates in response to, if any.
-	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
-}
-
-// NarrativeDmProseMessage is a narrative.dm_prose Message.
-type NarrativeDmProseMessage = Message[NarrativeDmProsePayload]
 
 // ToolResultPayload is the payload of a tool.result message: broadcast
 // of a completed DM tool-use call, for transparency/logging (design doc
@@ -646,28 +585,6 @@ type TurnStatePayload struct {
 
 // TurnStateMessage is a turn.state Message.
 type TurnStateMessage = Message[TurnStatePayload]
-
-// NarrativeSceneImagePayload is the payload of a narrative.scene_image
-// message: broadcast to the whole campaign when the DM generates a
-// scene illustration (design doc §6.3's generate_scene_image tool, see
-// internal/server/dm_tools.go). Master neither authors nor stores the
-// image itself — ImageURL points at wherever the configured
-// imagegen.Provider actually hosts it (e.g. a self-hosted ComfyUI
-// instance's own /view endpoint).
-type NarrativeSceneImagePayload struct {
-	ImageURL string `json:"image_url"`
-	// Prompt is the scene description actually sent to the image
-	// generator (including any maturity-tier constraint appended to it,
-	// design doc §9.5) — surfaced for transparency, the same reasoning
-	// as tool.result logging every DM tool call regardless of outcome.
-	Prompt string `json:"prompt"`
-	// InReplyToMessageID, when set, is the narrative.player_input or
-	// narrative.dm_prose message_id that prompted this image.
-	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
-}
-
-// NarrativeSceneImageMessage is a narrative.scene_image Message.
-type NarrativeSceneImageMessage = Message[NarrativeSceneImagePayload]
 
 // GridCellPayload is one cell of a MapGridPayload — see that type's doc
 // comment for why this is a coarser model than OpenCombatEngine's own
@@ -735,7 +652,7 @@ type MapTokenStatePayload struct {
 	// ImageURL is a data: URL of this recipient's own composited PNG view
 	// (grid + their currently-visible tokens, fog already applied) —
 	// Master renders it directly (Go stdlib image/png), no external
-	// service, unlike narrative.scene_image's ImageURL which points at a
+	// service, unlike client.image's ImageURL which points at a
 	// configured imagegen.Provider.
 	ImageURL string `json:"image_url"`
 }

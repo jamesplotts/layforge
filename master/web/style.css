@@ -412,7 +412,7 @@ button.secondary {
   opacity: 0.55;
 }
 
-/* narrative.dm_prose (design doc §7's slow pass) — the DM speaking, in
+/* client.display (design doc §7's slow pass) — the DM speaking, in
    oxblood so it never reads as a player's own (sapphire) bubble. */
 .bubble.dm-bubble {
   color: var(--bubble-dm-text);

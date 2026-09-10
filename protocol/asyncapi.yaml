@@ -70,7 +70,6 @@ channels:
       summary: Messages Master sends to a connected client.
       message:
         oneOf:
-          - $ref: '#/components/messages/NarrativeDmProse'
           - $ref: '#/components/messages/NarrativePlayerBubble'
           - $ref: '#/components/messages/NarrativeSystemNote'
           - $ref: '#/components/messages/MapTokenState'
@@ -81,11 +80,9 @@ channels:
           - $ref: '#/components/messages/CharacterReviewResult'
           - $ref: '#/components/messages/CharacterSchemaResponse'
           - $ref: '#/components/messages/CharacterState'
-          - $ref: '#/components/messages/CharacterCreationPrompt'
           - $ref: '#/components/messages/SafetyFlagBroadcast'
           - $ref: '#/components/messages/ToolResult'
           - $ref: '#/components/messages/TurnState'
-          - $ref: '#/components/messages/NarrativeSceneImage'
           - $ref: '#/components/messages/SystemSessionState'
           - $ref: '#/components/messages/SystemError'
           - $ref: '#/components/messages/LogHistoryResponse'
@@ -113,7 +110,6 @@ channels:
           - $ref: '#/components/messages/CharacterSchemaRequest'
           - $ref: '#/components/messages/CharacterGet'
           - $ref: '#/components/messages/CharacterCreationStart'
-          - $ref: '#/components/messages/CharacterCreationAnswer'
           - $ref: '#/components/messages/CharacterApplyEffect'
           - $ref: '#/components/messages/SafetyFlag'
           - $ref: '#/components/messages/SystemConnect'
@@ -128,31 +124,12 @@ components:
   messages:
 
     # --- narrative.* (docs/design.md §5, §7) ---
-
-    NarrativeDmProse:
-      name: narrative.dm_prose
-      messageId: narrative_dm_prose
-      title: DM narrative prose
-      summary: DM/NPC narration, the slow-pass output of the narrative-transform pipeline (docs/design.md §7).
-      payload:
-        allOf:
-          - $ref: '#/components/schemas/Envelope'
-          - type: object
-            required: [payload]
-            properties:
-              type:
-                const: narrative.dm_prose
-              payload:
-                type: object
-                required: [text]
-                properties:
-                  text:
-                    type: string
-                  visibility:
-                    $ref: '#/components/schemas/VisibilityScope'
-                  in_reply_to_message_id:
-                    type: string
-                    description: message_id of the player input this narrates in response to, if any.
+    #
+    # DM/NPC narration and DM-generated scene images are no longer their
+    # own message types — the slow pass emits client.display and
+    # generate_scene_image emits client.image (see the client.* family
+    # below). narrate_privately's private scope rides on
+    # client.display.payload.visibility.
 
     NarrativePlayerBubble:
       name: narrative.player_bubble
@@ -677,8 +654,9 @@ components:
       summary: >
         The first message a player sends after joining, in place of an
         auto-generated stopgap character (design doc §9.4). Master replies
-        with its own fixed top-level character.creation_prompt (import /
-        quick roll / detailed roll / pick a pregen).
+        with its own fixed top-level client.choice (import / quick roll /
+        detailed roll / pick a pregen) and drives the rest of the
+        conversation over client.query / client.choice.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -699,69 +677,10 @@ components:
                       the pasted JSON) and pregen. May be omitted by an older client,
                       which falls back to the sender id.
 
-    CharacterCreationPrompt:
-      name: character.creation_prompt
-      messageId: character_creation_prompt
-      title: One question in the character-creation conversation
-      summary: >
-        Sent back to the requesting player's own connection only — a
-        direct reply, exactly like character.get, so this needs no new
-        privacy mechanism (design doc §9.4). The client renders this as
-        a chat-bubble-style prompt: prompt_text plus one button per
-        choices entry, or a free-text input when choices is empty (e.g.
-        the gender question during rolling, or pasting character JSON
-        for import).
-      payload:
-        allOf:
-          - $ref: '#/components/schemas/Envelope'
-          - type: object
-            required: [payload]
-            properties:
-              type:
-                const: character.creation_prompt
-              payload:
-                type: object
-                required: [session_id, prompt_text]
-                properties:
-                  session_id:
-                    type: string
-                  prompt_text:
-                    type: string
-                  choices:
-                    type: array
-                    items:
-                      type: string
-                    description: Enumerated options the player picks from; omitted/empty means the client should collect free text instead.
-                  accepts_file_upload:
-                    type: boolean
-                    description: Set only on the import sub-flow's own free-text prompt (pasting character JSON) — tells the client to offer a file picker alongside the plain textarea. Never set on the roll flow's own free-text prompt (gender).
-
-    CharacterCreationAnswer:
-      name: character.creation_answer
-      messageId: character_creation_answer
-      title: Answer to the most recent character.creation_prompt
-      summary: >
-        answer is either one of that prompt's own choices verbatim, or
-        free text when the prompt had none. Master validates it belongs
-        to the pending question (directly, or via the System Engine's
-        own in-progress creation session) — an answer that doesn't is a
-        real rejection (system.error), not a guess at what was meant.
-      payload:
-        allOf:
-          - $ref: '#/components/schemas/Envelope'
-          - type: object
-            required: [payload]
-            properties:
-              type:
-                const: character.creation_answer
-              payload:
-                type: object
-                required: [session_id, answer]
-                properties:
-                  session_id:
-                    type: string
-                  answer:
-                    type: string
+    # The character-creation conversation after character.creation_start
+    # is carried entirely by the generic client.query / client.choice
+    # prompt family (see below) and their *_response replies — there is
+    # no bespoke character.creation_prompt / _answer message any more.
 
     CharacterReviewResult:
       name: character.review_result
@@ -988,30 +907,8 @@ components:
                     type: integer
                     description: Full trips through order, starting at 1 once combat begins.
 
-    NarrativeSceneImage:
-      name: narrative.scene_image
-      messageId: narrative_scene_image
-      title: DM-generated scene illustration
-      summary: Broadcast when the DM generates a scene illustration (docs/design.md §6.3's generate_scene_image tool). Master neither authors nor stores the image itself — image_url points wherever the configured image-gen provider hosts it.
-      payload:
-        allOf:
-          - $ref: '#/components/schemas/Envelope'
-          - type: object
-            required: [payload]
-            properties:
-              type:
-                const: narrative.scene_image
-              payload:
-                type: object
-                required: [image_url, prompt]
-                properties:
-                  image_url:
-                    type: string
-                  prompt:
-                    type: string
-                    description: The scene description actually sent to the image generator, including any maturity-tier constraint appended to it (docs/design.md §9.5) — surfaced for transparency.
-                  in_reply_to_message_id:
-                    type: string
+    # DM-generated scene illustrations are broadcast as client.image (see
+    # the client.* family), no longer a narrative.scene_image of their own.
 
     # --- system.* (docs/design.md §5) ---
 
@@ -1593,7 +1490,7 @@ components:
           type: string
         type:
           type: string
-          description: Discriminator selecting which concrete message this envelope carries, e.g. "narrative.dm_prose".
+          description: Discriminator selecting which concrete message this envelope carries, e.g. "client.display".
 
     VisibilityScope:
       type: object

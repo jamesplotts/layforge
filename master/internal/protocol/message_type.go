@@ -5,7 +5,7 @@ package protocol
 
 // MessageType discriminates which concrete message an Envelope carries,
 // mirroring the "type" discriminator in protocol/asyncapi.yaml's Envelope
-// schema (e.g. "system.connect", "narrative.dm_prose").
+// schema (e.g. "system.connect", "client.display").
 //
 // The zero value, MessageTypeUnspecified, is never valid on the wire —
 // see IsValid. This is the Go translation of the Unspecified/LastValue
@@ -39,10 +39,8 @@ const (
 	MessageTypeCharacterGet              MessageType = "character.get"
 	MessageTypeCharacterState            MessageType = "character.state"
 	MessageTypeCharacterApplyEffect      MessageType = "character.apply_effect"
-	MessageTypeNarrativeDmProse          MessageType = "narrative.dm_prose"
 	MessageTypeToolResult                MessageType = "tool.result"
 	MessageTypeTurnState                 MessageType = "turn.state"
-	MessageTypeNarrativeSceneImage       MessageType = "narrative.scene_image"
 	MessageTypeMapTokenState             MessageType = "map.token_state"
 	MessageTypeMapTokenMoveRequest       MessageType = "map.token_move_request"
 	MessageTypeVehicleImport             MessageType = "vehicle.import"
@@ -50,8 +48,6 @@ const (
 	MessageTypeAudioChunk                MessageType = "audio.chunk"
 	MessageTypeAudioTranscription        MessageType = "audio.transcription"
 	MessageTypeCharacterCreationStart    MessageType = "character.creation_start"
-	MessageTypeCharacterCreationPrompt   MessageType = "character.creation_prompt"
-	MessageTypeCharacterCreationAnswer   MessageType = "character.creation_answer"
 	MessageTypeCharacterReviewResult     MessageType = "character.review_result"
 
 	// The client.* family (design doc §4) — the small, reusable set of
@@ -93,12 +89,11 @@ func (t MessageType) IsValid() bool {
 		MessageTypeCharacterSchemaRequest, MessageTypeCharacterSchemaResponse,
 		MessageTypeCharacterGet, MessageTypeCharacterState,
 		MessageTypeCharacterApplyEffect,
-		MessageTypeNarrativeDmProse, MessageTypeToolResult, MessageTypeTurnState,
-		MessageTypeNarrativeSceneImage,
+		MessageTypeToolResult, MessageTypeTurnState,
 		MessageTypeMapTokenState, MessageTypeMapTokenMoveRequest,
 		MessageTypeVehicleImport, MessageTypeVehicleImported,
 		MessageTypeAudioChunk, MessageTypeAudioTranscription,
-		MessageTypeCharacterCreationStart, MessageTypeCharacterCreationPrompt, MessageTypeCharacterCreationAnswer,
+		MessageTypeCharacterCreationStart,
 		MessageTypeCharacterReviewResult, MessageTypeTermsAccept,
 		MessageTypeClientDisplay, MessageTypeClientQuery, MessageTypeClientQueryResponse,
 		MessageTypeClientChoice, MessageTypeClientChoiceResponse, MessageTypeClientImage,
