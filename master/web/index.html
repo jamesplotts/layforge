@@ -14,19 +14,22 @@
   <section id="join-screen" class="screen">
     <div class="join-card">
       <h1>Layforge</h1>
-      <p class="tagline">Connect to a Master.</p>
-      <label>
-        Master WebSocket URL
-        <input id="join-url" type="text" />
+
+      <!-- What the Host is running now (GET /api/session). One of:
+           "no game" note, or the campaign name + optional password. -->
+      <p id="join-no-game" class="tagline" hidden>The Host hasn't started a game yet.</p>
+      <p id="join-now-playing" class="tagline" hidden>
+        Now playing: <strong id="join-campaign-name"></strong>
+      </p>
+      <p id="join-closed-note" class="note" hidden>
+        This game is closed to new players. If you've played here before, you can still rejoin.
+      </p>
+
+      <label id="join-password-label" hidden>
+        Campaign password
+        <input id="join-password" type="password" autocomplete="off" />
       </label>
-      <label>
-        Campaign ID
-        <input id="join-campaign" type="text" placeholder="e.g. my-campaign" />
-      </label>
-      <label>
-        Character name
-        <input id="join-character" type="text" placeholder="e.g. Kestrel" />
-      </label>
+
       <!-- Shown only when this Master runs Discord OAuth (design doc §6.6) —
            app.js probes /auth/discord/enabled on load. -->
       <div id="discord-auth" class="discord-auth" hidden>
@@ -36,8 +39,17 @@
           <button id="discord-logout-button" type="button" class="link-button">Log out</button>
         </p>
       </div>
+
       <button id="join-button" type="button">Join</button>
       <p id="join-error" class="error" hidden></p>
+
+      <details class="join-advanced">
+        <summary>Advanced</summary>
+        <label>
+          Master WebSocket URL
+          <input id="join-url" type="text" />
+        </label>
+      </details>
     </div>
   </section>
 

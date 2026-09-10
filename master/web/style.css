@@ -956,3 +956,21 @@ button.secondary {
     max-height: 240px;
   }
 }
+
+/* --- Join screen: advanced disclosure + password --- */
+.join-advanced {
+  align-self: stretch;
+  margin-top: 4px;
+  font-size: 13px;
+}
+.join-advanced summary {
+  cursor: pointer;
+  color: var(--leather-ink);
+  opacity: 0.8;
+}
+.join-advanced label {
+  margin-top: 8px;
+}
+#join-now-playing strong {
+  color: var(--parchment-ink);
+}

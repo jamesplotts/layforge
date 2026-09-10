@@ -146,6 +146,17 @@ const state = {
   // for the join screen only. Both empty when Discord OAuth isn't in use.
   discordToken: "",
   discordName: "",
+  // sessionInfo is the last GET /api/session response — which campaign is
+  // running, whether it needs a password, whether it's closed. Drives the
+  // join screen; state.campaignId is taken from it, not typed.
+  sessionInfo: null,
+  // joinPassword is the campaign password the player typed, sent in
+  // system.connect. Not persisted.
+  joinPassword: "",
+  // handshakeRejected is set by onSystemError when Master refuses the
+  // join, so the close handler that fires right after doesn't overwrite
+  // the reason with a generic message.
+  handshakeRejected: false,
   pendingJoinUrl: null,
   pendingInputMessageId: null,
   // oldestLoadedSequence/hasMoreOlder track the "load earlier" cursor —
@@ -222,8 +233,12 @@ const el = {
   joinScreen: document.getElementById("join-screen"),
   chatScreen: document.getElementById("chat-screen"),
   joinUrl: document.getElementById("join-url"),
-  joinCampaign: document.getElementById("join-campaign"),
-  joinCharacter: document.getElementById("join-character"),
+  joinNoGame: document.getElementById("join-no-game"),
+  joinNowPlaying: document.getElementById("join-now-playing"),
+  joinCampaignName: document.getElementById("join-campaign-name"),
+  joinClosedNote: document.getElementById("join-closed-note"),
+  joinPasswordLabel: document.getElementById("join-password-label"),
+  joinPassword: document.getElementById("join-password"),
   joinButton: document.getElementById("join-button"),
   joinError: document.getElementById("join-error"),
   discordAuth: document.getElementById("discord-auth"),
@@ -272,6 +287,7 @@ el.termsModalAgree.addEventListener("click", onTermsAgree);
 
 captureDiscordLoginFromHash();
 initDiscordAuth();
+initSession();
 el.discordLoginButton.addEventListener("click", () => {
   // Full-page navigation to Master's own login route (same origin as
   // this client when Discord OAuth is in use); it round-trips through
@@ -441,19 +457,27 @@ function send(msg) {
 
 function onJoinClick() {
   const url = el.joinUrl.value.trim();
-  const campaign = el.joinCampaign.value.trim();
-  const character = el.joinCharacter.value.trim();
-  if (!url || !campaign || !character) {
-    showJoinError("All fields are required.");
+  if (!url) {
+    showJoinError("A Master WebSocket URL is required (see Advanced).");
     return;
   }
-  state.campaignId = campaign;
-  state.characterId = character;
-  // The character name travels as sender_id for display and is what an
-  // unauthenticated Master uses to tell players apart. When this browser
-  // has a Discord login, Master ignores sender_id for ownership and keys
-  // on the verified account instead (see connect()).
-  state.senderId = character;
+  const info = state.sessionInfo;
+  if (!info || !info.campaign_id) {
+    showJoinError("There's no game to join yet — check back once the Host starts one.");
+    return;
+  }
+  if (info.needs_password && !el.joinPassword.value) {
+    showJoinError("This game needs a password.");
+    return;
+  }
+  state.campaignId = info.campaign_id;
+  state.joinPassword = el.joinPassword.value;
+  // sender_id: the Discord account when signed in (Master keys ownership
+  // on it regardless — see the identity plumbing), otherwise a stable
+  // per-browser id so an unauthenticated player is still recognizable
+  // across reconnects. The character's *name* comes from creation now,
+  // not from here.
+  state.senderId = state.discordToken ? discordSenderId() : persistentSenderId();
 
   if (!hasAcceptedCurrentTerms()) {
     state.pendingJoinUrl = url;
@@ -461,6 +485,30 @@ function onJoinClick() {
     return;
   }
   connect(url);
+}
+
+// persistentSenderId returns a stable random id for this browser,
+// generated once and kept in localStorage — the unauthenticated
+// stand-in for an account id now that there's no typed character name to
+// use.
+function persistentSenderId() {
+  try {
+    let id = localStorage.getItem("lf_sender_id");
+    if (!id) {
+      id = randomId();
+      localStorage.setItem("lf_sender_id", id);
+    }
+    return id;
+  } catch {
+    return randomId();
+  }
+}
+
+// discordSenderId is a readable stand-in the client puts in envelopes
+// when signed in; Master overrides ownership with the real account id
+// from the session token, so this only needs to be stable, not secret.
+function discordSenderId() {
+  return "discord-web:" + (state.discordName || "player");
 }
 
 // onTermsAgree fires from the join-screen modal (a fresh join, using
@@ -503,6 +551,43 @@ function renderDiscordAuth() {
   el.discordSignedIn.hidden = !signedIn;
   if (signedIn) {
     el.discordName.textContent = state.discordName || "your Discord account";
+  }
+}
+
+// initSession fetches GET /api/session (the player-facing view of what
+// the Host is running) and renders the join screen from it. Re-polled
+// every 15s while the join screen is up, so a player waiting for the
+// Host to start a game sees it appear without reloading.
+async function initSession() {
+  await loadSession();
+  setInterval(() => {
+    if (!state.joined) loadSession();
+  }, 15000);
+}
+
+async function loadSession() {
+  try {
+    const resp = await fetch("/api/session", { cache: "no-store" });
+    if (!resp.ok) return;
+    state.sessionInfo = await resp.json();
+  } catch {
+    return;
+  }
+  renderJoinScreen();
+}
+
+function renderJoinScreen() {
+  const info = state.sessionInfo || {};
+  const hasGame = !!info.campaign_id;
+
+  el.joinNoGame.hidden = hasGame;
+  el.joinNowPlaying.hidden = !hasGame;
+  el.joinClosedNote.hidden = !(hasGame && info.join_locked);
+  el.joinPasswordLabel.hidden = !(hasGame && info.needs_password);
+  el.joinButton.disabled = !hasGame;
+
+  if (hasGame) {
+    el.joinCampaignName.textContent = info.display_name || info.campaign_id;
   }
 }
 
@@ -560,10 +645,10 @@ function openSocket() {
       ...newEnvelope("system.connect"),
       payload: {
         client_kind: "player_web_v1",
-        // A Discord login token when this browser has one; otherwise
-        // empty (an open campaign) — the room-password case is handled by
-        // Masters that aren't running the reference client.
+        // Discord login token when this browser has one; campaign password
+        // when the running game needs one. Either may be empty.
         auth_token: state.discordToken || "",
+        campaign_password: state.joinPassword || "",
       },
     });
     // Reaching openSocket at all means this browser has already agreed
@@ -590,9 +675,14 @@ function openSocket() {
 
   ws.addEventListener("close", (event) => {
     if (!state.joined) {
-      showJoinError(`Connection closed before joining (code ${event.code}). Check the campaign ID and URL, then try again.`);
-      el.joinButton.disabled = false;
       state.ws = null;
+      el.joinButton.disabled = false;
+      if (state.handshakeRejected) {
+        // onSystemError already showed the real reason.
+        state.handshakeRejected = false;
+        return;
+      }
+      showJoinError(`Connection closed before joining (code ${event.code}). Try again.`);
       return;
     }
     scheduleReconnect();
@@ -755,6 +845,18 @@ function onJoined() {
 
 function onSystemError(msg) {
   const message = (msg.payload && msg.payload.message) || "An error occurred.";
+  if (msg.payload && msg.payload.code === "handshake_rejected" && !state.joined) {
+    // Master refused the join (wrong password, game closed, no game
+    // running). Show it on the join screen; the imminent close handler
+    // checks this flag so it doesn't overwrite the real reason with a
+    // generic one, and we don't try to reconnect.
+    state.handshakeRejected = true;
+    showJoinError(message.replace(/^not authorized to join this campaign: /, ""));
+    el.joinButton.disabled = false;
+    // A fresh session probe in case the game just closed / ended.
+    loadSession();
+    return;
+  }
   if (msg.payload && msg.payload.code === "terms_version_mismatch") {
     // This browser's stored acceptance is for a since-changed terms
     // text — clear it so the next join attempt (a page reload picks up
