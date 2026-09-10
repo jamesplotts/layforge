@@ -804,13 +804,31 @@ button.secondary {
 
 .sheet-field-value {
   flex: 1 1 auto;
+  min-width: 0;
   color: var(--text);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .sheet-array {
   margin: 0;
   padding-left: 18px;
+}
+
+/* Inside an array item the sidebar is too narrow for a side-by-side
+   label/value row — the value column collapses to a one-character-wide
+   vertical smear. Stack them instead: label on its own line, value
+   full-width below it. */
+.sheet-array .sheet-field {
+  flex-direction: column;
+  gap: 0;
+}
+
+.sheet-array .sheet-field-label {
+  min-width: 0;
+}
+
+.sheet-array li {
+  margin-bottom: 6px;
 }
 
 .character-sheet-effect-row {

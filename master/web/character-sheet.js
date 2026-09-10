@@ -85,14 +85,35 @@ function renderObject(schema, data, rootSchema) {
 
 function renderArray(schema, data, rootSchema) {
   if (!Array.isArray(data) || data.length === 0) return textNode("none");
+  const itemSchema = schema.items ? resolveSchema(schema.items, rootSchema) : null;
   const list = document.createElement("ul");
   list.className = "sheet-array";
   for (const item of data) {
     const li = document.createElement("li");
-    li.appendChild(schema.items ? renderValue(schema.items, item, rootSchema) : textNode(String(item)));
+    li.appendChild(renderArrayItem(itemSchema, item, rootSchema));
     list.appendChild(li);
   }
   return list;
+}
+
+// renderArrayItem renders one element of an array. An array of objects
+// with a single populated field — the common { "name": "Quarterstaff" }
+// inventory/spell shape — is shown as just that value: a per-item
+// label/value table in the narrow character sidebar wraps the text down
+// to one-letter-per-line columns. A multi-field item keeps its
+// label/value rows (the CSS stacks them vertically inside .sheet-array so
+// they still don't collapse).
+function renderArrayItem(itemSchema, item, rootSchema) {
+  if (!itemSchema) return textNode(String(item));
+  if (item && typeof item === "object" && !Array.isArray(item) && itemSchema.properties) {
+    const present = Object.keys(itemSchema.properties).filter(
+      (p) => item[p] !== null && item[p] !== undefined,
+    );
+    if (present.length === 1) {
+      return renderValue(itemSchema.properties[present[0]], item[present[0]], rootSchema);
+    }
+  }
+  return renderValue(itemSchema, item, rootSchema);
 }
 
 // isGroupableProperty reports whether a top-level schema property has
