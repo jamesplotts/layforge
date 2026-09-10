@@ -738,6 +738,13 @@ button.secondary {
   color: var(--brass);
 }
 
+.character-identity {
+  margin: 0;
+  padding: 0 16px 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
 .character-tabs {
   display: flex;
   flex-wrap: wrap;

@@ -271,6 +271,7 @@ const el = {
   rollCheckButton: document.getElementById("roll-check-button"),
   diceSkinSelect: document.getElementById("dice-skin-select"),
   diceTrayResult: document.getElementById("dice-tray-result"),
+  characterIdentity: document.getElementById("character-identity"),
   characterTabs: document.getElementById("character-tabs"),
   characterTabPanels: document.getElementById("character-tab-panels"),
   effectAmount: document.getElementById("effect-amount"),
@@ -827,13 +828,20 @@ function handleMessage(msg) {
   }
 }
 
+// setChatHeader renders "LayForge: <campaign name> - <player name>" at
+// the top of the chat screen — the campaign's display name (not its id),
+// and the Discord name when signed in.
+function setChatHeader() {
+  const campaign = (state.sessionInfo && state.sessionInfo.display_name) || state.campaignId;
+  el.chatCampaignLabel.textContent =
+    "LayForge: " + campaign + (state.discordName ? " - " + state.discordName : "");
+}
+
 function onJoined() {
   state.joined = true;
   el.joinScreen.hidden = true;
   el.chatScreen.hidden = false;
-  el.chatCampaignLabel.textContent = state.discordName
-    ? state.campaignId + " · " + state.discordName
-    : state.campaignId;
+  setChatHeader();
   setStatus("connected", "connected");
   // No bounds set: Master returns the most recent page (design doc §10)
   // — "where things stand now," the natural first page for a chat-style
@@ -1479,6 +1487,29 @@ function onCharacterStateResponse(msg) {
 function maybeRenderCharacterSheet() {
   if (!state.characterSchema || !state.characterData) return;
   renderCharacterSheetTabs(el.characterTabs, el.characterTabPanels, state.characterSchema, state.characterData);
+  renderCharacterIdentity(state.characterData);
+}
+
+// RACE_ADJECTIVES maps an SRD race name to its adjective form. Human and
+// Halfling are unchanged; the map only holds the ones that differ.
+const RACE_ADJECTIVES = { Dwarf: "Dwarven", Elf: "Elven" };
+
+// renderCharacterIdentity fills the one-line "Reorx, Male Dwarven Fighter"
+// summary under the sidebar's Character header, from the engine's
+// character_data (name, gender, raceName, and the class from the first
+// class-level entry).
+function renderCharacterIdentity(data) {
+  if (!data) {
+    el.characterIdentity.hidden = true;
+    return;
+  }
+  const name = data.name || state.characterId || "Character";
+  const race = data.raceName ? RACE_ADJECTIVES[data.raceName] || data.raceName : "";
+  const classes = (data.levelManager && data.levelManager.classes) || [];
+  const className = classes.length ? classes[0].className : "";
+  const descriptor = [data.gender, race, className].filter(Boolean).join(" ");
+  el.characterIdentity.textContent = descriptor ? `${name}, ${descriptor}` : name;
+  el.characterIdentity.hidden = false;
 }
 
 // onMapTokenState handles map.token_state (design doc §6.2) — a
