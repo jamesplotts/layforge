@@ -65,6 +65,31 @@ campaign: who else should see an effect land is design doc §9.7
 Knowledge Scoping territory, not decided yet, so this stays as private
 as `character.get` rather than guessing at a visibility policy.
 
+**The `client.*` family (design doc §4)** is now how Master talks *to* a
+player — a small, reusable set of chat-bubble interactions replacing a
+pile of one-off message types. `client.display` is a text bubble to one
+player or the whole table (it carries `visibility` for the
+`narrate_privately` case, so history stays scoped); `client.query` is a
+prompt + text box + submit, answered with `client.query_response`;
+`client.choice` is a prompt + one button per `{value, label}` option,
+answered with `client.choice_response`; `client.image` is an image
+bubble. Character creation's whole conversation after
+`character.creation_start` now runs on `client.query`/`client.choice`
+(the old `character.creation_prompt`/`_answer` are gone), the slow
+pass's narration and the incapacitated-turn skip emit `client.display`
+(no more `narrative.dm_prose`), and `generate_scene_image` emits
+`client.image` (no more `narrative.scene_image`). The send helpers and
+the single-use pending-prompt registry that pairs a query/choice with
+its response live in `internal/server/clientmsg.go`.
+
+Also specced but **not built**: `client.roll` / `client.roll_spectate` /
+`client.roll_reveal` / `client.roll_spectate_reveal` /
+`client.roll_complete` — the interactive dice-roll bubble. The payloads
+round-trip and the AsyncAPI entries exist so it isn't a protocol
+migration later; the UI, the DM-waits-for-the-roll slow-pass change, and
+retiring `roll.request`/`roll.result` are a follow-up. See
+[`docs/client-roll-followup.md`](../docs/client-roll-followup.md).
+
 The narrative-transform pipeline's slow pass (design doc §7, §8) now
 runs too: after the fast pass's literal echo of the player's action,
 `runSlowPass` launches a bounded, multi-turn conversation with the LLM,
@@ -75,7 +100,7 @@ dispatch, not duplicated. Every tool call the model makes is executed
 for real, broadcast to the whole table as `tool.result` regardless of
 success (§8's call-logging requirement), and fed back into the
 conversation; once the model stops calling tools, its response is
-broadcast as `narrative.dm_prose`. Design doc §8 says governance gates
+broadcast as `client.display`. Design doc §8 says governance gates
 (§9) are enforced at this layer — no PvP-policy or maturity-tier engine
 exists yet, so `campaignCharacter` (the DM tool lookup helper) enforces
 only campaign-scoping, deliberately without the per-owner check
@@ -380,7 +405,7 @@ types); this closes the live-reachability half that was missing.
 Image generation (design doc §6.3) is now a real pluggable provider
 too: a new `generate_scene_image` DM tool calls `imagegen.Provider`
 (`internal/imagegen`) — a self-hosted ComfyUI instance is the reference
-implementation — and broadcasts the result as `narrative.scene_image`.
+implementation — and broadcasts the result as `client.image`.
 Master never constructs the ComfyUI workflow graph itself: since a
 checkpoint/sampler/node graph is entirely operator-specific, the
 operator exports their own working workflow from ComfyUI's UI ("Save
@@ -405,7 +430,7 @@ to a formatting concern rather than a mechanical one): the system prompt
 now explicitly tells the model never to reference the image in narration
 text, and the tool result no longer exposes the raw URL to the model's
 context at all — it gets a bare success confirmation, since it has no
-actual use for the URL (Master already broadcasts `narrative.scene_image`
+actual use for the URL (Master already broadcasts `client.image`
 to the table separately).
 
 A local-only admin/operator settings panel (design doc §3.3) now exists
@@ -1248,7 +1273,7 @@ real `sable-ravine` pack (`shared_knowledge: strict` in its own
 two real player connections. Told to pull a companion aside for a
 private aside via `narrate_privately`, the DM called it with the real
 recipient's character id; the companion's own connection received the
-private `narrative.dm_prose` (`visibility.scope = "private"`,
+private `client.display` (`visibility.scope = "private"`,
 `visible_to_character_ids` naming exactly that character), the acting
 player's own connection never received it, and both connections still
 got the identical public narration afterward. A follow-up
@@ -1512,7 +1537,9 @@ a solo player or an unconfigured characters store.
 — thin by design, the same "adapter relays, the engine owns domain
 logic" principle every other System Engine call already follows: it
 answers `character.creation_start` with Master's own fixed top-level
-prompt (import / quick_roll / detailed_roll / pregen), then either
+prompt (import / quick_roll / detailed_roll / pregen) — now a
+`client.choice` like every other step of the conversation (see the
+`client.*` entry above) — then either
 falls straight into the existing `character.upload` import path, lists
 and claims a Host-authored pregen (new `store.PregenStore`, own SQLite
 table, own admin CRUD endpoints), or drives OpenCombatEngine's new
@@ -1569,13 +1596,12 @@ connected to character review yet. Scoped to the **import** path only —
 quick/detailed-rolled characters and claimed pregens are already
 `Approved` directly, unaffected by any of this.
 
-- The import prompt's chat bubble (`master/web/app.js`'s
-  `creationPromptEl`) now offers a real file picker next to the
-  textarea — `CharacterCreationPromptPayload.AcceptsFileUpload`, a new
-  field Master sets only on that one prompt, tells the client to show
-  it; picking a file reads it client-side (`FileReader`) into the same
-  textarea, so it's still the same `character.creation_answer` on the
-  wire either way.
+- The import prompt's chat bubble (`master/web/app.js`'s `onClientQuery`)
+  now offers a real file picker next to the textarea —
+  `ClientQueryPayload.AcceptsFileUpload`, a field Master sets only on
+  that one prompt, tells the client to show it; picking a file reads it
+  client-side (`FileReader`) into the same textarea, so it's still the
+  same `client.query_response` on the wire either way.
 - `Actor.level` is a new top-level field on the System Engine gRPC
   contract (`protocol/system_engine.proto`) — the sum of every class
   level for a multiclass character (`ILevelManager.TotalLevel` in
