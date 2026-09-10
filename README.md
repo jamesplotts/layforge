@@ -81,6 +81,12 @@ go run . -system-engine-addr localhost:5265 \
          -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
 ```
 
+On its first run the sidecar pulls SRD spell/item data from
+[Open5e](https://open5e.com) (cached for a week afterward). If Open5e is
+slow you'll see `failed to populate spell repository … no local cache
+exists` and equipment/spells won't resolve — just restart the sidecar to
+retry, or see OpenCombatEngine's README for pre-seeding the cache.
+
 The sidecar listens on loopback only, so Master and the sidecar must run
 on the same host. (`-system-engine-addr` / `-llm-url` can also be set on
 the admin panel's **System** tab instead of as flags.)
