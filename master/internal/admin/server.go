@@ -843,11 +843,11 @@ func (s *Server) downloadPackLibrary(ctx context.Context, source string) ([]byte
 }
 
 // pregenDTO is the Pregens tab's wire shape (design doc §9.4) — ID is
-// Host-chosen (e.g. "bram-fighter"), not server-generated, since it's
-// what a player's join-time character.creation_prompt.choices actually
-// shows and echoes back; a human-readable ID both reads better in that
-// button/list and is inherently unambiguous, unlike Name (two pregens
-// could share a display name). CharacterJSON is trusted verbatim, same
+// Host-chosen (e.g. "bram-fighter"), not server-generated. It is the
+// value a player's join-time client.choice option echoes back when they
+// pick a pregen; a client.choice option carries its label separately, so
+// the button can read "Bram the Bold — …" while the answer stays the
+// unambiguous ID (two pregens could share a display name). CharacterJSON is trusted verbatim, same
 // level of trust as everything else an operator pastes into this
 // panel — Master does not validate its SRD-legality here, only that it
 // parses as JSON.

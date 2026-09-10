@@ -9,7 +9,8 @@
 // handshake, narrative.player_input -> narrative.player_bubble,
 // safety.flag -> safety.flag_broadcast, log.history_request paging, a
 // real join-time character-creation conversation (character.
-// creation_start/_prompt/_answer, ending in the same character.
+// creation_start, then generic client.query / client.choice prompts and
+// their *_response replies, ending in the same character.
 // validation_result an ordinary character.upload also produces — design
 // doc §9.4), the dice tray (roll.check_request -> roll.request/
 // roll.result — see dice.js for the actual 3D die), and now a read-only
@@ -31,8 +32,8 @@
 // store.Character.OwnerID — see package server's resolveCheck/
 // sendCharacterState); onJoined now gets one through a real join-time
 // choice (design doc §9.4) instead of the old auto-uploaded stopgap
-// character — see the "Character creation" section below for
-// character.creation_start/_prompt/_answer.
+// character — see the "client.query / client.choice prompt bubbles"
+// section below, on which character.creation_start's conversation runs.
 
 import { renderCharacterSheetTabs } from "./character-sheet.js";
 
@@ -351,7 +352,7 @@ function initDiceArena() {
     const logRect = log.getBoundingClientRect();
     if (logRect.width < 4 || logRect.height < 4) return;
     const rects = [];
-    for (const node of log.querySelectorAll(".bubble, .creation-prompt, .scene-image")) {
+    for (const node of log.querySelectorAll(".bubble, .client-prompt, .scene-image")) {
       const r = node.getBoundingClientRect();
       if (r.bottom <= logRect.top || r.top >= logRect.bottom) continue; // off-screen — skip.
       rects.push({
@@ -797,8 +798,21 @@ function handleMessage(msg) {
     case "audio.transcription":
       onAudioTranscription(msg);
       break;
-    case "character.creation_prompt":
-      onCreationPrompt(msg.payload || {});
+    case "client.query":
+      onClientQuery(msg.payload || {});
+      break;
+    case "client.choice":
+      onClientChoice(msg.payload || {});
+      break;
+    case "client.roll":
+    case "client.roll_spectate":
+    case "client.roll_spectate_reveal":
+    case "client.roll_complete":
+      // The interactive dice bubble is a follow-up (see the client.roll*
+      // spec in protocol/asyncapi.yaml). Nothing sends these yet; warn
+      // rather than fall through to the generic "unhandled" path so an
+      // early server can't surprise a player with a silent drop.
+      console.warn("client.roll* message received but the dice UI is not built yet", msg.type, msg);
       break;
     case "character.review_result":
       appendCharacterReviewNote(msg.payload || {});
@@ -831,7 +845,7 @@ function onJoined() {
   // name their character — the first step now that the join screen no
   // longer collects a name. Submitting sends character.creation_start
   // with the name; Master then replies with its own top-level
-  // import/roll/pregen prompt (onCreationPrompt).
+  // import/roll/pregen prompt as a client.choice (onClientChoice).
   promptForCharacterName();
 }
 
@@ -841,18 +855,18 @@ function onJoined() {
 // display (state.characterId).
 function promptForCharacterName() {
   const wrap = document.createElement("div");
-  wrap.className = "creation-prompt";
+  wrap.className = "client-prompt";
 
   const text = document.createElement("div");
-  text.className = "creation-prompt-text";
+  text.className = "client-prompt-text";
   text.textContent = "What's your character's name?";
   wrap.appendChild(text);
 
   const controls = document.createElement("div");
-  controls.className = "creation-prompt-controls";
+  controls.className = "client-prompt-controls";
   const input = document.createElement("input");
   input.type = "text";
-  input.className = "creation-prompt-input";
+  input.className = "client-prompt-input";
   input.placeholder = "e.g. Kestrel";
   const button = document.createElement("button");
   button.type = "button";
@@ -924,7 +938,7 @@ function onSystemError(msg) {
 // entered, kicking the flow back to the top-level choice.
 function appendCreationRetry() {
   const wrap = document.createElement("div");
-  wrap.className = "creation-prompt";
+  wrap.className = "client-prompt";
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = "Start character creation over";
@@ -1296,119 +1310,135 @@ function onSafetyFlagSend() {
   closeSafetyFlagPanel();
 }
 
-// --- Character creation (design doc §9.4) ---
+// --- client.query / client.choice prompt bubbles ---
 //
+// Master drives every ask-the-player interaction through the generic
+// client.* prompt family (design doc §4 / protocol/asyncapi.yaml):
+//
+//   client.query  — free text: a prompt, a text box, a submit button.
+//                   Answered with client.query_response { prompt_id, text }.
+//   client.choice — a prompt plus one button per option; each option
+//                   carries a value (what comes back) and a label (the
+//                   button text). Answered with client.choice_response
+//                   { prompt_id, value }.
+//
+// Character creation (design doc §9.4) is the first and main consumer:
 // character.creation_start (sent once, from the "name your character"
-// step promptForCharacterName shows on join) kicks off a
-// conversation entirely driven by character.creation_prompt/
-// character.creation_answer pairs: Master's own top-level choice
-// (import / quick roll / detailed roll / pregen), then either the
-// import/pregen sub-flow or the System Engine's own question sequence
-// for rolling. Every prompt is a direct reply to this connection only
-// (see internal/server/character_creation.go's own doc comment for why
-// that needs no new privacy mechanism) — rendered here as an ordinary-
-// looking chat bubble with buttons (or a text box for the rare
-// free-text question, e.g. gender or pasting character JSON) rather
-// than a separate screen, so each player works through their own
-// character at their own pace without blocking the table. The import
-// sub-flow's own free-text prompt sets accepts_file_upload, which adds a
-// file picker next to the textarea (see creationPromptEl) so a player
-// can choose their own character JSON file instead of pasting it — same
-// character.creation_answer either way, no protocol difference beyond
-// that one flag. The flow ends with a character.validation_result (the
-// same message an ordinary character.upload already answers with — see
-// onCharacterValidationResult), whichever path produced it — an
-// imported character then still sits in PendingReview until Master's
-// automatic review pass or a Host's own admin-panel decision concludes
-// it (character.review_result, see appendCharacterReviewNote).
-function onCreationPrompt(payload) {
-  el.log.appendChild(creationPromptEl(payload));
+// step promptForCharacterName shows on join) kicks off a conversation of
+// these prompts — Master's own top-level choice (import / quick roll /
+// detailed roll / pregen), then either the import/pregen sub-flow or the
+// System Engine's own question sequence for rolling — ending in a
+// character.validation_result (see onCharacterValidationResult). Each
+// prompt is a direct reply to this connection only, rendered as an
+// ordinary-looking chat bubble rather than a separate screen so every
+// player works through their own character at their own pace without
+// blocking the table. A client.query with accepts_file_upload set (the
+// import sub-flow's "paste your JSON" step) also gets a file picker.
+function onClientQuery(payload) {
+  const wrap = clientPromptWrap(payload.prompt_text);
+  const controls = wrap.querySelector(".client-prompt-controls");
+
+  const settle = () => {
+    controls.querySelectorAll("button, textarea, input").forEach((c) => {
+      c.disabled = true;
+    });
+    wrap.classList.add("answered");
+  };
+
+  const input = document.createElement("textarea");
+  input.className = "client-prompt-input";
+  input.rows = 3;
+  if (payload.input_placeholder) input.placeholder = payload.input_placeholder;
+  controls.appendChild(input);
+
+  if (payload.accepts_file_upload) {
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "application/json,.json";
+    fileInput.className = "client-prompt-file";
+    const maxBytes = 256 * 1024;
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (file.size > maxBytes) {
+        appendErrorNote(`"${file.name}" is too large (${Math.round(file.size / 1024)} KB) — character files are expected well under 256 KB.`);
+        fileInput.value = "";
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        input.value = typeof reader.result === "string" ? reader.result : "";
+      };
+      reader.onerror = () => appendErrorNote(`Could not read "${file.name}".`);
+      reader.readAsText(file);
+    });
+    controls.appendChild(fileInput);
+  }
+
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.textContent = payload.submit_label || "Send";
+  submit.addEventListener("click", () => {
+    const text = input.value.trim();
+    if (!text) {
+      input.focus();
+      return;
+    }
+    settle();
+    send({
+      ...newEnvelope("client.query_response"),
+      payload: { prompt_id: payload.prompt_id, text },
+    });
+  });
+  controls.appendChild(submit);
+
+  el.log.appendChild(wrap);
   el.log.scrollTop = el.log.scrollHeight;
 }
 
-function sendCreationAnswer(sessionId, answer) {
-  send({
-    ...newEnvelope("character.creation_answer"),
-    payload: { session_id: sessionId, answer },
-  });
+function onClientChoice(payload) {
+  const wrap = clientPromptWrap(payload.prompt_text);
+  const controls = wrap.querySelector(".client-prompt-controls");
+
+  const settle = () => {
+    controls.querySelectorAll("button").forEach((c) => {
+      c.disabled = true;
+    });
+    wrap.classList.add("answered");
+  };
+
+  for (const option of payload.options || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = option.label || option.value;
+    button.addEventListener("click", () => {
+      settle();
+      send({
+        ...newEnvelope("client.choice_response"),
+        payload: { prompt_id: payload.prompt_id, value: option.value },
+      });
+    });
+    controls.appendChild(button);
+  }
+
+  el.log.appendChild(wrap);
+  el.log.scrollTop = el.log.scrollHeight;
 }
 
-function creationPromptEl(payload) {
+// clientPromptWrap builds the shared bubble shell (prompt text + an empty
+// controls row) that onClientQuery / onClientChoice fill in.
+function clientPromptWrap(promptText) {
   const wrap = document.createElement("div");
-  wrap.className = "creation-prompt";
+  wrap.className = "client-prompt";
 
   const text = document.createElement("div");
-  text.className = "creation-prompt-text";
-  text.textContent = payload.prompt_text || "";
+  text.className = "client-prompt-text";
+  text.textContent = promptText || "";
   wrap.appendChild(text);
 
   const controls = document.createElement("div");
-  controls.className = "creation-prompt-controls";
+  controls.className = "client-prompt-controls";
   wrap.appendChild(controls);
-
-  // Answering disables this specific prompt's own controls (so it can't
-  // be answered twice) and visually settles it — the next prompt in the
-  // conversation arrives as its own new bubble below, same as any other
-  // live message.
-  const answerAndSettle = (answer) => {
-    if (!answer) return;
-    controls.querySelectorAll("button, textarea, input").forEach((control) => {
-      control.disabled = true;
-    });
-    wrap.classList.add("answered");
-    sendCreationAnswer(payload.session_id, answer);
-  };
-
-  if (payload.choices && payload.choices.length > 0) {
-    for (const choice of payload.choices) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = choice;
-      button.addEventListener("click", () => answerAndSettle(choice));
-      controls.appendChild(button);
-    }
-  } else {
-    const input = document.createElement("textarea");
-    input.className = "creation-prompt-input";
-    input.rows = 3;
-    controls.appendChild(input);
-
-    // accepts_file_upload is set only on the import sub-flow's "paste
-    // your character's JSON" prompt (Master's own
-    // CharacterCreationPromptPayload.AcceptsFileUpload) — a System Engine
-    // free-text question (e.g. a spell-name entry with no fixed list)
-    // never sets it, so a file picker only ever appears where pasted/
-    // uploaded JSON is actually expected.
-    if (payload.accepts_file_upload) {
-      const fileInput = document.createElement("input");
-      fileInput.type = "file";
-      fileInput.accept = "application/json,.json";
-      fileInput.className = "creation-prompt-file";
-      const maxBytes = 256 * 1024;
-      fileInput.addEventListener("change", () => {
-        const file = fileInput.files && fileInput.files[0];
-        if (!file) return;
-        if (file.size > maxBytes) {
-          appendErrorNote(`"${file.name}" is too large (${Math.round(file.size / 1024)} KB) — character files are expected well under 256 KB.`);
-          fileInput.value = "";
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = () => {
-          input.value = typeof reader.result === "string" ? reader.result : "";
-        };
-        reader.onerror = () => appendErrorNote(`Could not read "${file.name}".`);
-        reader.readAsText(file);
-      });
-      controls.appendChild(fileInput);
-    }
-
-    const submit = document.createElement("button");
-    submit.type = "button";
-    submit.textContent = "Send";
-    submit.addEventListener("click", () => answerAndSettle(input.value.trim()));
-    controls.appendChild(submit);
-  }
 
   return wrap;
 }

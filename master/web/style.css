@@ -436,10 +436,11 @@ button.secondary {
   color: var(--leather-ink);
 }
 
-/* character.creation_prompt (design doc §9.4) — a private, direct reply
+/* client.query / client.choice (design doc §4) — a private, direct reply
    to this connection only, rendered as a bubble-family card (not a
-   plain .note) since it's interactive, not just informational. */
-.creation-prompt {
+   plain .note) since it's interactive, not just informational. The
+   character-creation conversation (design doc §9.4) runs on these. */
+.client-prompt {
   max-width: 72ch;
   padding: 12px 14px;
   border-radius: 10px;
@@ -451,24 +452,24 @@ button.secondary {
   box-shadow: 0 10px 18px -8px var(--bubble-shadow);
 }
 
-.creation-prompt-text {
+.client-prompt-text {
   white-space: pre-wrap;
   margin-bottom: 8px;
 }
 
-.creation-prompt-controls {
+.client-prompt-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: flex-start;
 }
 
-.creation-prompt-controls button {
+.client-prompt-controls button {
   padding: 7px 12px;
   font-size: 13px;
 }
 
-.creation-prompt-input {
+.client-prompt-input {
   flex: 1 1 100%;
   min-width: 0;
   padding: 8px 10px;
@@ -480,7 +481,7 @@ button.secondary {
   resize: vertical;
 }
 
-.creation-prompt-file {
+.client-prompt-file {
   flex: 1 1 100%;
   font-size: 13px;
   color: var(--parchment-ink-dim);
@@ -488,7 +489,7 @@ button.secondary {
 
 /* Answered prompts stay visible in scrollback but visually settle —
    same "pending" opacity treatment .bubble.pending already uses. */
-.creation-prompt.answered {
+.client-prompt.answered {
   opacity: 0.6;
 }
 

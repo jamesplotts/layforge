@@ -226,8 +226,8 @@ type Server struct {
 	// creationSessions maps an in-progress character-creation
 	// session_id to the sender_id that started it (character_creation.go)
 	// — Master's own record of "which player is working on which
-	// creation session," checked before forwarding a
-	// character.creation_answer to the System Engine's session of the
+	// creation session," checked in routeCreationAnswer before an answer
+	// reaches anything else, including the System Engine's session of the
 	// same ID, so one player can never answer another's prompt.
 	// In-memory only, guarded by its own mutex, same ephemeral-by-design
 	// shape as turnOrders/combatMaps/audioStreams — an abandoned or
@@ -727,16 +727,6 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// Not recorded: like character.schema_request/character.get, this
 		// is a query kicking off a flow, not itself a game event.
 		return s.handleCreationStart(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req.Payload.CharacterName)
-	case protocol.MessageTypeCharacterCreationAnswer:
-		var req protocol.CharacterCreationAnswerMessage
-		if err := json.Unmarshal(data, &req); err != nil {
-			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed character.creation_answer payload: %w", err))
-		}
-		// Not recorded: per design doc §10's same reasoning as audio.chunk
-		// above — only the finished character (a real character.state,
-		// or an import's own character.validation_result) becomes part of
-		// the durable log, not the back-and-forth that produced it.
-		return s.handleCreationAnswer(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	case protocol.MessageTypeClientQueryResponse:
 		var req protocol.ClientQueryResponseMessage
 		if err := json.Unmarshal(data, &req); err != nil {

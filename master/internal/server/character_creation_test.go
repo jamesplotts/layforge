@@ -51,32 +51,98 @@ func sendCreationStart(ctx context.Context, conn *websocket.Conn, campaignID, se
 
 func sendCreationStartNamed(ctx context.Context, conn *websocket.Conn, campaignID, sender, characterName string) error {
 	msg := protocol.CharacterCreationStartMessage{
-		Envelope: protocol.Envelope{
-			ProtocolVersion: protocol.CurrentProtocolVersion,
-			MessageID:       sender + "-creation-start",
-			Timestamp:       time.Now().UTC(),
-			SenderID:        sender,
-			CampaignID:      campaignID,
-			Type:            protocol.MessageTypeCharacterCreationStart,
-		},
-		Payload: protocol.CharacterCreationStartPayload{CharacterName: characterName},
+		Envelope: creationEnv(protocol.MessageTypeCharacterCreationStart, sender+"-creation-start", sender, campaignID),
+		Payload:  protocol.CharacterCreationStartPayload{CharacterName: characterName},
 	}
 	return wsjson.Write(ctx, conn, msg)
 }
 
-func sendCreationAnswer(ctx context.Context, conn *websocket.Conn, campaignID, sender, messageID, sessionID, answer string) error {
-	msg := protocol.CharacterCreationAnswerMessage{
-		Envelope: protocol.Envelope{
-			ProtocolVersion: protocol.CurrentProtocolVersion,
-			MessageID:       messageID,
-			Timestamp:       time.Now().UTC(),
-			SenderID:        sender,
-			CampaignID:      campaignID,
-			Type:            protocol.MessageTypeCharacterCreationAnswer,
-		},
-		Payload: protocol.CharacterCreationAnswerPayload{SessionID: sessionID, Answer: answer},
+func creationEnv(msgType protocol.MessageType, messageID, sender, campaignID string) protocol.Envelope {
+	return protocol.Envelope{
+		ProtocolVersion: protocol.CurrentProtocolVersion,
+		MessageID:       messageID,
+		Timestamp:       time.Now().UTC(),
+		SenderID:        sender,
+		CampaignID:      campaignID,
+		Type:            msgType,
 	}
-	return wsjson.Write(ctx, conn, msg)
+}
+
+// creationPrompt is the next question the creation flow sent — a
+// client.query (free text) or a client.choice (buttons) — normalized so
+// the tests that walk the conversation don't care which.
+type creationPrompt struct {
+	promptID          string
+	text              string
+	choiceValues      []string
+	isChoice          bool
+	acceptsFileUpload bool
+}
+
+// readCreationPrompt reads the next frame on conn and asserts it is a
+// client.query or client.choice, returning its normalized form.
+func readCreationPrompt(t *testing.T, ctx context.Context, conn *websocket.Conn) creationPrompt {
+	t.Helper()
+	var raw struct {
+		Type    protocol.MessageType `json:"type"`
+		Payload json.RawMessage      `json:"payload"`
+	}
+	if err := wsjson.Read(ctx, conn, &raw); err != nil {
+		t.Fatalf("Read(creation prompt) error = %v", err)
+	}
+	switch raw.Type {
+	case protocol.MessageTypeClientQuery:
+		var p protocol.ClientQueryPayload
+		if err := json.Unmarshal(raw.Payload, &p); err != nil {
+			t.Fatalf("Unmarshal(client.query payload) error = %v", err)
+		}
+		return creationPrompt{promptID: p.PromptID, text: p.PromptText, acceptsFileUpload: p.AcceptsFileUpload}
+	case protocol.MessageTypeClientChoice:
+		var p protocol.ClientChoicePayload
+		if err := json.Unmarshal(raw.Payload, &p); err != nil {
+			t.Fatalf("Unmarshal(client.choice payload) error = %v", err)
+		}
+		values := make([]string, len(p.Options))
+		for i, o := range p.Options {
+			values[i] = o.Value
+		}
+		return creationPrompt{promptID: p.PromptID, text: p.PromptText, choiceValues: values, isChoice: true}
+	default:
+		t.Fatalf("expected a client.query or client.choice, got %q", raw.Type)
+		return creationPrompt{}
+	}
+}
+
+// answerCreationPrompt sends the response matching p's kind —
+// client.choice_response for a choice, client.query_response otherwise.
+func answerCreationPrompt(t *testing.T, ctx context.Context, conn *websocket.Conn, campaignID, sender string, p creationPrompt, answer string) {
+	t.Helper()
+	mid := sender + "-resp-" + p.promptID
+	var msg any
+	if p.isChoice {
+		msg = protocol.ClientChoiceResponseMessage{
+			Envelope: creationEnv(protocol.MessageTypeClientChoiceResponse, mid, sender, campaignID),
+			Payload:  protocol.ClientChoiceResponsePayload{PromptID: p.promptID, Value: answer},
+		}
+	} else {
+		msg = protocol.ClientQueryResponseMessage{
+			Envelope: creationEnv(protocol.MessageTypeClientQueryResponse, mid, sender, campaignID),
+			Payload:  protocol.ClientQueryResponsePayload{PromptID: p.promptID, Text: answer},
+		}
+	}
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		t.Fatalf("answerCreationPrompt(%q) write error = %v", answer, err)
+	}
+}
+
+// answerCreationChoiceID sends a client.choice_response with an explicit
+// prompt_id — for the tests that deliberately answer an unknown or
+// someone else's prompt.
+func answerCreationChoiceID(ctx context.Context, conn *websocket.Conn, campaignID, sender, promptID, value string) error {
+	return wsjson.Write(ctx, conn, protocol.ClientChoiceResponseMessage{
+		Envelope: creationEnv(protocol.MessageTypeClientChoiceResponse, sender+"-resp", sender, campaignID),
+		Payload:  protocol.ClientChoiceResponsePayload{PromptID: promptID, Value: value},
+	})
 }
 
 func TestServe_CreationStart_WithEngine_OffersImportAndRoll(t *testing.T) {
@@ -91,26 +157,23 @@ func TestServe_CreationStart_WithEngine_OffersImportAndRoll(t *testing.T) {
 	if err := sendCreationStart(ctx, conn, "campaign-creation", "player-a"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var prompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &prompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) error = %v", err)
+	prompt := readCreationPrompt(t, ctx, conn)
+	if prompt.promptID == "" {
+		t.Error("promptID is empty, want a generated id")
 	}
-	if prompt.Payload.SessionID == "" {
-		t.Error("Payload.SessionID is empty, want a generated id")
+	if !prompt.isChoice {
+		t.Fatalf("top-level prompt is a query, want a choice")
 	}
 	// No pregens authored, so pregen is not offered; the three
 	// engine-backed choices are.
 	want := map[string]bool{"import": true, "quick_roll": true, "detailed_roll": true}
-	if len(prompt.Payload.Choices) != len(want) {
-		t.Fatalf("Payload.Choices = %v, want exactly %v", prompt.Payload.Choices, want)
+	if len(prompt.choiceValues) != len(want) {
+		t.Fatalf("choice values = %v, want exactly %v", prompt.choiceValues, want)
 	}
-	for _, c := range prompt.Payload.Choices {
+	for _, c := range prompt.choiceValues {
 		if !want[c] {
 			t.Errorf("unexpected choice %q", c)
 		}
-	}
-	if prompt.Payload.AcceptsFileUpload {
-		t.Error("top-level prompt AcceptsFileUpload = true, want false")
 	}
 }
 
@@ -135,7 +198,7 @@ func TestServe_CreationStart_NoEngineNoPregens_ClearError(t *testing.T) {
 	}
 }
 
-func TestServe_CreationAnswer_UnknownSession_ReturnsSystemError(t *testing.T) {
+func TestServe_CreationAnswer_UnknownPrompt_ReturnsSystemError(t *testing.T) {
 	ts, _ := newTestServerForCreation(t, nil)
 	defer ts.Close()
 
@@ -144,8 +207,8 @@ func TestServe_CreationAnswer_UnknownSession_ReturnsSystemError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-unknown", "player-a", "answer-1", "no-such-session", "import"); err != nil {
-		t.Fatalf("sendCreationAnswer() error = %v", err)
+	if err := answerCreationChoiceID(ctx, conn, "campaign-creation-unknown", "player-a", "no-such-prompt", "import"); err != nil {
+		t.Fatalf("answerCreationChoiceID() error = %v", err)
 	}
 	var errMsg protocol.SystemErrorMessage
 	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
@@ -154,7 +217,7 @@ func TestServe_CreationAnswer_UnknownSession_ReturnsSystemError(t *testing.T) {
 }
 
 func TestServe_CreationAnswer_WrongSender_ReturnsSystemError(t *testing.T) {
-	ts, _ := newTestServerForCreation(t, nil)
+	ts, _ := newTestServerForCreation(t, &fakeSystemEngineClient{})
 	defer ts.Close()
 
 	connA := dialAndJoin(t, ts, "campaign-creation-wrong-sender", "player-a")
@@ -167,18 +230,18 @@ func TestServe_CreationAnswer_WrongSender_ReturnsSystemError(t *testing.T) {
 	if err := sendCreationStart(ctx, connA, "campaign-creation-wrong-sender", "player-a"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var prompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, connA, &prompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) error = %v", err)
-	}
+	prompt := readCreationPrompt(t, ctx, connA)
 
-	// player-b tries to answer player-a's own session.
-	if err := sendCreationAnswer(ctx, connB, "campaign-creation-wrong-sender", "player-b", "answer-1", prompt.Payload.SessionID, "import"); err != nil {
-		t.Fatalf("sendCreationAnswer() error = %v", err)
+	// player-b tries to answer player-a's own prompt.
+	if err := answerCreationChoiceID(ctx, connB, "campaign-creation-wrong-sender", "player-b", prompt.promptID, "import"); err != nil {
+		t.Fatalf("answerCreationChoiceID() error = %v", err)
 	}
 	var errMsg protocol.SystemErrorMessage
 	if err := wsjson.Read(ctx, connB, &errMsg); err != nil {
 		t.Fatalf("Read(system.error) error = %v", err)
+	}
+	if !strings.Contains(errMsg.Payload.Message, "not addressed to you") {
+		t.Errorf("message = %q, want it to say the prompt was not addressed to this sender", errMsg.Payload.Message)
 	}
 }
 
@@ -203,28 +266,18 @@ func TestServe_CreationImport_FullFlow_SavesAndRespondsWithValidationResult(t *t
 	if err := sendCreationStart(ctx, conn, "campaign-creation-import", "player-a"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var prompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &prompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) error = %v", err)
+	topPrompt := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-import", "player-a", topPrompt, "import")
+
+	pastePrompt := readCreationPrompt(t, ctx, conn)
+	if pastePrompt.isChoice {
+		t.Errorf("paste-JSON prompt is a choice, want a free-text query")
+	}
+	if !pastePrompt.acceptsFileUpload {
+		t.Error("paste-JSON prompt acceptsFileUpload = false, want true — this is where the client should offer a file picker")
 	}
 
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-import", "player-a", "answer-1", prompt.Payload.SessionID, "import"); err != nil {
-		t.Fatalf("sendCreationAnswer(import) error = %v", err)
-	}
-	var pastePrompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &pastePrompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) (paste JSON) error = %v", err)
-	}
-	if len(pastePrompt.Payload.Choices) != 0 {
-		t.Errorf("paste-JSON prompt Choices = %v, want empty (free text)", pastePrompt.Payload.Choices)
-	}
-	if !pastePrompt.Payload.AcceptsFileUpload {
-		t.Error("paste-JSON prompt AcceptsFileUpload = false, want true — this is where the client should offer a file picker")
-	}
-
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-import", "player-a", "answer-2", pastePrompt.Payload.SessionID, `{"name":"Kestrel"}`); err != nil {
-		t.Fatalf("sendCreationAnswer(json) error = %v", err)
-	}
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-import", "player-a", pastePrompt, `{"name":"Kestrel"}`)
 	var validation protocol.CharacterValidationResultMessage
 	if err := wsjson.Read(ctx, conn, &validation); err != nil {
 		t.Fatalf("Read(character.validation_result) error = %v", err)
@@ -249,8 +302,9 @@ func TestServe_CreationPregen_NotConfigured_ReturnsSystemError(t *testing.T) {
 		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
 	}
 	defer st.Close()
-	// pregens deliberately left nil.
-	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, nil, st, nil, nil, st, st, st, nil, nil, nil, nil, session.NewHub()).Handler())
+	// pregens deliberately left nil, but the engine is up so "pregen"
+	// stays reachable as a top-level choice to exercise this path.
+	ts := httptest.NewServer(server.New(logger, st, nil, "", nil, &fakeSystemEngineClient{}, st, nil, nil, st, st, st, nil, nil, nil, nil, session.NewHub()).Handler())
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-creation-pregen-unconfigured", "player-a")
@@ -261,13 +315,10 @@ func TestServe_CreationPregen_NotConfigured_ReturnsSystemError(t *testing.T) {
 	if err := sendCreationStart(ctx, conn, "campaign-creation-pregen-unconfigured", "player-a"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var prompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &prompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) error = %v", err)
-	}
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-pregen-unconfigured", "player-a", "answer-1", prompt.Payload.SessionID, "pregen"); err != nil {
-		t.Fatalf("sendCreationAnswer(pregen) error = %v", err)
-	}
+	prompt := readCreationPrompt(t, ctx, conn)
+	// The engine is up but pregens are nil, so "pregen" is not among the
+	// offered choices; answering it anyway must still be rejected cleanly.
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-pregen-unconfigured", "player-a", prompt, "pregen")
 	var errMsg protocol.SystemErrorMessage
 	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
 		t.Fatalf("Read(system.error) error = %v", err)
@@ -299,23 +350,15 @@ func TestServe_CreationPregen_FullFlow_ClaimsIndependentCharacterPerPlayer(t *te
 		if err := sendCreationStart(ctx, conn, "campaign-creation-pregen", sender); err != nil {
 			t.Fatalf("sendCreationStart() error = %v", err)
 		}
-		var prompt protocol.CharacterCreationPromptMessage
-		if err := wsjson.Read(ctx, conn, &prompt); err != nil {
-			t.Fatalf("Read(character.creation_prompt) error = %v", err)
+		topPrompt := readCreationPrompt(t, ctx, conn)
+		answerCreationPrompt(t, ctx, conn, "campaign-creation-pregen", sender, topPrompt, "pregen")
+
+		pregenPrompt := readCreationPrompt(t, ctx, conn)
+		if !pregenPrompt.isChoice || len(pregenPrompt.choiceValues) != 1 || pregenPrompt.choiceValues[0] != "bram-fighter" {
+			t.Fatalf("pregen list choice values = %v, want [bram-fighter]", pregenPrompt.choiceValues)
 		}
-		if err := sendCreationAnswer(ctx, conn, "campaign-creation-pregen", sender, "answer-1", prompt.Payload.SessionID, "pregen"); err != nil {
-			t.Fatalf("sendCreationAnswer(pregen) error = %v", err)
-		}
-		var pregenPrompt protocol.CharacterCreationPromptMessage
-		if err := wsjson.Read(ctx, conn, &pregenPrompt); err != nil {
-			t.Fatalf("Read(character.creation_prompt) (pregen list) error = %v", err)
-		}
-		if len(pregenPrompt.Payload.Choices) != 1 || pregenPrompt.Payload.Choices[0] != "bram-fighter" {
-			t.Fatalf("pregen list Choices = %v, want [bram-fighter]", pregenPrompt.Payload.Choices)
-		}
-		if err := sendCreationAnswer(ctx, conn, "campaign-creation-pregen", sender, "answer-2", pregenPrompt.Payload.SessionID, "bram-fighter"); err != nil {
-			t.Fatalf("sendCreationAnswer(bram-fighter) error = %v", err)
-		}
+		answerCreationPrompt(t, ctx, conn, "campaign-creation-pregen", sender, pregenPrompt, "bram-fighter")
+
 		var validation protocol.CharacterValidationResultMessage
 		if err := wsjson.Read(ctx, conn, &validation); err != nil {
 			t.Fatalf("Read(character.validation_result) error = %v", err)
@@ -361,6 +404,9 @@ func TestServe_CreationPregen_FullFlow_ClaimsIndependentCharacterPerPlayer(t *te
 }
 
 func TestServe_CreationRoll_NoSystemEngine_ReturnsSystemError(t *testing.T) {
+	// The engine is up for the top-level prompt so "quick_roll" is
+	// offered, then removed before the answer is processed to exercise
+	// the mid-flow "no engine" guard.
 	ts, _ := newTestServerForCreation(t, nil)
 	defer ts.Close()
 
@@ -372,13 +418,8 @@ func TestServe_CreationRoll_NoSystemEngine_ReturnsSystemError(t *testing.T) {
 	if err := sendCreationStart(ctx, conn, "campaign-creation-roll-noengine", "player-a"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var prompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &prompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) error = %v", err)
-	}
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-roll-noengine", "player-a", "answer-1", prompt.Payload.SessionID, "quick_roll"); err != nil {
-		t.Fatalf("sendCreationAnswer(quick_roll) error = %v", err)
-	}
+	// No engine: the top-level prompt itself is the "creation unavailable"
+	// system.error.
 	var errMsg protocol.SystemErrorMessage
 	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
 		t.Fatalf("Read(system.error) error = %v", err)
@@ -386,7 +427,7 @@ func TestServe_CreationRoll_NoSystemEngine_ReturnsSystemError(t *testing.T) {
 }
 
 func TestServe_CreationRoll_RelaysEnginePromptsUntilDoneAndSavesCharacter(t *testing.T) {
-	characterData, err := structpb.NewStruct(map[string]any{"name": "player-a", "gender": "nonbinary"})
+	characterData, err := structpb.NewStruct(map[string]any{"name": "player-a", "gender": "Male"})
 	if err != nil {
 		t.Fatalf("structpb.NewStruct() error = %v", err)
 	}
@@ -425,30 +466,18 @@ func TestServe_CreationRoll_RelaysEnginePromptsUntilDoneAndSavesCharacter(t *tes
 	if err := sendCreationStartNamed(ctx, conn, "campaign-creation-roll", "player-a", "Bram the Bold"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var topPrompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &topPrompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) (top-level) error = %v", err)
+	topPrompt := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-roll", "player-a", topPrompt, "detailed_roll")
+
+	racePrompt := readCreationPrompt(t, ctx, conn)
+	if racePrompt.text != "Choose your race." {
+		t.Errorf("text = %q, want %q", racePrompt.text, "Choose your race.")
 	}
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-roll", "player-a", "answer-1", topPrompt.Payload.SessionID, "detailed_roll"); err != nil {
-		t.Fatalf("sendCreationAnswer(detailed_roll) error = %v", err)
-	}
-	var racePrompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &racePrompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) (race) error = %v", err)
-	}
-	if racePrompt.Payload.PromptText != "Choose your race." {
-		t.Errorf("PromptText = %q, want %q", racePrompt.Payload.PromptText, "Choose your race.")
-	}
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-roll", "player-a", "answer-2", racePrompt.Payload.SessionID, "Human"); err != nil {
-		t.Fatalf("sendCreationAnswer(Human) error = %v", err)
-	}
-	var classPrompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &classPrompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) (class) error = %v", err)
-	}
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-roll", "player-a", "answer-3", classPrompt.Payload.SessionID, "Fighter"); err != nil {
-		t.Fatalf("sendCreationAnswer(Fighter) error = %v", err)
-	}
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-roll", "player-a", racePrompt, "Human")
+
+	classPrompt := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-roll", "player-a", classPrompt, "Fighter")
+
 	var validation protocol.CharacterValidationResultMessage
 	if err := wsjson.Read(ctx, conn, &validation); err != nil {
 		t.Fatalf("Read(character.validation_result) error = %v", err)
@@ -484,21 +513,102 @@ func TestServe_CreationRoll_EngineReportsFailure_ReturnsSystemError(t *testing.T
 	if err := sendCreationStart(ctx, conn, "campaign-creation-roll-fail", "player-a"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var prompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &prompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) error = %v", err)
-	}
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-roll-fail", "player-a", "answer-1", prompt.Payload.SessionID, "quick_roll"); err != nil {
-		t.Fatalf("sendCreationAnswer(quick_roll) error = %v", err)
-	}
+	prompt := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-roll-fail", "player-a", prompt, "quick_roll")
 	var errMsg protocol.SystemErrorMessage
 	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
 		t.Fatalf("Read(system.error) error = %v", err)
 	}
 }
 
+func TestServe_CreationPregen_ChoiceCarriesReadableLabels(t *testing.T) {
+	ts, st := newTestServerForCreation(t, nil)
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := st.SavePregen(ctx, store.Pregen{
+		ID:            "bram-fighter",
+		CampaignID:    "campaign-pregen-labels",
+		Name:          "Bram the Bold",
+		Description:   "A stalwart level-1 fighter.",
+		SchemaVersion: "opencombatengine-v1",
+		CharacterData: json.RawMessage(`{"name":"Bram"}`),
+		CreatedAt:     time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SavePregen() error = %v", err)
+	}
+
+	conn := dialAndJoin(t, ts, "campaign-pregen-labels", "player-a")
+	defer conn.CloseNow()
+
+	if err := sendCreationStart(ctx, conn, "campaign-pregen-labels", "player-a"); err != nil {
+		t.Fatalf("sendCreationStart() error = %v", err)
+	}
+	top := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-pregen-labels", "player-a", top, "pregen")
+
+	// Read the raw client.choice so both value and label can be checked.
+	var raw struct {
+		Type    protocol.MessageType         `json:"type"`
+		Payload protocol.ClientChoicePayload `json:"payload"`
+	}
+	if err := wsjson.Read(ctx, conn, &raw); err != nil {
+		t.Fatalf("Read(client.choice) error = %v", err)
+	}
+	if raw.Type != protocol.MessageTypeClientChoice || len(raw.Payload.Options) != 1 {
+		t.Fatalf("got %q with options %+v", raw.Type, raw.Payload.Options)
+	}
+	opt := raw.Payload.Options[0]
+	if opt.Value != "bram-fighter" {
+		t.Errorf("option value = %q, want the pregen id", opt.Value)
+	}
+	if !strings.Contains(opt.Label, "Bram the Bold") || !strings.Contains(opt.Label, "stalwart") {
+		t.Errorf("option label = %q, want the readable name and description", opt.Label)
+	}
+}
+
+func TestServe_CreationAnswer_WrongResponseKind_ReturnsSystemError(t *testing.T) {
+	ts, _ := newTestServerForCreation(t, &fakeSystemEngineClient{})
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-creation-wrongkind", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := sendCreationStart(ctx, conn, "campaign-creation-wrongkind", "player-a"); err != nil {
+		t.Fatalf("sendCreationStart() error = %v", err)
+	}
+	prompt := readCreationPrompt(t, ctx, conn)
+	if !prompt.isChoice {
+		t.Fatalf("expected the top-level prompt to be a choice")
+	}
+	// Answer a client.choice prompt with a client.query_response.
+	if err := wsjson.Write(ctx, conn, protocol.ClientQueryResponseMessage{
+		Envelope: creationEnv(protocol.MessageTypeClientQueryResponse, "player-a-wrongkind", "player-a", "campaign-creation-wrongkind"),
+		Payload:  protocol.ClientQueryResponsePayload{PromptID: prompt.promptID, Text: "import"},
+	}); err != nil {
+		t.Fatalf("write client.query_response error = %v", err)
+	}
+	var errMsg protocol.SystemErrorMessage
+	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
+		t.Fatalf("Read(system.error) error = %v", err)
+	}
+	if !strings.Contains(errMsg.Payload.Message, "wrong response type") {
+		t.Errorf("message = %q, want it to name the wrong response type", errMsg.Payload.Message)
+	}
+
+	// The prompt must still be answerable the correct way afterward.
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-wrongkind", "player-a", prompt, "import")
+	next := readCreationPrompt(t, ctx, conn)
+	if next.isChoice {
+		t.Errorf("expected the paste-JSON query after answering, got a choice")
+	}
+}
+
 func TestServe_CreationTopLevel_InvalidAnswer_ReturnsSystemError(t *testing.T) {
-	ts, _ := newTestServerForCreation(t, nil)
+	ts, _ := newTestServerForCreation(t, &fakeSystemEngineClient{})
 	defer ts.Close()
 
 	conn := dialAndJoin(t, ts, "campaign-creation-invalid", "player-a")
@@ -509,13 +619,8 @@ func TestServe_CreationTopLevel_InvalidAnswer_ReturnsSystemError(t *testing.T) {
 	if err := sendCreationStart(ctx, conn, "campaign-creation-invalid", "player-a"); err != nil {
 		t.Fatalf("sendCreationStart() error = %v", err)
 	}
-	var prompt protocol.CharacterCreationPromptMessage
-	if err := wsjson.Read(ctx, conn, &prompt); err != nil {
-		t.Fatalf("Read(character.creation_prompt) error = %v", err)
-	}
-	if err := sendCreationAnswer(ctx, conn, "campaign-creation-invalid", "player-a", "answer-1", prompt.Payload.SessionID, "not-a-real-choice"); err != nil {
-		t.Fatalf("sendCreationAnswer() error = %v", err)
-	}
+	prompt := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-invalid", "player-a", prompt, "not-a-real-choice")
 	var errMsg protocol.SystemErrorMessage
 	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
 		t.Fatalf("Read(system.error) error = %v", err)

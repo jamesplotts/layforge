@@ -105,22 +105,26 @@ src>`, with no code changes needed after the fact.
 
 There's also now a real character-creation flow (design doc §9.4) in
 place of the old stopgap stock-character upload. `onJoined` sends
-`character.creation_start` instead, and Master's reply — and every
-prompt after it — renders as an ordinary-looking chat bubble: a
-**prompt bubble** (`onCreationPrompt`/`creationPromptEl` in `app.js`),
-with one button per offered choice, or a textarea + Send for free text
-(currently only the gender question). Clicking a choice or submitting
-text sends `character.creation_answer`; the bubble dims and disables
-itself (`.answered`) once answered, and the next prompt appends below
-it — no separate wizard screen, no modal, the whole exchange just reads
-as a sequence of chat messages the player answers at their own pace.
+`character.creation_start` instead, and Master then drives the whole
+conversation with the generic `client.*` prompt family (design doc §4):
+`client.choice` (a prompt + one button per option, each option a
+`{value, label}` pair) and `client.query` (a prompt + textarea + Send,
+used for pasting JSON and any free-text engine question). Each renders
+as an ordinary-looking chat bubble (`onClientChoice` / `onClientQuery`
+in `app.js`, sharing `clientPromptWrap`). Clicking a choice sends
+`client.choice_response { prompt_id, value }`; submitting text sends
+`client.query_response { prompt_id, text }`; the bubble dims and
+disables itself (`.answered`) once answered, and the next prompt appends
+below it — no separate wizard screen, no modal, the whole exchange just
+reads as a sequence of chat messages the player answers at their own
+pace.
 The very first prompt offers four paths: **import** (falls straight
 into the existing paste-JSON flow, now entered this way instead of a
 dedicated screen — its own free-text prompt sets
 `accepts_file_upload`, which adds a real file picker next to the
 textarea, `FileReader`-ing a chosen file straight into it so a player
 can bring in a saved character file instead of copy-pasting; still the
-same `character.creation_answer` on the wire either way), **quick_roll**
+same `client.query_response` on the wire either way), **quick_roll**
 (three real questions — race, class,
 gender — then everything else, including a spellcaster's cantrips/
 prepared spells/slots, is rolled up automatically), **detailed_roll**

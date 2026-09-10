@@ -32,8 +32,10 @@ const (
 )
 
 // creationStage records what kind of answer an in-progress creation
-// session is currently waiting on, so handleCreationAnswer knows how to
-// interpret the next character.creation_answer it receives — the same
+// session is currently waiting on, so routeCreationAnswer knows how to
+// interpret the next answer it receives (a client.query_response or a
+// client.choice_response, routed here by the pending-prompt registry) —
+// the same
 // session_id is reused end to end (Master's own top-level prompt, then
 // whichever sub-flow the player picked), so the stage is what actually
 // distinguishes "you're answering the top-level choice" from "you're
@@ -119,7 +121,7 @@ func (s *Server) handleCreationStart(ctx context.Context, conn *websocket.Conn, 
 			errors.New("character creation isn't available yet: this Master has no system engine configured (needed to roll or import a character) and the Host hasn't added any pregenerated characters. Ask the Host to set -system-engine-addr or add a pregen on the admin panel."))
 	}
 
-	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID,
+	return s.sendCreationPrompt(ctx, conn, campaignID, senderID, sessionID,
 		"How would you like to create your character? You can "+joinWithOr(parts)+".",
 		choices,
 		false,
@@ -141,40 +143,46 @@ func joinWithOr(parts []string) string {
 	}
 }
 
-// handleCreationAnswer implements character.creation_answer: routes the
-// player's answer by whatever stage their session is currently in.
-// Rejects outright (system.error) when sessionID is unknown/expired or
-// doesn't belong to senderID — Master's own record of who started which
-// session, checked before this answer ever reaches anything else,
-// including a System Engine session of the same ID.
-func (s *Server) handleCreationAnswer(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.CharacterCreationAnswerMessage) error {
-	sess, ok := s.getCreationSession(req.Payload.SessionID)
+// routeCreationAnswer routes one creation answer by whatever stage the
+// session is currently in. It is the deliver callback the pending-prompt
+// registry (clientmsg.go) invokes when the matching client.query_response
+// / client.choice_response arrives — the registry has already checked the
+// prompt belongs to this sender, so the remaining check here is only that
+// the session still exists (it is Master's own record of who started
+// which session, and the same session_id is later reused for a System
+// Engine session of the same ID).
+func (s *Server) routeCreationAnswer(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID, answer string) error {
+	sess, ok := s.getCreationSession(sessionID)
 	if !ok || sess.senderID != senderID {
-		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("unknown or expired character-creation session"))
+		return s.sendError(ctx, conn, campaignID, "", errors.New("unknown or expired character-creation session"))
 	}
 
 	switch sess.stage {
 	case creationStageTopLevel:
-		return s.handleCreationTopLevelAnswer(ctx, conn, campaignID, senderID, req.Payload.SessionID, req.Payload.Answer, sess.characterName)
+		return s.handleCreationTopLevelAnswer(ctx, conn, campaignID, senderID, sessionID, answer, sess.characterName)
 	case creationStageImport:
-		s.deleteCreationSession(req.Payload.SessionID)
+		s.deleteCreationSession(sessionID)
+		uploadID, err := newMessageID()
+		if err != nil {
+			return err
+		}
 		return s.importCharacter(ctx, conn, campaignID, senderID, protocol.CharacterUploadMessage{
 			Envelope: protocol.Envelope{
 				ProtocolVersion: protocol.CurrentProtocolVersion,
-				MessageID:       req.MessageID,
+				MessageID:       uploadID,
 				Timestamp:       time.Now().UTC(),
 				SenderID:        senderID,
 				CampaignID:      campaignID,
 				Type:            protocol.MessageTypeCharacterUpload,
 			},
-			Payload: protocol.CharacterUploadPayload{CharacterJSON: req.Payload.Answer},
+			Payload: protocol.CharacterUploadPayload{CharacterJSON: answer},
 		})
 	case creationStagePregen:
-		return s.handleCreationPregenAnswer(ctx, conn, campaignID, senderID, req.Payload.SessionID, req.Payload.Answer)
+		return s.handleCreationPregenAnswer(ctx, conn, campaignID, senderID, sessionID, answer)
 	case creationStageEngine:
-		return s.handleCreationEngineAnswer(ctx, conn, campaignID, senderID, req.Payload.SessionID, req.Payload.Answer)
+		return s.handleCreationEngineAnswer(ctx, conn, campaignID, senderID, sessionID, answer)
 	default:
-		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("internal error: unrecognized creation stage %v", sess.stage))
+		return s.sendError(ctx, conn, campaignID, "", fmt.Errorf("internal error: unrecognized creation stage %v", sess.stage))
 	}
 }
 
@@ -184,7 +192,7 @@ func (s *Server) handleCreationTopLevelAnswer(ctx context.Context, conn *websock
 	switch answer {
 	case creationChoiceImport:
 		s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageImport, characterName: characterName})
-		return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, "Paste your character's JSON.", nil, true)
+		return s.sendCreationPrompt(ctx, conn, campaignID, senderID, sessionID, "Paste your character's JSON.", nil, true)
 
 	case creationChoicePregen:
 		return s.startCreationPregenChoice(ctx, conn, campaignID, senderID, sessionID)
@@ -199,11 +207,12 @@ func (s *Server) handleCreationTopLevelAnswer(ctx context.Context, conn *websock
 }
 
 // startCreationPregenChoice lists campaignID's real pregens (design doc
-// §9.4's "pick one the Host offers") as a creation prompt whose choices
-// are each pregen's own ID — an ID, not its display Name, is what the
-// player's answer echoes back, so two pregens sharing a display name
-// can never be ambiguous; the prompt text itself still shows the
-// human-readable name and description for each.
+// §9.4's "pick one the Host offers") as a client.choice whose option
+// values are each pregen's own ID and whose labels are the human-readable
+// "Name — description" — a client.choice option carries value and label
+// separately (protocol.ClientChoiceOption), so the player clicks a
+// readable button while the answer that echoes back is the unambiguous
+// ID, even when two pregens share a display name.
 func (s *Server) startCreationPregenChoice(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID string) error {
 	if s.pregens == nil {
 		s.deleteCreationSession(sessionID)
@@ -219,15 +228,16 @@ func (s *Server) startCreationPregenChoice(ctx context.Context, conn *websocket.
 		return s.sendError(ctx, conn, campaignID, "", errors.New("no pregenerated characters are configured for this campaign"))
 	}
 
-	var text strings.Builder
-	text.WriteString("Choose a pregenerated character:\n")
-	choices := make([]string, len(pregens))
+	options := make([]protocol.ClientChoiceOption, len(pregens))
 	for i, p := range pregens {
-		choices[i] = p.ID
-		fmt.Fprintf(&text, "- %s: %s — %s\n", p.ID, p.Name, p.Description)
+		label := p.Name
+		if p.Description != "" {
+			label = p.Name + " — " + p.Description
+		}
+		options[i] = protocol.ClientChoiceOption{Value: p.ID, Label: label}
 	}
 	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStagePregen})
-	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, text.String(), choices, false)
+	return s.sendCreationChoiceOptions(ctx, conn, campaignID, senderID, sessionID, "Choose a pregenerated character:", options)
 }
 
 // handleCreationPregenAnswer claims pregenID: copies its CharacterData
@@ -328,7 +338,7 @@ func (s *Server) handleCreationEngineResponse(ctx context.Context, conn *websock
 		return s.finishCreationRoll(ctx, conn, campaignID, senderID, resp.Actor)
 	}
 	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageEngine})
-	return s.sendCreationPrompt(ctx, conn, campaignID, sessionID, resp.PromptText, resp.Choices, false)
+	return s.sendCreationPrompt(ctx, conn, campaignID, senderID, sessionID, resp.PromptText, resp.Choices, false)
 }
 
 // finishCreationRoll persists a System-Engine-generated character —
@@ -391,26 +401,63 @@ func (s *Server) sendCreationComplete(ctx context.Context, conn *websocket.Conn,
 	return nil
 }
 
-// sendCreationPrompt sends one character.creation_prompt directly on
-// conn — a plain reply on the requesting player's own connection, the
-// same pattern character.get/character.upload's own replies already
-// use, which is exactly why this needs no new privacy mechanism: nobody
-// but this connection is reading it. acceptsFileUpload is true only for
-// the import sub-flow's own free-text prompt (see
-// handleCreationTopLevelAnswer's import case) — every other caller
-// passes false, including the roll flow's own free-text gender prompt.
-func (s *Server) sendCreationPrompt(ctx context.Context, conn *websocket.Conn, campaignID, sessionID, promptText string, choices []string, acceptsFileUpload bool) error {
-	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterCreationPrompt, protocol.CharacterCreationPromptPayload{
-		SessionID:         sessionID,
-		PromptText:        promptText,
-		Choices:           choices,
-		AcceptsFileUpload: acceptsFileUpload,
+// sendCreationPrompt sends the next character-creation question to the
+// player as a generic client.* prompt — a client.query when choices is
+// empty (free text: a paste-your-JSON step, or a System Engine question
+// with no fixed list), a client.choice otherwise — and registers the
+// pending prompt so the eventual client.query_response /
+// client.choice_response is routed back to routeCreationAnswer for this
+// session. Creation is now just another consumer of the client.* prompt
+// mechanism (clientmsg.go); it owns no bespoke message type of its own.
+//
+// The prompt is written directly on conn — a plain reply on the
+// requesting player's own connection, the same pattern
+// character.get/character.upload's own replies already use, which is why
+// this needs no new privacy mechanism: nobody but this connection reads
+// it. acceptsFileUpload is true only for the import sub-flow's own
+// free-text prompt (see handleCreationTopLevelAnswer's import case).
+func (s *Server) sendCreationPrompt(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID, promptText string, choices []string, acceptsFileUpload bool) error {
+	if len(choices) == 0 {
+		promptID, err := s.sendClientQuery(ctx, conn, campaignID, protocol.ClientQueryPayload{
+			PromptText:        promptText,
+			SubmitLabel:       "Send",
+			AcceptsFileUpload: acceptsFileUpload,
+		})
+		if err != nil {
+			return err
+		}
+		s.registerCreationPrompt(promptID, campaignID, senderID, sessionID, promptKindQuery)
+		return nil
+	}
+	options := make([]protocol.ClientChoiceOption, len(choices))
+	for i, c := range choices {
+		options[i] = protocol.ClientChoiceOption{Value: c, Label: c}
+	}
+	return s.sendCreationChoiceOptions(ctx, conn, campaignID, senderID, sessionID, promptText, options)
+}
+
+// sendCreationChoiceOptions is sendCreationPrompt's choice path for
+// callers that need distinct option values and labels (the pregen list).
+func (s *Server) sendCreationChoiceOptions(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID, promptText string, options []protocol.ClientChoiceOption) error {
+	promptID, err := s.sendClientChoice(ctx, conn, campaignID, protocol.ClientChoicePayload{
+		PromptText: promptText,
+		Options:    options,
 	})
 	if err != nil {
 		return err
 	}
-	if err := wsjson.Write(ctx, conn, msg); err != nil {
-		return fmt.Errorf("writing character.creation_prompt: %w", err)
-	}
+	s.registerCreationPrompt(promptID, campaignID, senderID, sessionID, promptKindChoice)
 	return nil
+}
+
+// registerCreationPrompt records promptID as a pending prompt whose
+// answer is delivered to routeCreationAnswer for sessionID.
+func (s *Server) registerCreationPrompt(promptID, campaignID, senderID, sessionID string, kind promptKind) {
+	s.registerPrompt(promptID, promptWaiter{
+		senderID: senderID,
+		kind:     kind,
+		deliver: func(ctx context.Context, conn *websocket.Conn, answer string) error {
+			return s.routeCreationAnswer(ctx, conn, campaignID, senderID, sessionID, answer)
+		},
+	})
 }
