@@ -2235,8 +2235,53 @@ Covered by `internal/store/sqlite_account_test.go`,
 `internal/auth/discord_oauth_internal_test.go` (an `httptest` stand-in
 for Discord's token + `/users/@me` endpoints), the adapted
 `internal/auth` / `internal/admin` provider tests, and
-`internal/server/acting_sender_internal_test.go`. Not browser-tested with
-a real Discord application this pass.
+`internal/server/acting_sender_internal_test.go`. Live-tested with a real
+Discord application: the full login round trip works.
+
+**Player join flow — an active campaign, a Session tab, and a post-login
+join screen.** The old join screen asked a player for a Master WebSocket
+URL, a Campaign ID, and a Character name — none of which a player has any
+way to know. Reworked:
+
+- **Session tab** (new, the admin panel's default): the "one game
+  running" surface, separate from the Campaign tab's edit/create/delete
+  picker. An **Active campaign** dropdown (`PUT
+  /api/session/active-campaign`) sets what players join; a **Closed to new
+  players** toggle (`PUT /api/session/join-lock`); a live status line and
+  "who's here" roster, polled every 5s. Backed by two `system_settings`
+  keys (`active_campaign_id`, `campaign_join_locked`), read straight from
+  `GetSystemSettings` like the terms keys.
+- **Connect-layer gate** (`sessionGate`, `internal/server/session_info.go`,
+  checked in `handleConnection`): no active campaign set → any join
+  allowed (unchanged for existing/test clients); active set → only that
+  campaign is joinable; locked → only an `actingSender` that already owns
+  a character in it may (re)connect, so returning players and their
+  reconnects get through and newcomers are turned away.
+- **`GET /api/session`** on the player-facing listener
+  (`SessionInfoHandler`) → `{campaign_id, display_name, needs_password,
+  join_locked}`, never the password itself.
+- **`system.connect` gains `campaign_password`**, distinct from
+  `auth_token`, so a campaign can require both a Discord login and a
+  password. `auth.Provider.Authorize` now takes an
+  `auth.Credentials{AuthToken, CampaignPassword}`; `DiscordOAuthProvider`
+  passes the whole struct to its `Next` link so the password chain still
+  runs.
+- **Web client**: the join screen reads `GET /api/session` and shows
+  "Now playing: <name>" (or "the Host hasn't started a game yet", Join
+  disabled), a password field only when the game needs one, and a
+  closed-game note when locked. Campaign-ID and Character-name inputs are
+  gone; the WS URL moved under an Advanced disclosure. `sender_id` is the
+  Discord identity when signed in, else a stable per-browser
+  `localStorage` id.
+- **Character name** is now the first character-creation step
+  (`character.creation_start` carries `character_name`), not a join-screen
+  field — it seeds the roll flow's engine call; import/pregen ignore it.
+
+Covered by `internal/admin/session_test.go`,
+`internal/server/session_gate_internal_test.go`, the adapted auth/server
+tests, and `character_creation_test.go`'s name assertion. The reworked
+web/admin UIs are static-verified (build, JS parse, id resolution), not
+browser-tested this pass.
 
 ## Layout
 
@@ -2417,6 +2462,13 @@ to run with no accounts — joins then work exactly as before
 (`-room-passwords` / open campaigns). When enabled, an authenticated
 player's characters are owned by their Discord account rather than the
 character name typed at join; see the Status section above.
+
+Players can't join until the Host picks a campaign to run: open the admin
+panel's **Session** tab and set an **Active campaign** (install the pack
+library or create one first if the list is empty). Until then the web
+client shows "the Host hasn't started a game yet". Leaving no active
+campaign set keeps the pre-Session behavior — a client with an explicit
+`campaign_id` can join anything.
 
 `-admin-addr` (default `127.0.0.1:8090`) opens the admin/operator
 settings panel described in the Status section above — open
