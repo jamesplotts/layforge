@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -1751,13 +1752,41 @@ func (s *Server) handleListConnectedPlayers(w http.ResponseWriter, r *http.Reque
 
 // sessionStateDTO is GET /api/session's body — the "one game is running"
 // state the Session tab shows and edits. ActiveCampaignName falls back to
-// the id when the campaign was never named.
+// the id when the campaign was never named. ClientURL is the player
+// client's address for an "Open Client" shortcut — the host the operator
+// reached this panel at, with the player listener's port.
 type sessionStateDTO struct {
 	ActiveCampaignID   string         `json:"active_campaign_id"`
 	ActiveCampaignName string         `json:"active_campaign_name"`
 	JoinLocked         bool           `json:"join_locked"`
+	ClientURL          string         `json:"client_url"`
 	ConnectedPlayers   []string       `json:"connected_players"`
 	Characters         []characterDTO `json:"characters"`
+}
+
+// clientURLForOperator builds the player client's URL for the "Open
+// Client" button: the hostname the operator used to reach this admin
+// panel (r.Host) combined with the player listener's port (from the
+// effective "addr" setting). A loopback-only player bind reached via a
+// LAN name won't actually load, but that's an unusual config and the
+// button simply won't work then, rather than pointing somewhere wrong.
+func clientURLForOperator(r *http.Request, playerAddr string) string {
+	_, port, err := net.SplitHostPort(playerAddr)
+	if err != nil || port == "" {
+		return ""
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil && h != "" {
+		host = h
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port) + "/"
 }
 
 // handleGetSession reports the active campaign, the join lock, and who is
@@ -1769,10 +1798,12 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active := settings[SystemKeyActiveCampaignID]
+	playerAddr := EffectiveSystemSettings(s.systemSeed, settings)[SystemKeyAddr]
 
 	out := sessionStateDTO{
 		ActiveCampaignID: active,
 		JoinLocked:       settings[SystemKeyCampaignJoinLocked] == "true",
+		ClientURL:        clientURLForOperator(r, playerAddr),
 		ConnectedPlayers: []string{},
 		Characters:       []characterDTO{},
 	}

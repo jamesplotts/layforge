@@ -13,12 +13,14 @@ func decodeSession(t *testing.T, resp *http.Response) struct {
 	ActiveCampaignID   string `json:"active_campaign_id"`
 	ActiveCampaignName string `json:"active_campaign_name"`
 	JoinLocked         bool   `json:"join_locked"`
+	ClientURL          string `json:"client_url"`
 } {
 	t.Helper()
 	var got struct {
 		ActiveCampaignID   string `json:"active_campaign_id"`
 		ActiveCampaignName string `json:"active_campaign_name"`
 		JoinLocked         bool   `json:"join_locked"`
+		ClientURL          string `json:"client_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decoding session response: %v", err)
@@ -50,6 +52,9 @@ func TestSession_SetActiveCampaign_RoundTrips(t *testing.T) {
 	got := decodeSession(t, setResp)
 	if got.ActiveCampaignID != "sunken-vault" || got.ActiveCampaignName != "The Sunken Vault" {
 		t.Errorf("after set = %+v, want sunken-vault / The Sunken Vault", got)
+	}
+	if got.ClientURL == "" {
+		t.Error("client_url is empty — the Open Client button needs it")
 	}
 
 	// Clearing it.

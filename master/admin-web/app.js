@@ -36,6 +36,7 @@ const state = {
   selectedCharacterId: "",
   pregenRollSession: "",
   pregenRollMode: "quick",
+  clientUrl: "",
 };
 
 const el = {
@@ -48,6 +49,7 @@ const el = {
   campaignManage: document.getElementById("campaign-manage"),
   sessionCampaignSelect: document.getElementById("session-campaign-select"),
   sessionActiveStatus: document.getElementById("session-active-status"),
+  sessionOpenClient: document.getElementById("session-open-client"),
   sessionStatusLine: document.getElementById("session-status-line"),
   sessionJoinLock: document.getElementById("session-join-lock"),
   sessionRosterBody: document.getElementById("session-roster-body"),
@@ -230,6 +232,11 @@ function renderSession(data) {
   el.sessionJoinLock.checked = Boolean(data.join_locked);
   el.sessionJoinLock.disabled = !active;
 
+  // "Open Client" is a shortcut to the player page — only meaningful once
+  // there's a campaign to join.
+  state.clientUrl = data.client_url || "";
+  el.sessionOpenClient.disabled = !active || !state.clientUrl;
+
   const players = data.connected_players || [];
   const characters = data.characters || [];
   if (!active) {
@@ -288,6 +295,10 @@ el.sessionJoinLock.addEventListener("change", async () => {
   } catch {
     // leave the checkbox as the user set it; next poll corrects it
   }
+});
+
+el.sessionOpenClient.addEventListener("click", () => {
+  if (state.clientUrl) window.open(state.clientUrl, "_blank", "noopener");
 });
 
 // --- Campaign list, picker, and creation ---

@@ -334,6 +334,13 @@ button.test-failure {
   gap: 10px;
 }
 
+.session-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 4px;
+}
+
 .save-status {
   display: inline-block;
   margin-left: 10px;
