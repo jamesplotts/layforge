@@ -1391,10 +1391,10 @@ function creationPromptEl(payload) {
 
     // accepts_file_upload is set only on the import sub-flow's "paste
     // your character's JSON" prompt (Master's own
-    // CharacterCreationPromptPayload.AcceptsFileUpload) — the roll
-    // flow's own free-text prompt (gender) never sets it, so a file
-    // picker only ever appears where pasted/uploaded JSON is actually
-    // expected.
+    // CharacterCreationPromptPayload.AcceptsFileUpload) — a System Engine
+    // free-text question (e.g. a spell-name entry with no fixed list)
+    // never sets it, so a file picker only ever appears where pasted/
+    // uploaded JSON is actually expected.
     if (payload.accepts_file_upload) {
       const fileInput = document.createElement("input");
       fileInput.type = "file";
