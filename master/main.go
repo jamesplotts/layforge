@@ -722,6 +722,17 @@ func run(addr, dbPath, llmURL, llmModel, llmProviderFlag, llmAPIKey, webDir, roo
 			if err := httpServer.Shutdown(shutdownCtx); err != nil {
 				logger.Warn("shutting down main listener for restart", "error", err)
 			}
+
+			// Release the SQLite file (and its lock) BEFORE the replacement
+			// process starts opening it. Otherwise the new process's schema
+			// init races this still-open handle and dies with SQLITE_BUSY —
+			// observed live on a `go run .` restart. The deferred
+			// events.Close() above is idempotent, so calling it here too is
+			// harmless.
+			if err := events.Close(); err != nil {
+				logger.Warn("closing event store for restart", "error", err)
+			}
+
 			cmd := exec.Command(exe, os.Args[1:]...)
 			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 			if err := cmd.Start(); err != nil {

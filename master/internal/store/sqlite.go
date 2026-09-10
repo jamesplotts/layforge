@@ -26,16 +26,13 @@ const sqliteConstraintUnique = 2067
 // chronological order without a custom SQLite collation.
 const occurredAtLayout = time.RFC3339Nano
 
-// initStatements creates the schema if it doesn't already exist and sets
-// the pragmas Master needs for a single process making concurrent
-// WebSocket-connection-driven writes: WAL so readers don't block the
-// writer, and a busy_timeout so a momentary lock contends instead of
-// immediately failing with SQLITE_BUSY. Run individually (not as one
-// multi-statement Exec) so this doesn't depend on the driver supporting
-// multiple statements per call.
+// initStatements creates the schema if it doesn't already exist. Run
+// individually (not as one multi-statement Exec) so this doesn't depend
+// on the driver supporting multiple statements per call. The pragmas
+// Master needs (WAL, busy_timeout) are set per-connection via the DSN —
+// see fileDSNWithPragmas — not here, because a one-off `PRAGMA` Exec
+// only affects whichever pooled connection it lands on.
 var initStatements = []string{
-	`PRAGMA journal_mode = WAL;`,
-	`PRAGMA busy_timeout = 5000;`,
 	`CREATE TABLE IF NOT EXISTS events (
 		sequence     INTEGER PRIMARY KEY AUTOINCREMENT,
 		campaign_id  TEXT NOT NULL,
@@ -189,17 +186,29 @@ var _ CharacterStore = (*SQLiteEventStore)(nil)
 // modernc.org/sqlite driver — a file path, or ":memory:" for an
 // in-process database useful in tests.
 func OpenSQLiteEventStore(dsn string) (*SQLiteEventStore, error) {
-	db, err := sql.Open("sqlite", dsn)
+	openDSN := dsn
+	inMemory := isInMemoryDSN(dsn)
+	if !inMemory {
+		openDSN = fileDSNWithPragmas(dsn)
+	}
+
+	db, err := sql.Open("sqlite", openDSN)
 	if err != nil {
 		return nil, fmt.Errorf("store: opening sqlite database: %w", err)
 	}
 
-	if isInMemoryDSN(dsn) {
+	if inMemory {
 		// An in-memory SQLite database only exists for the lifetime of
 		// the connection that created it; without this, database/sql's
 		// connection pool would silently hand a second query a fresh,
 		// empty database on a different connection.
 		db.SetMaxOpenConns(1)
+		// The DSN-pragma path is skipped for :memory:, so set the
+		// busy_timeout the old way — harmless with a single connection.
+		if _, err := db.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("store: setting busy_timeout: %w", err)
+		}
 	}
 
 	for _, stmt := range initStatements {
@@ -214,6 +223,25 @@ func OpenSQLiteEventStore(dsn string) (*SQLiteEventStore, error) {
 
 func isInMemoryDSN(dsn string) bool {
 	return dsn == ":memory:" || strings.Contains(dsn, "mode=memory")
+}
+
+// fileDSNWithPragmas turns a file-path (or already-file:-prefixed) DSN
+// into a modernc.org/sqlite connection string that applies busy_timeout
+// and WAL on *every* pooled connection, not just whichever one a one-off
+// `PRAGMA` Exec happens to run on. The busy_timeout is what lets a
+// restart's replacement process wait out the brief window the old
+// process needs to release the database file, instead of failing
+// immediately with SQLITE_BUSY (observed live on a `go run .` restart).
+func fileDSNWithPragmas(dsn string) string {
+	base := dsn
+	if !strings.HasPrefix(base, "file:") {
+		base = "file:" + base
+	}
+	sep := "?"
+	if strings.Contains(base, "?") {
+		sep = "&"
+	}
+	return base + sep + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 }
 
 // Close releases the underlying database connection(s).
