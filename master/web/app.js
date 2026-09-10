@@ -1481,13 +1481,13 @@ function onCharacterSchemaResponse(msg) {
 function onCharacterStateResponse(msg) {
   const payload = msg.payload || {};
   state.characterData = payload.character_data || null;
+  renderCharacterIdentity(state.characterData); // doesn't need the schema
   maybeRenderCharacterSheet();
 }
 
 function maybeRenderCharacterSheet() {
   if (!state.characterSchema || !state.characterData) return;
   renderCharacterSheetTabs(el.characterTabs, el.characterTabPanels, state.characterSchema, state.characterData);
-  renderCharacterIdentity(state.characterData);
 }
 
 // RACE_ADJECTIVES maps an SRD race name to its adjective form. Human and
