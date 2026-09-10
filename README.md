@@ -78,13 +78,16 @@ cd opencombatengine
 dotnet run --project src/OpenCombatEngine.GrpcSidecar/OpenCombatEngine.GrpcSidecar.csproj
 ```
 
-**Terminal 2 — Master**, pointed at both the sidecar and an LLM:
+**Terminal 2 — Master**, pointed at the sidecar:
 
 ```
 cd layforge/master
-go run . -system-engine-addr localhost:5265 \
-         -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
+go run . -system-engine-addr localhost:5265
 ```
+
+Then open the admin panel (`http://127.0.0.1:8090/`) → **System** tab and
+set the LLM provider (an Ollama URL + model, or a hosted provider + API
+key). `-system-engine-addr` can be set there too, instead of as a flag.
 
 On its first run the sidecar pulls SRD spell/item data from
 [Open5e](https://open5e.com) (cached for a week afterward). If Open5e is
@@ -93,8 +96,7 @@ exists` and equipment/spells won't resolve — just restart the sidecar to
 retry, or see OpenCombatEngine's README for pre-seeding the cache.
 
 The sidecar listens on loopback only, so Master and the sidecar must run
-on the same host. (`-system-engine-addr` / `-llm-url` can also be set on
-the admin panel's **System** tab instead of as flags.)
+on the same host.
 
 ### Path B — chat only (no rules engine)
 
@@ -106,8 +108,12 @@ narration pipeline or the client UI.
 
 ```
 cd master
-go run . -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
+go run .
 ```
+
+Then set the LLM provider on the admin panel's **System** tab
+(`http://127.0.0.1:8090/`) — an Ollama URL + model, or a hosted provider
++ API key.
 
 ### Either way
 
