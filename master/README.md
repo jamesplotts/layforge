@@ -2350,13 +2350,17 @@ admin-web/                    the admin panel's own web UI — same plain
   root. That script itself needs `protoc` plus the
   `protoc-gen-go`/`protoc-gen-go-grpc` plugins on `PATH`; it prints exact
   install commands if any are missing.
-- Everything else below is optional and only needed for the feature it
-  powers — Master runs and serves the web client with none of them
-  configured:
+- Everything else below is optional *to build and start Master* — but
+  without the first two, a player can connect and chat and that's about
+  it:
   - An [OpenCombatEngine](https://github.com/jamesplotts/opencombatengine)
     `GrpcSidecar` instance (a .NET/C# process, built separately from this
-    repo) for real dice/rules resolution and character import
-    (`-system-engine-addr`).
+    repo), pointed to with `-system-engine-addr`. It resolves **every
+    mechanic**: rolling or importing a character, dice, ability checks,
+    combat. Without it, `character.creation_start` only offers "claim a
+    Host-authored pregen" (and only if the Host pasted a character JSON
+    on the Pregens tab) — quick/detailed roll and import both return a
+    "no system engine configured" error, and there are no dice.
   - An LLM provider for AI-narrated responses — an [Ollama](https://ollama.com)
     server reachable over HTTP (`-llm-url`, the zero-API-key default), or
     a hosted provider instead (`-llm-provider anthropic|openai|openrouter|zai`

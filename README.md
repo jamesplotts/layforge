@@ -28,11 +28,25 @@ listed.
   checked into this repo, and imported unconditionally — **a fresh clone
   will not build until you run `protocol/generate.sh` once** (see Quick
   Start below; the script prints install commands for anything missing).
-- Everything else is optional, needed only for the feature it powers —
-  see [`master/README.md`](master/README.md#prerequisites) for the full
-  list (a System Engine sidecar, an Ollama server, a ComfyUI instance).
-  No Node/npm/bundler is needed for either web client — both are
-  hand-written HTML/CSS/JS with no build step.
+- Everything else is optional *to build and start Master*, but two
+  pieces are needed before you can actually play:
+  - **An LLM** for the AI Dungeon Master's narration — an
+    [Ollama](https://ollama.com) server is the zero-key default
+    (`-llm-url`/`-llm-model`); Anthropic/OpenAI/OpenRouter/Z.ai also work
+    with `-llm-provider` + `-llm-api-key`.
+  - **A System Engine** — [OpenCombatEngine](https://github.com/jamesplotts/opencombatengine),
+    a separate .NET service, run as its gRPC sidecar and pointed to with
+    `-system-engine-addr`. This is what resolves *all* mechanics: rolling
+    or importing a character, dice, ability checks, combat. Without it
+    Master still runs and clients can connect and chat, but a player
+    can't create a character except by claiming a Host-authored pregen
+    (paste-JSON on the admin Pregens tab), and there are no dice or
+    checks.
+- Optional beyond that: a [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
+  instance for scene images, a self-hosted Whisper server for
+  push-to-talk. See [`master/README.md`](master/README.md#running) for
+  every flag. No Node/npm/bundler is needed for either web client — both
+  are hand-written HTML/CSS/JS with no build step.
 
 ## Quick Start
 
@@ -44,16 +58,28 @@ cd master
 go run .
 ```
 
-Then open `http://localhost:8080/`. See
-[`master/README.md`](master/README.md) for every flag — LLM/System-Engine/
-ComfyUI endpoints, room passwords, the admin panel, and what each
-optional dependency unlocks.
+Then open `http://localhost:8080/`. Master starts, serves the web client,
+and the admin panel (`http://127.0.0.1:8090/`) — but until you point it
+at an LLM and a System Engine (see Prerequisites) there's no AI DM and no
+way to roll a character. Configure both on the admin panel's **System**
+tab, or pass them as flags:
 
-If you use the admin panel's "Save & Restart" while still running via
-`go run .`, your terminal will look like the server died (a real,
-confirmed `go run .`-specific quirk — see master/README.md's own
-"go run . caveat") — it almost certainly didn't; check
-`http://localhost:8080/` before assuming something broke.
+```
+go run . -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b \
+         -system-engine-addr <opencombatengine-host>:5265
+```
+
+Then, on the admin panel's **Session** tab, set an **Active campaign**
+(create one, or use the Campaign tab's "Download Campaign Pack" to pull
+the pregenerated library) — players can't join until one is set. See
+[`master/README.md`](master/README.md#running) for every flag.
+
+**`go run .` and "Save & Restart":** the first restart works but the
+terminal looks like the server died (a `go run .`-specific quirk — check
+`http://localhost:8080/`, it's almost certainly still up); a *second*
+restart can't work at all (the temp binary is gone), and Master now
+declines it and keeps running rather than crashing. Build a real binary
+(next section) for anything past a first look.
 
 ## Building a Real Binary
 
