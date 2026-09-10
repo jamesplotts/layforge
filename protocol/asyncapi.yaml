@@ -90,6 +90,14 @@ channels:
           - $ref: '#/components/messages/SystemError'
           - $ref: '#/components/messages/LogHistoryResponse'
           - $ref: '#/components/messages/VehicleImported'
+          - $ref: '#/components/messages/ClientDisplay'
+          - $ref: '#/components/messages/ClientQuery'
+          - $ref: '#/components/messages/ClientChoice'
+          - $ref: '#/components/messages/ClientImage'
+          - $ref: '#/components/messages/ClientRoll'
+          - $ref: '#/components/messages/ClientRollSpectate'
+          - $ref: '#/components/messages/ClientRollSpectateReveal'
+          - $ref: '#/components/messages/ClientRollComplete'
     publish:
       operationId: sendClientMessage
       summary: Messages a client sends to Master.
@@ -112,6 +120,9 @@ channels:
           - $ref: '#/components/messages/LogHistoryRequest'
           - $ref: '#/components/messages/VehicleImport'
           - $ref: '#/components/messages/TermsAccept'
+          - $ref: '#/components/messages/ClientQueryResponse'
+          - $ref: '#/components/messages/ClientChoiceResponse'
+          - $ref: '#/components/messages/ClientRollReveal'
 
 components:
   messages:
@@ -1180,6 +1191,371 @@ components:
                   has_more:
                     type: boolean
                     description: Whether more events exist in the direction this request paged — newer if after_sequence was set, older otherwise (including the default/tail case).
+
+    # --- client.* (docs/design.md §4) ---
+    #
+    # The small, reusable set of chat-bubble interactions Master uses to
+    # talk to a player. Character creation is built entirely out of
+    # client.query / client.choice — it is not a separate prompt
+    # mechanism. The client.roll* messages are specced but not yet emitted
+    # or consumed by Master; a follow-up builds the interactive dice UI,
+    # the per-die reveal relay, and the DM-slow-pass "wait for the roll"
+    # gate, and retires roll.request/roll.result. Speccing them now avoids
+    # a protocol migration then.
+
+    ClientDisplay:
+      name: client.display
+      messageId: client_display
+      title: A text bubble shown to a player (or the table)
+      summary: >
+        DM narration/description output — mechanical resolutions read back
+        to the player ("Reorx hits the bugbear, 14+6=20, 9 damage"),
+        scene-setting, NPC dialogue. A non-empty recipient delivers it to
+        one connection only (per-player narration, docs/design.md §9.7);
+        empty means broadcast to the whole campaign.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.display
+              payload:
+                type: object
+                required: [text]
+                properties:
+                  recipient:
+                    type: string
+                    description: sender_id/account the bubble is for; empty means broadcast.
+                  text:
+                    type: string
+                  in_reply_to_message_id:
+                    type: string
+
+    ClientQuery:
+      name: client.query
+      messageId: client_query
+      title: Ask the player to type a free-text answer
+      summary: >
+        Rendered as prompt_text, a single-line input, and a submit
+        button. The player replies with a client.query_response carrying
+        the same prompt_id. Sent to the asking player's own connection
+        only.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.query
+              payload:
+                type: object
+                required: [prompt_id, prompt_text]
+                properties:
+                  prompt_id:
+                    type: string
+                    description: Master-generated; the response echoes it so Master can route the answer.
+                  prompt_text:
+                    type: string
+                  input_label:
+                    type: string
+                  input_placeholder:
+                    type: string
+                  submit_label:
+                    type: string
+                  accepts_file_upload:
+                    type: boolean
+                    description: Offer a file picker alongside the input — set only when the expected answer is a document (the character-import step).
+
+    ClientQueryResponse:
+      name: client.query_response
+      messageId: client_query_response
+      title: The player's typed answer to a client.query
+      summary: A response whose prompt_id has no pending query is a real rejection (system.error).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.query_response
+              payload:
+                type: object
+                required: [prompt_id, text]
+                properties:
+                  prompt_id:
+                    type: string
+                  text:
+                    type: string
+
+    ClientChoice:
+      name: client.choice
+      messageId: client_choice
+      title: Ask the player to pick one option
+      summary: >
+        Rendered as prompt_text plus one button per option. value is what
+        comes back; label is the button text — separate so two options can
+        share a display name without the response being ambiguous. The
+        player replies with a client.choice_response.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.choice
+              payload:
+                type: object
+                required: [prompt_id, prompt_text, options]
+                properties:
+                  prompt_id:
+                    type: string
+                  prompt_text:
+                    type: string
+                  options:
+                    type: array
+                    items:
+                      type: object
+                      required: [value, label]
+                      properties:
+                        value:
+                          type: string
+                        label:
+                          type: string
+
+    ClientChoiceResponse:
+      name: client.choice_response
+      messageId: client_choice_response
+      title: The option the player picked from a client.choice
+      summary: Same "unknown prompt_id is a rejection" rule as client.query_response.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.choice_response
+              payload:
+                type: object
+                required: [prompt_id, value]
+                properties:
+                  prompt_id:
+                    type: string
+                  value:
+                    type: string
+
+    ClientImage:
+      name: client.image
+      messageId: client_image
+      title: An image shown in a bubble
+      summary: >
+        Master neither authors nor stores the image — image_url points at
+        wherever the configured image generator hosts it. recipient
+        semantics match client.display.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.image
+              payload:
+                type: object
+                required: [image_url]
+                properties:
+                  recipient:
+                    type: string
+                  image_url:
+                    type: string
+                  caption:
+                    type: string
+                  prompt:
+                    type: string
+                    description: The description actually sent to the image generator (incl. any maturity-tier constraint) — surfaced for transparency.
+                  in_reply_to_message_id:
+                    type: string
+
+    ClientRoll:
+      name: client.roll
+      messageId: client_roll
+      title: Prompt the roller for a dice roll (not yet emitted)
+      summary: >
+        Sent to the player who has to roll. The client shows one clickable
+        outline per die; each click reveals that die's already-decided
+        result with a tumble animation, and sends a client.roll_reveal.
+        The results are the engine's authoritative values, pre-sent so the
+        click is a reveal, not a computation. SPECCED ONLY — nothing emits
+        this yet; a follow-up builds the interactive dice UI and the
+        DM-slow-pass "wait for the roll" gate, retiring
+        roll.request/roll.result.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.roll
+              payload:
+                type: object
+                required: [prompt_id, character_id, purpose, text, dice]
+                properties:
+                  prompt_id:
+                    type: string
+                  character_id:
+                    type: string
+                  purpose:
+                    type: string
+                    enum: [attack, damage, save, check, initiative, death_save, custom]
+                  text:
+                    type: string
+                  dice:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, sides]
+                      properties:
+                        id:
+                          type: string
+                          description: Unique within the roll; a client.roll_reveal names it.
+                        sides:
+                          type: integer
+                        label:
+                          type: string
+                        result:
+                          type: integer
+                          description: The engine's authoritative face value, hidden inside the outline until the roller clicks it.
+
+    ClientRollSpectate:
+      name: client.roll_spectate
+      messageId: client_roll_spectate
+      title: Read-only twin of client.roll for spectators (not yet emitted)
+      summary: >
+        Sent to every OTHER client in the campaign. Its dice carry no
+        result — spectators can't see the numbers until the roller reveals
+        them (docs/design.md §9.7). Each ghost die is filled in by a
+        following client.roll_spectate_reveal. SPECCED ONLY.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.roll_spectate
+              payload:
+                type: object
+                required: [prompt_id, character_id, purpose, text, dice]
+                properties:
+                  prompt_id:
+                    type: string
+                  character_id:
+                    type: string
+                  purpose:
+                    type: string
+                    enum: [attack, damage, save, check, initiative, death_save, custom]
+                  text:
+                    type: string
+                  dice:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, sides]
+                      properties:
+                        id:
+                          type: string
+                        sides:
+                          type: integer
+                        label:
+                          type: string
+
+    ClientRollReveal:
+      name: client.roll_reveal
+      messageId: client_roll_reveal
+      title: The roller revealed one die (not yet emitted)
+      summary: >
+        The roller telling Master they just clicked (and revealed) one die
+        of prompt_id. Master looks up that die's authoritative result and
+        relays it to spectators as client.roll_spectate_reveal. SPECCED
+        ONLY.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.roll_reveal
+              payload:
+                type: object
+                required: [prompt_id, die_id]
+                properties:
+                  prompt_id:
+                    type: string
+                  die_id:
+                    type: string
+
+    ClientRollSpectateReveal:
+      name: client.roll_spectate_reveal
+      messageId: client_roll_spectate_reveal
+      title: Relay one revealed die to spectators (not yet emitted)
+      summary: >
+        Master relaying one revealed die to the spectator clients, so
+        their ghost die turns into the result die at the same moment the
+        roller sees it. SPECCED ONLY.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.roll_spectate_reveal
+              payload:
+                type: object
+                required: [prompt_id, die_id, result]
+                properties:
+                  prompt_id:
+                    type: string
+                  die_id:
+                    type: string
+                  result:
+                    type: integer
+
+    ClientRollComplete:
+      name: client.roll_complete
+      messageId: client_roll_complete
+      title: Every die of a roll has been revealed (not yet emitted)
+      summary: >
+        Broadcast to the whole campaign once every die of prompt_id has
+        been revealed. Also the signal that unblocks the DM's slow pass,
+        which was waiting for the roll to finish before narrating. SPECCED
+        ONLY.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.roll_complete
+              payload:
+                type: object
+                required: [prompt_id, total]
+                properties:
+                  prompt_id:
+                    type: string
+                  total:
+                    type: integer
+                  result_summary:
+                    type: string
+                    description: An engine-set characterization ("Hit", "Critical hit", "9 slashing damage") when available.
 
   schemas:
 

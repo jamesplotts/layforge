@@ -796,3 +796,253 @@ type TermsAcceptPayload struct {
 
 // TermsAcceptMessage is a terms.accept Message.
 type TermsAcceptMessage = Message[TermsAcceptPayload]
+
+// --- The client.* family (design doc §4) -----------------------------------
+//
+// The small, reusable set of chat-bubble interactions Master uses to talk
+// to a player. Every one is a bubble in the client's main message area:
+// a one-way text bubble (client.display), a typed-answer prompt
+// (client.query), a pick-one prompt (client.choice), an image
+// (client.image), and the dice-roll exchange (client.roll and friends).
+// Character creation is built entirely out of client.query / client.choice
+// — it is not a separate prompt mechanism.
+
+// ClientDisplayPayload is the payload of a client.display message: a
+// text bubble shown to a player, or to the whole table. This is the DM's
+// narration/description output — mechanical resolutions read back to the
+// player ("Reorx hits the bugbear, 14+6=20, 9 damage"), scene-setting,
+// NPC dialogue.
+type ClientDisplayPayload struct {
+	// Recipient is the sender_id/account the bubble is for; empty means
+	// broadcast to every client in the campaign. A non-empty Recipient is
+	// how per-player narration (design doc §9.7's knowledge scoping) is
+	// delivered — only that connection ever receives the message.
+	Recipient string `json:"recipient,omitempty"`
+	Text      string `json:"text"`
+	// InReplyToMessageID is the message_id of the player input this
+	// responds to, if any.
+	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
+}
+
+// ClientDisplayMessage is a client.display Message.
+type ClientDisplayMessage = Message[ClientDisplayPayload]
+
+// ClientQueryPayload is the payload of a client.query message: a bubble
+// asking the player to type a free-text answer. Rendered as PromptText, a
+// single-line input (labeled InputLabel, placeholder InputPlaceholder),
+// and a submit button reading SubmitLabel. The player replies with a
+// client.query_response carrying the same PromptID.
+type ClientQueryPayload struct {
+	// PromptID is Master-generated; the player's client.query_response
+	// echoes it so Master can route the answer back to whatever asked.
+	PromptID   string `json:"prompt_id"`
+	PromptText string `json:"prompt_text"`
+	// InputLabel/InputPlaceholder/SubmitLabel are optional UI hints; a
+	// client renders sensible defaults (e.g. "Send") when they're empty.
+	InputLabel       string `json:"input_label,omitempty"`
+	InputPlaceholder string `json:"input_placeholder,omitempty"`
+	SubmitLabel      string `json:"submit_label,omitempty"`
+	// AcceptsFileUpload tells the client to offer a file picker alongside
+	// the text input — set only when the expected answer is a document
+	// (the character-import "paste your character JSON" step).
+	AcceptsFileUpload bool `json:"accepts_file_upload,omitempty"`
+}
+
+// ClientQueryMessage is a client.query Message.
+type ClientQueryMessage = Message[ClientQueryPayload]
+
+// ClientQueryResponsePayload is the payload of a client.query_response
+// message: the player's typed answer to the client.query with the
+// matching PromptID. A response whose PromptID has no pending query is a
+// real rejection (system.error), not a guess.
+type ClientQueryResponsePayload struct {
+	PromptID string `json:"prompt_id"`
+	Text     string `json:"text"`
+}
+
+// ClientQueryResponseMessage is a client.query_response Message.
+type ClientQueryResponseMessage = Message[ClientQueryResponsePayload]
+
+// ClientChoiceOption is one selectable option in a client.choice bubble.
+// Value is what comes back in the client.choice_response; Label is the
+// button text. They're separate so two options can share a display name
+// (e.g. two pregenerated characters both called "Bram") without the
+// response being ambiguous.
+type ClientChoiceOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// ClientChoicePayload is the payload of a client.choice message: a bubble
+// asking the player to pick one of Options, rendered as PromptText plus
+// one button per option. The player replies with a client.choice_response
+// carrying the same PromptID and the chosen option's Value.
+type ClientChoicePayload struct {
+	PromptID   string               `json:"prompt_id"`
+	PromptText string               `json:"prompt_text"`
+	Options    []ClientChoiceOption `json:"options"`
+}
+
+// ClientChoiceMessage is a client.choice Message.
+type ClientChoiceMessage = Message[ClientChoicePayload]
+
+// ClientChoiceResponsePayload is the payload of a client.choice_response
+// message: the Value of the option the player picked from the
+// client.choice with the matching PromptID. Same "unknown PromptID is a
+// rejection" rule as client.query_response.
+type ClientChoiceResponsePayload struct {
+	PromptID string `json:"prompt_id"`
+	Value    string `json:"value"`
+}
+
+// ClientChoiceResponseMessage is a client.choice_response Message.
+type ClientChoiceResponseMessage = Message[ClientChoiceResponsePayload]
+
+// ClientImagePayload is the payload of a client.image message: an image
+// shown in a bubble, to a player or the whole table. Master neither
+// authors nor stores the image — ImageURL points at wherever the
+// configured imagegen.Provider hosts it.
+type ClientImagePayload struct {
+	// Recipient is the sender_id/account the image is for; empty means
+	// broadcast — same semantics as ClientDisplayPayload.Recipient.
+	Recipient string `json:"recipient,omitempty"`
+	ImageURL  string `json:"image_url"`
+	Caption   string `json:"caption,omitempty"`
+	// Prompt is the description actually sent to the image generator
+	// (including any maturity-tier constraint appended to it, design doc
+	// §9.5) — surfaced for transparency, the same reasoning as tool.result
+	// logging every DM tool call.
+	Prompt string `json:"prompt,omitempty"`
+	// InReplyToMessageID, when set, is the message_id that prompted this
+	// image.
+	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
+}
+
+// ClientImageMessage is a client.image Message.
+type ClientImageMessage = Message[ClientImagePayload]
+
+// ClientRollPurpose names what a client.roll is for, so a client can
+// label/style the bubble ("Attack roll", "Damage") without parsing prose.
+// The zero value, ClientRollPurposeUnspecified, is never valid on the
+// wire.
+type ClientRollPurpose string
+
+const (
+	ClientRollPurposeUnspecified ClientRollPurpose = ""
+	ClientRollPurposeAttack      ClientRollPurpose = "attack"
+	ClientRollPurposeDamage      ClientRollPurpose = "damage"
+	ClientRollPurposeSave        ClientRollPurpose = "save"
+	ClientRollPurposeCheck       ClientRollPurpose = "check"
+	ClientRollPurposeInitiative  ClientRollPurpose = "initiative"
+	ClientRollPurposeDeathSave   ClientRollPurpose = "death_save"
+	ClientRollPurposeCustom      ClientRollPurpose = "custom"
+)
+
+// IsValid reports whether p is a recognized roll purpose. It deliberately
+// returns false for ClientRollPurposeUnspecified.
+func (p ClientRollPurpose) IsValid() bool {
+	switch p {
+	case ClientRollPurposeAttack, ClientRollPurposeDamage, ClientRollPurposeSave,
+		ClientRollPurposeCheck, ClientRollPurposeInitiative, ClientRollPurposeDeathSave,
+		ClientRollPurposeCustom:
+		return true
+	default:
+		return false
+	}
+}
+
+// ClientRollDie is one die in a client.roll. ID is unique within the
+// roll (the client.roll_reveal that follows a click names it). Sides is
+// the die size (4, 6, 8, 10, 12, 20, 100). Label is an optional
+// per-die caption ("1d8 slashing", "sneak attack"). Result is the
+// engine's authoritative face value — present in client.roll (sent only
+// to the roller, hidden inside an unrevealed outline) and in
+// client.roll_spectate_reveal, absent from client.roll_spectate.
+type ClientRollDie struct {
+	ID     string `json:"id"`
+	Sides  int    `json:"sides"`
+	Label  string `json:"label,omitempty"`
+	Result int    `json:"result,omitempty"`
+}
+
+// ClientRollPayload is the payload of a client.roll message: sent to the
+// player who has to roll. The client shows one clickable outline per die;
+// each click reveals that die's already-decided Result with a tumble
+// animation. When every die is revealed the client sends a
+// client.roll_result... actually no — see the reveal sequence below:
+// each click sends a client.roll_reveal, and Master emits
+// client.roll_complete once all are in.
+//
+// NOTE: nothing in Master emits or consumes client.roll* yet — a
+// follow-up (a Fable subagent) builds the interactive dice UI, the
+// per-die reveal relay, and the DM-slow-pass "wait for the roll" gate.
+// The shapes are specced now so that follow-up doesn't ship a protocol
+// migration. See docs and the plan for the full design.
+type ClientRollPayload struct {
+	PromptID    string            `json:"prompt_id"`
+	CharacterID string            `json:"character_id"`
+	Purpose     ClientRollPurpose `json:"purpose"`
+	// Text is the prompt shown above the dice ("Roll to attack with
+	// Reorx's battle axe").
+	Text string          `json:"text"`
+	Dice []ClientRollDie `json:"dice"`
+}
+
+// ClientRollMessage is a client.roll Message.
+type ClientRollMessage = Message[ClientRollPayload]
+
+// ClientRollSpectatePayload is the payload of a client.roll_spectate
+// message: the read-only twin of client.roll, sent to every *other*
+// client in the campaign. Its Dice carry no Result — spectators can't
+// see the numbers until the roller reveals them (design doc §9.7). Each
+// ghost die is filled in by a following client.roll_spectate_reveal.
+type ClientRollSpectatePayload struct {
+	PromptID    string            `json:"prompt_id"`
+	CharacterID string            `json:"character_id"`
+	Purpose     ClientRollPurpose `json:"purpose"`
+	Text        string            `json:"text"`
+	Dice        []ClientRollDie   `json:"dice"`
+}
+
+// ClientRollSpectateMessage is a client.roll_spectate Message.
+type ClientRollSpectateMessage = Message[ClientRollSpectatePayload]
+
+// ClientRollRevealPayload is the payload of a client.roll_reveal
+// message: the roller telling Master they just clicked (and revealed)
+// one die of PromptID. Master looks up that die's authoritative result
+// and relays it to spectators as client.roll_spectate_reveal.
+type ClientRollRevealPayload struct {
+	PromptID string `json:"prompt_id"`
+	DieID    string `json:"die_id"`
+}
+
+// ClientRollRevealMessage is a client.roll_reveal Message.
+type ClientRollRevealMessage = Message[ClientRollRevealPayload]
+
+// ClientRollSpectateRevealPayload is the payload of a
+// client.roll_spectate_reveal message: Master relaying one revealed die
+// to the spectator clients, so their ghost die turns into the result
+// die at the same moment the roller sees it.
+type ClientRollSpectateRevealPayload struct {
+	PromptID string `json:"prompt_id"`
+	DieID    string `json:"die_id"`
+	Result   int    `json:"result"`
+}
+
+// ClientRollSpectateRevealMessage is a client.roll_spectate_reveal Message.
+type ClientRollSpectateRevealMessage = Message[ClientRollSpectateRevealPayload]
+
+// ClientRollCompletePayload is the payload of a client.roll_complete
+// message: broadcast to the whole campaign once every die of PromptID
+// has been revealed. It is also the signal that unblocks the DM's
+// slow pass, which was waiting for the roll to finish before narrating.
+type ClientRollCompletePayload struct {
+	PromptID string `json:"prompt_id"`
+	Total    int    `json:"total"`
+	// ResultSummary is an engine-set characterization ("Hit", "Critical
+	// hit", "9 slashing damage") when one is available.
+	ResultSummary string `json:"result_summary,omitempty"`
+}
+
+// ClientRollCompleteMessage is a client.roll_complete Message.
+type ClientRollCompleteMessage = Message[ClientRollCompletePayload]

@@ -53,6 +53,25 @@ const (
 	MessageTypeCharacterCreationPrompt   MessageType = "character.creation_prompt"
 	MessageTypeCharacterCreationAnswer   MessageType = "character.creation_answer"
 	MessageTypeCharacterReviewResult     MessageType = "character.review_result"
+
+	// The client.* family (design doc §4) — the small, reusable set of
+	// bubble interactions Master uses to talk to a player: a one-way text
+	// bubble (client.display), a typed-answer prompt (client.query /
+	// client.query_response), a pick-one prompt (client.choice /
+	// client.choice_response), an image bubble (client.image), and the
+	// dice-roll exchange (client.roll and friends — see messages.go for
+	// the roller/spectator reveal sequence; nothing emits those yet).
+	MessageTypeClientDisplay            MessageType = "client.display"
+	MessageTypeClientQuery              MessageType = "client.query"
+	MessageTypeClientQueryResponse      MessageType = "client.query_response"
+	MessageTypeClientChoice             MessageType = "client.choice"
+	MessageTypeClientChoiceResponse     MessageType = "client.choice_response"
+	MessageTypeClientImage              MessageType = "client.image"
+	MessageTypeClientRoll               MessageType = "client.roll"
+	MessageTypeClientRollSpectate       MessageType = "client.roll_spectate"
+	MessageTypeClientRollReveal         MessageType = "client.roll_reveal"
+	MessageTypeClientRollSpectateReveal MessageType = "client.roll_spectate_reveal"
+	MessageTypeClientRollComplete       MessageType = "client.roll_complete"
 	// MessageTypeTermsAccept is sent by a client once per connection to
 	// accept the current terms.Version (see internal/terms and
 	// internal/server's dispatch gate) — required before any other
@@ -80,7 +99,11 @@ func (t MessageType) IsValid() bool {
 		MessageTypeVehicleImport, MessageTypeVehicleImported,
 		MessageTypeAudioChunk, MessageTypeAudioTranscription,
 		MessageTypeCharacterCreationStart, MessageTypeCharacterCreationPrompt, MessageTypeCharacterCreationAnswer,
-		MessageTypeCharacterReviewResult, MessageTypeTermsAccept:
+		MessageTypeCharacterReviewResult, MessageTypeTermsAccept,
+		MessageTypeClientDisplay, MessageTypeClientQuery, MessageTypeClientQueryResponse,
+		MessageTypeClientChoice, MessageTypeClientChoiceResponse, MessageTypeClientImage,
+		MessageTypeClientRoll, MessageTypeClientRollSpectate, MessageTypeClientRollReveal,
+		MessageTypeClientRollSpectateReveal, MessageTypeClientRollComplete:
 		return true
 	default:
 		return false
