@@ -235,6 +235,14 @@ type Server struct {
 	creationSessions   map[string]creationSession
 	creationSessionsMu sync.Mutex
 
+	// pendingPrompts routes a client.query_response / client.choice_response
+	// back to whatever asked (clientmsg.go). Keyed by the Master-generated
+	// prompt_id; single-use — resolved (and removed) when the matching
+	// response arrives. Same ephemeral, in-memory, mutex-guarded shape as
+	// creationSessions.
+	pendingPrompts   map[string]promptWaiter
+	pendingPromptsMu sync.Mutex
+
 	// adminSettings backs the operator-terms gate (terms.go): dispatch
 	// checks whether the Host has accepted internal/terms.Version via
 	// this same store the admin panel's own /api/terms endpoints read
@@ -323,6 +331,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		audioStreams:     make(map[string]*audioStreamBuffer),
 		pregens:          pregenStore,
 		creationSessions: make(map[string]creationSession),
+		pendingPrompts:   make(map[string]promptWaiter),
 		adminSettings:    adminSettings,
 		safety:           safetyStore,
 	}
@@ -728,6 +737,20 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// or an import's own character.validation_result) becomes part of
 		// the durable log, not the back-and-forth that produced it.
 		return s.handleCreationAnswer(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
+	case protocol.MessageTypeClientQueryResponse:
+		var req protocol.ClientQueryResponseMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed client.query_response payload: %w", err))
+		}
+		// Not recorded — a prompt/response pair is a flow step, not a game
+		// event (same reasoning as character.creation_answer above).
+		return s.handleClientQueryResponse(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
+	case protocol.MessageTypeClientChoiceResponse:
+		var req protocol.ClientChoiceResponseMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed client.choice_response payload: %w", err))
+		}
+		return s.handleClientChoiceResponse(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
