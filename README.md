@@ -67,16 +67,21 @@ Everything works: rolling and importing characters, dice, ability
 checks, combat. Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 and an [Ollama](https://ollama.com) server (or another LLM provider).
 
+**Terminal 1 — the System Engine sidecar.** A separate repo; clone it
+next to `layforge/`. It listens on `localhost:5265` (`GRPC_SIDECAR_PORT`
+to change) — leave it running:
+
 ```
-# 1. Clone and start the System Engine sidecar (a separate repo).
-#    It listens on localhost:5265 by default (GRPC_SIDECAR_PORT to change).
-#    Keep this running in its own terminal.
+cd ..
 git clone https://github.com/jamesplotts/opencombatengine.git
 cd opencombatengine
 dotnet run --project src/OpenCombatEngine.GrpcSidecar/OpenCombatEngine.GrpcSidecar.csproj
+```
 
-# 2. In another terminal, start Master pointed at both the sidecar and an LLM.
-cd ../layforge/master
+**Terminal 2 — Master**, pointed at both the sidecar and an LLM:
+
+```
+cd layforge/master
 go run . -system-engine-addr localhost:5265 \
          -llm-url http://<ollama-host>:11434 -llm-model qwen3.8:27b
 ```
