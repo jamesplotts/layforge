@@ -11,6 +11,11 @@ the way the die will be rolled with this implementation. This will
 simplify the graphical display of die rolls."* Build it with the **Fable**
 model.
 
+For other candidate bubble types beyond `client.roll` (reaction prompts,
+multi-select, numeric input, the knowledge-check lore card with its
+Share button, ready-checks, polls, trades, clocks), see
+[`client-message-family-ideas.md`](client-message-family-ideas.md).
+
 ## What already exists (don't re-spec it)
 
 Six message types, one namespace:
