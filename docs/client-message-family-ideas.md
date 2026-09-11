@@ -156,6 +156,71 @@ updates; the client just animates between them.
 
 ---
 
+## Appendable `client.display` — narration that unfolds during a roll
+
+**Not a new type — an append mode on `client.display`.** One player's
+turn is dead time for everyone else, especially the ~10–20 seconds they
+spend clicking through a `client.roll` bubble. An appendable narration
+bubble turns that into a shared moment: Master opens a `client.display`
+for the table, then tacks clauses onto it in real time as the action
+resolves.
+
+```
+client.display {
+  ...existing fields...,
+  display_id?,                     // stable id; set to open or extend a bubble
+  mode?: "replace" | "append",     // default "replace"; "append" needs display_id
+  final?: bool                     // true settles the bubble (dims it, stops appends)
+}
+```
+
+The first message opens the bubble; later messages with the same
+`display_id` and `mode: "append"` add to it; `final: true` closes it.
+
+### The payoff: sync it to the `client.roll` reveal beats
+
+The DM-waits roll flow already gives Master the events it needs. Example:
+Lydia has Reorx attack the bugbear.
+
+| beat | the roller sees | the table sees appended |
+|---|---|---|
+| `client.roll` sent | her dice bubble | "Reorx swings at the bugbear with his axe…" |
+| she reveals the attack die | the d20 face | "…the blade bites deep!" — or on a 1, "…but his boot skids on loose stone and the swing sails wide." |
+| she reveals the damage dice | the numbers | "The bugbear staggers — 5 points." |
+| `client.roll_complete` | — | bubble settles (`final: true`) |
+
+Spectators still can't see her numbers (`client.roll_spectate` strips
+those). They *can* watch the story build at exactly the pace she clicks
+— which is realistic table feel, and keeps five people engaged in one
+person's turn.
+
+### Who writes the clauses (gates over prompting)
+
+Master picks the branch; the model supplies the prose. In the slow pass,
+when the model decides an attack happens, it produces narration for each
+*outcome bucket* — crit / hit / miss / fumble-flavour / damage line —
+as structured output. Master resolves the real roll and appends the
+chunks that match as each die is revealed. The model is never told "you
+must narrate a hit"; it writes every branch and Master chooses. Same
+principle as `client.roll` pre-sending the authoritative results.
+
+Phase the quality: a blunt version first ("…hits.", "…misses.", "…5
+damage."), richer per-weapon/per-outcome flavour later. Multi-attack is
+just more buckets (attack 1 {hit,miss} × attack 2 {hit,miss} + a damage
+line), still bounded.
+
+### Recording and degradation
+
+- **Record once, at `final`** — buffer the assembled text and write a
+  single `client.display` event, so `log.history_request` replay shows
+  the finished bubble, not a stutter. Same rule as not logging every
+  `audio.chunk`, only the finalized transcript.
+- If the roller goes idle and the `client.roll` timeout fires, Master
+  self-reveals *and* flushes the remaining append chunks so the story
+  still completes.
+
+---
+
 ## Probably fields, not new types
 
 - **Confirmation** ("drink the unidentified potion?") → `client.choice`
