@@ -72,7 +72,16 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  /* A firm cap, not a floor: height (not min-height) plus overflow:
+     hidden means the page itself never grows or scrolls no matter how
+     long the conversation gets — every .screen inside it is exactly one
+     viewport tall, and .chat-body's own flex chain (min-height: 0 down
+     to #log's overflow-y: auto, see that rule's doc comment) is what
+     actually scrolls. min-height here was the bug: it sets a floor, not
+     a ceiling, so a flex child's content could still push body taller
+     than the viewport and the whole page scrolled instead of #log. */
+  height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(120% 90% at 50% -10%, rgba(120, 92, 58, 0.35), rgba(120, 92, 58, 0) 60%),
     linear-gradient(180deg, #241a11, #17100a 70%);
@@ -85,7 +94,7 @@ h1, h2, .character-sidebar-header, .join-card h1 {
 }
 
 .screen {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
 }

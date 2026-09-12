@@ -1618,16 +1618,75 @@ function appendDmBubble(text) {
   el.log.scrollTop = el.log.scrollHeight;
 }
 
+// TOOL_FLAVOR_CATEGORY groups every DM tool name (design doc §8,
+// internal/server/dm_tools.go and friends) into what it looks like the
+// DM is doing from the table's side, not what it's actually called —
+// "DM called list_locations" means nothing to a player. Unlisted/future
+// tool names fall through to DEFAULT_TOOL_FLAVOR below, so a new tool
+// added server-side without an entry here never shows literally nothing
+// or breaks, just the generic phrase until it earns a real category.
+const TOOL_FLAVOR_CATEGORY = {
+  list_locations: "lore", list_npcs: "lore", list_encounters: "lore",
+  list_vehicles: "lore", get_character_schema: "lore",
+  resolve_check: "rules", get_available_actions: "rules", get_character_status: "rules",
+  melee_attack: "combat_action", ranged_attack: "combat_action", offhand_attack: "combat_action",
+  grapple: "combat_action", shove: "combat_action", apply_effect: "combat_action", cast_spell: "combat_action",
+  start_combat: "combat_flow", advance_turn: "combat_flow", end_combat: "combat_flow", generate_combat_map: "combat_flow",
+  equip_item: "inventory", unequip_item: "inventory", give_item: "inventory", receive_item: "inventory",
+  discard_item: "inventory", generate_loot: "inventory", add_currency: "inventory", transfer_currency: "inventory",
+  retrieve_currency: "inventory", stash_currency: "inventory", retrieve_item: "inventory", stash_item: "inventory",
+  check_item_price: "vendor", list_vendor_inventory: "vendor", vendor_buy_item: "vendor", vendor_sell_item: "vendor",
+  create_npc: "npc",
+  travel_to: "travel", claim_location: "travel",
+  acquire_vehicle: "vehicle", stable_vehicle: "vehicle", take_vehicle: "vehicle",
+  narrate_privately: "private",
+  generate_scene_image: "image",
+  review_character: "review",
+};
+
+// TOOL_FLAVOR_PHRASES: a few options per category so the same category
+// firing repeatedly (e.g. a fight full of melee_attack calls) doesn't
+// show the identical line every time — one is picked at random per note.
+const TOOL_FLAVOR_PHRASES = {
+  lore: ["The DM flips through their notes.", "The DM checks the campaign notes.", "The DM double-checks who's around."],
+  rules: ["The DM checks the rulebook.", "The DM works the numbers.", "The DM peers at the character sheet."],
+  combat_action: ["The DM rolls behind the screen.", "The DM works out what happens next.", "The DM resolves the blow."],
+  combat_flow: ["The DM tracks initiative.", "The DM sets the scene.", "The DM sketches out the battlefield."],
+  inventory: ["The DM checks the ledger.", "The DM tallies up the gear.", "The DM counts out the coin."],
+  vendor: ["The DM checks the price list.", "The DM haggles under their breath."],
+  npc: ["The DM sketches a new face.", "The DM invents someone new."],
+  travel: ["The DM marks the map.", "The DM notes the new ground."],
+  vehicle: ["The DM checks the stables.", "The DM notes where it's parked."],
+  private: ["The DM leans in for a quiet word."],
+  image: ["The DM reaches for their illustration board.", "The DM sketches the scene."],
+  review: ["The DM looks over the new arrival's paperwork."],
+};
+
+const DEFAULT_TOOL_FLAVOR = ["The DM consults their notes."];
+
+// toolFlavorText picks one flavor phrase for toolName — stable enough to
+// read naturally, varied enough not to feel like a progress-bar label.
+function toolFlavorText(toolName) {
+  const category = TOOL_FLAVOR_CATEGORY[toolName];
+  const phrases = (category && TOOL_FLAVOR_PHRASES[category]) || DEFAULT_TOOL_FLAVOR;
+  return phrases[Math.floor(Math.random() * phrases.length)];
+}
+
 // toolResultNoteEl renders one design doc §8 DM tool-use call as a
 // transparency note (design doc §8: "every tool call/result is logged")
 // — not a chat bubble, since it's bookkeeping about how the DM arrived
-// at its narration, not narration itself.
+// at its narration, not narration itself. The visible text is in-fiction
+// flavor (toolFlavorText) rather than the raw tool name, which means
+// nothing to a player; the real tool_name/success/reason_code still ride
+// along in the title attribute for anyone who hovers or wants to know
+// exactly what happened (e.g. while reporting a bug).
 function toolResultNoteEl(payload) {
   const note = document.createElement("div");
   note.className = "note tool-result-note" + (payload.success ? "" : " error-note");
   const icon = payload.success ? "🎲" : "⚠";
   const detail = payload.success ? "" : ` (${payload.reason_code || "failed"})`;
-  note.textContent = `${icon} DM called ${payload.tool_name}${detail}`;
+  note.textContent = `${icon} ${toolFlavorText(payload.tool_name)}`;
+  note.title = `${payload.tool_name}${detail}`;
   return note;
 }
 
