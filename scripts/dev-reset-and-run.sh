@@ -55,6 +55,10 @@ SIDECAR_PORT=5265
 MASTER_PLAYER_PORT=8080
 MASTER_ADMIN_PORT=8090
 MASTER_ADMIN_URL="http://127.0.0.1:${MASTER_ADMIN_PORT}/"
+# Both repos together are ~16 MB — a healthy clone finishes in seconds,
+# so this is a generous ceiling, not a realistic expected duration. See
+# the clone step's own comment for what this guards against.
+CLONE_TIMEOUT=120
 
 # Refuse to run from inside either directory this script is about to
 # delete — see the IMPORTANT note above.
@@ -81,7 +85,7 @@ require_safe_target_dir "$OCE_DIR"
 
 # --- prerequisites, checked before anything destructive -----------------
 
-for tool in git go dotnet; do
+for tool in git go dotnet timeout; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "error: '$tool' is not on PATH — install it before running this script." >&2
     exit 1
@@ -206,7 +210,15 @@ rm -rf -- "$OCE_DIR"
 # --- 5/8: clone layforge, generate protocol stubs --------------------------
 
 echo "==> 5/8: cloning layforge and generating protocol stubs"
-git clone https://github.com/jamesplotts/layforge.git "$LAYFORGE_DIR"
+# GIT_TERMINAL_PROMPT=0 turns a silent credential prompt (a credential
+# helper with nothing to draw a prompt on) into an immediate error
+# instead of a hang; the outer `timeout` is the backstop for every other
+# way this can hang with zero output — DNS, a stuck TCP/TLS handshake, a
+# VPN/firewall on the box — so a clone of this ~16 MB repo either
+# finishes in seconds or fails loudly within CLONE_TIMEOUT, never sits
+# there silently forever.
+GIT_TERMINAL_PROMPT=0 timeout "$CLONE_TIMEOUT" \
+  git clone --progress https://github.com/jamesplotts/layforge.git "$LAYFORGE_DIR"
 (
   cd "$LAYFORGE_DIR"
   ./protocol/generate.sh
@@ -215,7 +227,8 @@ git clone https://github.com/jamesplotts/layforge.git "$LAYFORGE_DIR"
 # --- 6/8: clone OpenCombatEngine, start the sidecar ------------------------
 
 echo "==> 6/8: cloning OpenCombatEngine and starting the sidecar"
-git clone https://github.com/jamesplotts/opencombatengine.git "$OCE_DIR"
+GIT_TERMINAL_PROMPT=0 timeout "$CLONE_TIMEOUT" \
+  git clone --progress https://github.com/jamesplotts/opencombatengine.git "$OCE_DIR"
 : > "$SIDECAR_LOG"
 cd "$OCE_DIR"
 nohup dotnet run --project src/OpenCombatEngine.GrpcSidecar/OpenCombatEngine.GrpcSidecar.csproj \
