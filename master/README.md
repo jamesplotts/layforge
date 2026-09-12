@@ -110,6 +110,19 @@ gap, not a silent omission. Rules/SRD lookup, procedural generation, and
 campaign-notes retrieval are §8's other named tool categories — none of
 those exist in this codebase, so they aren't stubbed out speculatively.
 
+**Fixed**: the narration pass would sometimes narrate a player's own
+dialogue right back at them instead of having the NPC they addressed
+actually respond — observed live: a player told an NPC "You were talking
+about a job in the Ashen Valley," and the DM's reply just elaborately
+restated Reorx saying that line again, never voicing the NPC's answer.
+`dmNarrationSystemPrompt` (`dm_slow_pass.go`) now explicitly says that
+when the player's stated action is speaking to someone, that person must
+actually reply in character — call `list_npcs` for their real voice/
+personality rather than a generic tone, and narrate an explicit absence
+or refusal instead of inventing a reply when nobody present would
+plausibly answer. Prompt-only; no new tool or gate needed, since NPC
+dialogue content isn't a mechanical/trust matter.
+
 The turn-order state machine (design doc §3.1, §9.3) now exists too:
 three more DM tools — `start_combat`, `advance_turn`, `end_combat` (see
 `turn_order.go`) — give the model a way to trigger it, but the mechanical
