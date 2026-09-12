@@ -6,6 +6,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,9 +111,20 @@ func TestServe_CharacterUpload_LevelWithinRange_LLMApproves_SetsApprovedAndNotif
 			Actor: &systemenginepb.Actor{ActorId: "engine-actor-1", CharacterData: characterData, SchemaVersion: "opencombatengine-v1", Level: 3},
 		},
 	}
-	fakeLLM := &fakeLLMProvider{response: llm.CompletionResponse{ToolCalls: []llm.ToolCall{{
-		Name: "review_character", Arguments: json.RawMessage(`{"verdict":"approve","reason":"Looks reasonable for level 3."}`),
-	}}}}
+	// respondFunc, not a single canned response: approving this character
+	// also launches sendCharacterIntro (character_intro.go) in the
+	// background against this same fake LLM, and its own system prompt
+	// must not be handed the review's review_character tool call back —
+	// it would spin through its own tool-call loop reacting to a tool it
+	// doesn't recognize before giving up.
+	fakeLLM := &fakeLLMProvider{respondFunc: func(_ int, req llm.CompletionRequest) (llm.CompletionResponse, error) {
+		if isReviewCall(req) {
+			return llm.CompletionResponse{ToolCalls: []llm.ToolCall{{
+				Name: "review_character", Arguments: json.RawMessage(`{"verdict":"approve","reason":"Looks reasonable for level 3."}`),
+			}}}, nil
+		}
+		return llm.CompletionResponse{Text: "You find yourself somewhere quiet, for now."}, nil
+	}}
 	policies := map[string]policy.CampaignPolicy{"campaign-review-approve": {MinLevel: 1, MaxLevel: 5}}
 	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine, policy.NewJSONFileProvider(policies))
 	defer ts.Close()
@@ -138,8 +150,21 @@ func TestServe_CharacterUpload_LevelWithinRange_LLMApproves_SetsApprovedAndNotif
 	if result.Reason != "Looks reasonable for level 3." {
 		t.Errorf("Reason = %q, want the model's own stated reason", result.Reason)
 	}
-	if len(fakeLLM.calls) != 1 {
-		t.Fatalf("LLM was called %d time(s), want exactly 1", len(fakeLLM.calls))
+	// Counts only calls that carry the review's own system prompt —
+	// character_intro.go's own background pass (see the fakeLLM comment
+	// above) also calls this same fake LLM, asynchronously, so asserting
+	// on the raw total would be racy against it; filtering by content
+	// isn't.
+	reviewCalls := 0
+	fakeLLM.mu.Lock()
+	for _, call := range fakeLLM.calls {
+		if isReviewCall(call) {
+			reviewCalls++
+		}
+	}
+	fakeLLM.mu.Unlock()
+	if reviewCalls != 1 {
+		t.Fatalf("review LLM call happened %d time(s), want exactly 1", reviewCalls)
 	}
 
 	saved, err := st.GetCharacter(ctx, payload.CharacterID)
@@ -236,4 +261,18 @@ func TestServe_CharacterUpload_NoLLMConfigured_StaysPendingReview(t *testing.T) 
 	if saved.Status != store.CharacterStatusPendingReview {
 		t.Errorf("saved Status = %q, want %q", saved.Status, store.CharacterStatusPendingReview)
 	}
+}
+
+// isReviewCall reports whether req is runCharacterReviewPass's own
+// completion call (character_review.go uses the SystemPrompt/UserPrompt
+// fields, not Messages) — used to tell it apart from a concurrent
+// sendCharacterIntro call against the same fake LLM (character_intro.go
+// uses Messages instead), which a test approving a character will also
+// trigger in the background.
+func isReviewCall(req llm.CompletionRequest) bool {
+	systemText := req.SystemPrompt
+	if len(req.Messages) > 0 {
+		systemText = req.Messages[0].Content
+	}
+	return strings.Contains(systemText, "reviewing a player-submitted character sheet")
 }

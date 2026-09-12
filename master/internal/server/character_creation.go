@@ -388,6 +388,11 @@ func (s *Server) finishCreationRoll(ctx context.Context, conn *websocket.Conn, c
 // is a routine state refresh." No warnings: unlike an arbitrary
 // pasted-JSON import, a rolled or pregen-claimed character was never
 // anything but mechanically valid to begin with.
+//
+// Also launches sendCharacterIntro in its own goroutine — this
+// character just became playable, and the intro is a best-effort extra,
+// never something the completion response itself should wait on or fail
+// over (see that function's own doc comment).
 func (s *Server) sendCreationComplete(ctx context.Context, conn *websocket.Conn, campaignID, characterID string) error {
 	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterValidationResult, protocol.CharacterValidationResultPayload{
 		CharacterID: characterID,
@@ -398,6 +403,7 @@ func (s *Server) sendCreationComplete(ctx context.Context, conn *websocket.Conn,
 	if err := wsjson.Write(ctx, conn, msg); err != nil {
 		return fmt.Errorf("writing character.validation_result: %w", err)
 	}
+	go s.sendCharacterIntro(campaignID, characterID)
 	return nil
 }
 

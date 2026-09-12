@@ -190,4 +190,13 @@ func (s *Server) concludeCharacterReview(ctx context.Context, campaignID, charac
 	if err := sendToSender(s, senderID, msg); err != nil {
 		s.logger.Warn("character review pass: failed to send character.review_result", "error", err, "character_id", characterID)
 	}
+
+	// An approved import just became playable, the same moment
+	// sendCreationComplete marks for a rolled/claimed-pregen character —
+	// see sendCharacterIntro's own doc comment for why this is the
+	// automatic-review path's hook and not also the admin panel's manual
+	// approval endpoint.
+	if status == store.CharacterStatusApproved {
+		go s.sendCharacterIntro(campaignID, characterID)
+	}
 }

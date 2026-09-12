@@ -1562,6 +1562,37 @@ imported) all converge on the same `character.validation_result` reply
 `character.upload` already produced, so the client's existing
 completion handling needed no branching for the new callers.
 
+**New**: a personal character-introduction narration
+(`internal/server/character_intro.go`) fires exactly once, right when a
+character becomes playable — sendCreationComplete (rolled or claimed-
+pregen) and concludeCharacterReview's own Approved case (an import that
+clears review) both trigger it, in its own background goroutine so the
+completion response itself never waits on an LLM call. It's a private
+`client.display` (`visibility.scope = "private"`, scoped to that one
+character, same mechanism `narrate_privately` uses) — a short "how you
+got here" vignette grounded in the character's own real race/class/
+gender/background, and, when a campaign pack is bound, its real
+locations/NPCs/encounters via the same read-only lore tools the DM's own
+narration pass uses (`list_locations`/`list_npcs`/`list_encounters` —
+see `campaignPackLoreTools` in `dm_slow_pass.go`), rather than an
+ungrounded generic opener. With no pack bound it stays grounded only in
+the character's own data. Best-effort throughout: no LLM configured, no
+characters store, or an LLM/tool failure just means this one player
+never gets the extra message — their character is already playable
+either way. **Known gap**: not yet wired into the admin panel's own
+manual character-review-decision endpoint (`internal/admin`'s
+`handleReviewCharacter`), which saves the approved status directly and
+has no reference to this package's LLM/campaign-pack wiring today — an
+import a Host approves by hand doesn't get this message yet, only the
+roll/claimed-pregen paths and the *automatic* review pass do.
+
+This surfaced a real OpenCombatEngine bug along the way, the same class
+already fixed for `Gender`/`RaceName`: the chosen (or quick-mode
+auto-rolled) SRD **Background** was used at creation for starting
+equipment/gold but never actually exposed on the finished character —
+fixed upstream, `CreatureState`/`StandardCreature` now round-trip it the
+same way.
+
 **Verified live**, real sidecar + real Master, no LLM needed (this
 feature doesn't touch narration): a full quick-roll and a full detailed
 roll end-to-end through the real WS protocol, confirming the SRD
