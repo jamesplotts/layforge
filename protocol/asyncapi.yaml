@@ -73,8 +73,6 @@ channels:
           - $ref: '#/components/messages/NarrativePlayerBubble'
           - $ref: '#/components/messages/NarrativeSystemNote'
           - $ref: '#/components/messages/MapTokenState'
-          - $ref: '#/components/messages/RollRequest'
-          - $ref: '#/components/messages/RollResult'
           - $ref: '#/components/messages/AudioTranscription'
           - $ref: '#/components/messages/CharacterValidationResult'
           - $ref: '#/components/messages/CharacterReviewResult'
@@ -331,15 +329,18 @@ components:
       summary: >
         A player asks Master to resolve a mechanical check (ability check,
         saving throw, or death save) for a character they own. This is the
-        trigger for the RollRequest/RollResult pair below — Master calls
-        the System Engine's resolve_check() and broadcasts the outcome to
-        the whole campaign, not just the requester, so everyone sees the
-        roll happen. check_type/ability/skill are engine-agnostic strings
-        rather than an enum, since the System Engine gRPC contract's own
-        ResolveCheck params are engine-defined (docs/design.md §6.1) — this
-        message's shape mirrors that, not a d20-specific assumption. Master
-        rejects the request (system.error) if character_id doesn't belong
-        to a character the sender uploaded (design doc §9.4's OwnerID).
+        trigger for the client.roll/client.roll_spectate pair below —
+        Master calls the System Engine's resolve_check(), then sends the
+        roller a clickable client.roll (its result already decided) and
+        everyone else a result-less client.roll_spectate ghost, so the
+        whole table sees the roll happen without spectators seeing the
+        number before the roller reveals it (docs/design.md §9.7).
+        check_type/ability/skill are engine-agnostic strings rather than an
+        enum, since the System Engine gRPC contract's own ResolveCheck
+        params are engine-defined (docs/design.md §6.1) — this message's
+        shape mirrors that, not a d20-specific assumption. Master rejects
+        the request (system.error) if character_id doesn't belong to a
+        character the sender uploaded (design doc §9.4's OwnerID).
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -364,62 +365,11 @@ components:
                     type: string
                     description: Optional skill name, for check_type "ability_check".
 
-    RollRequest:
-      name: roll.request
-      messageId: roll_request
-      title: Roll requested
-      summary: Master informs a client a roll is about to happen (e.g. so it can pre-stage the dice-tray animation), roll spec sourced from the system engine, not assumed d20-shaped.
-      payload:
-        allOf:
-          - $ref: '#/components/schemas/Envelope'
-          - type: object
-            required: [payload]
-            properties:
-              type:
-                const: roll.request
-              payload:
-                type: object
-                required: [character_id, roll_spec]
-                properties:
-                  character_id:
-                    type: string
-                  roll_spec:
-                    $ref: '#/components/schemas/RollSpec'
-
-    RollResult:
-      name: roll.result
-      messageId: roll_result
-      title: Authoritative roll result
-      summary: The server-computed result. Clients animate a tumble that lands on this outcome; they never determine it (docs/design.md §3.1, §4).
-      payload:
-        allOf:
-          - $ref: '#/components/schemas/Envelope'
-          - type: object
-            required: [payload]
-            properties:
-              type:
-                const: roll.result
-              payload:
-                type: object
-                required: [character_id, rolls, total]
-                properties:
-                  character_id:
-                    type: string
-                  rolls:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/DieRoll'
-                  total:
-                    type: integer
-                  result_summary:
-                    type: string
-                    description: Short machine-usable label, e.g. "hit", "miss", "success", "failure".
-
     RollAcknowledge:
       name: roll.acknowledge
       messageId: roll_acknowledge
       title: Client acknowledges roll animation complete
-      summary: Lets Master sequence narration after the dice-tray animation finishes rather than racing it.
+      summary: Lets Master sequence narration after the roll animation finishes rather than racing it.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -1094,11 +1044,11 @@ components:
     # The small, reusable set of chat-bubble interactions Master uses to
     # talk to a player. Character creation is built entirely out of
     # client.query / client.choice — it is not a separate prompt
-    # mechanism. The client.roll* messages are specced but not yet emitted
-    # or consumed by Master; a follow-up builds the interactive dice UI,
-    # the per-die reveal relay, and the DM-slow-pass "wait for the roll"
-    # gate, and retires roll.request/roll.result. Speccing them now avoids
-    # a protocol migration then.
+    # mechanism. The client.roll* messages are the interactive dice-roll
+    # bubble family — see internal/server/client_roll.go — and are what
+    # roll.check_request's outcome (and a DM-triggered resolve_check, or
+    # an automatic death save) is delivered through; roll.request/
+    # roll.result are retired.
 
     ClientDisplay:
       name: client.display
@@ -1291,16 +1241,13 @@ components:
     ClientRoll:
       name: client.roll
       messageId: client_roll
-      title: Prompt the roller for a dice roll (not yet emitted)
+      title: Prompt the roller for a dice roll
       summary: >
         Sent to the player who has to roll. The client shows one clickable
         outline per die; each click reveals that die's already-decided
         result with a tumble animation, and sends a client.roll_reveal.
         The results are the engine's authoritative values, pre-sent so the
-        click is a reveal, not a computation. SPECCED ONLY — nothing emits
-        this yet; a follow-up builds the interactive dice UI and the
-        DM-slow-pass "wait for the roll" gate, retiring
-        roll.request/roll.result.
+        click is a reveal, not a computation.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -1342,12 +1289,12 @@ components:
     ClientRollSpectate:
       name: client.roll_spectate
       messageId: client_roll_spectate
-      title: Read-only twin of client.roll for spectators (not yet emitted)
+      title: Read-only twin of client.roll for spectators
       summary: >
         Sent to every OTHER client in the campaign. Its dice carry no
         result — spectators can't see the numbers until the roller reveals
         them (docs/design.md §9.7). Each ghost die is filled in by a
-        following client.roll_spectate_reveal. SPECCED ONLY.
+        following client.roll_spectate_reveal.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -1385,12 +1332,11 @@ components:
     ClientRollReveal:
       name: client.roll_reveal
       messageId: client_roll_reveal
-      title: The roller revealed one die (not yet emitted)
+      title: The roller revealed one die
       summary: >
         The roller telling Master they just clicked (and revealed) one die
         of prompt_id. Master looks up that die's authoritative result and
-        relays it to spectators as client.roll_spectate_reveal. SPECCED
-        ONLY.
+        relays it to spectators as client.roll_spectate_reveal.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -1411,11 +1357,11 @@ components:
     ClientRollSpectateReveal:
       name: client.roll_spectate_reveal
       messageId: client_roll_spectate_reveal
-      title: Relay one revealed die to spectators (not yet emitted)
+      title: Relay one revealed die to spectators
       summary: >
         Master relaying one revealed die to the spectator clients, so
         their ghost die turns into the result die at the same moment the
-        roller sees it. SPECCED ONLY.
+        roller sees it.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -1438,12 +1384,13 @@ components:
     ClientRollComplete:
       name: client.roll_complete
       messageId: client_roll_complete
-      title: Every die of a roll has been revealed (not yet emitted)
+      title: Every die of a roll has been revealed
       summary: >
         Broadcast to the whole campaign once every die of prompt_id has
-        been revealed. Also the signal that unblocks the DM's slow pass,
-        which was waiting for the roll to finish before narrating. SPECCED
-        ONLY.
+        been revealed (or the reveal timed out and Master self-revealed
+        the rest). Also the signal that unblocks the DM's slow pass, which
+        waits for the roll to finish before narrating a DM-triggered
+        check.
       payload:
         allOf:
           - $ref: '#/components/schemas/Envelope'
@@ -1462,7 +1409,7 @@ components:
                     type: integer
                   result_summary:
                     type: string
-                    description: An engine-set characterization ("Hit", "Critical hit", "9 slashing damage") when available.
+                    description: 'The composed label + breakdown line for display beside the dice, e.g. "Charisma (Persuasion) Check: 13 -1 = 12".'
 
   schemas:
 
@@ -1529,36 +1476,3 @@ components:
         position:
           $ref: '#/components/schemas/GridPosition'
 
-    DieRoll:
-      type: object
-      required: [sides, result]
-      properties:
-        sides:
-          type: integer
-        result:
-          type: integer
-        label:
-          type: string
-          description: Disambiguates multi-die pools, e.g. "d20", "damage-1".
-
-    RollSpec:
-      type: object
-      description: Roll shape sourced from the system engine — not assumed d20-based (docs/design.md §4).
-      required: [dice]
-      properties:
-        dice:
-          type: array
-          items:
-            type: object
-            required: [sides, count]
-            properties:
-              sides:
-                type: integer
-              count:
-                type: integer
-        success_threshold:
-          type: integer
-          description: For pool-based systems (e.g. count successes at or above this value); omitted for simple total-vs-DC systems.
-        botch_rule:
-          type: string
-          description: Engine-defined description of botch/fumble handling, if any.

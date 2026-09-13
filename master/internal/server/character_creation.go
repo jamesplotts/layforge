@@ -380,8 +380,8 @@ func (s *Server) finishCreationRoll(ctx context.Context, conn *websocket.Conn, c
 // the same message type character.upload's own successful import
 // already answers with, not character.state: the client's existing
 // completion handling (onCharacterValidationResult — set state.
-// rollCharacterId, fetch the schema, activate the dice tray) already
-// triggers off character.validation_result specifically, and
+// rollCharacterId, fetch the schema) already triggers off
+// character.validation_result specifically, and
 // character.state is separately, ambiguously used for ordinary live
 // character.get replies during play — reusing it here would leave the
 // client unable to tell "your new character is ready" apart from "here

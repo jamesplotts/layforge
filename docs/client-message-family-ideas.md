@@ -8,9 +8,8 @@ talk *to* a player. What exists today:
 
 - **Built and in use:** `client.display`, `client.query` /
   `client.query_response`, `client.choice` / `client.choice_response`,
-  `client.image`.
-- **Specced, not built:** the `client.roll*` dice family — see
-  [`client-roll-followup.md`](client-roll-followup.md).
+  `client.image`, and the `client.roll*` interactive dice family (see
+  `master/README.md`'s Status section for the full writeup).
 
 This note collects candidate *additional* bubble types. **Nothing here
 is committed work** — it's a design backlog. Each entry says what gap it

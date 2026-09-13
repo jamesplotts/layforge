@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LayForge</title>
   <link rel="stylesheet" href="style.css" />
-  <link rel="stylesheet" href="dice.css" />
 </head>
 <body>
   <!-- Join screen: gathers campaign_id / character_id / sender_id before
@@ -90,8 +89,9 @@ If you do not agree, do not join this game.</pre>
   </div>
 
   <!-- Chat screen: narrative scrollback (design doc §4's V1 client),
-       history paging, a safety-flag control (§9.2), the dice tray and
-       character sidebar below, and push-to-talk (mic-button, §4). -->
+       history paging, a safety-flag control (§9.2), interactive dice
+       bubbles and character sidebar below, and push-to-talk
+       (mic-button, §4). -->
   <section id="chat-screen" class="screen" hidden>
     <header class="chat-header">
       <div>
@@ -118,38 +118,26 @@ If you do not agree, do not join this game.</pre>
       </div>
     </div>
 
-    <!-- Two-column body: chat-main (scrollback, dice tray, input) on the
-         left, the character sidebar on the right. Sidebar placement is a
-         pure CSS choice (see the .chat-body/.character-sidebar rules in
-         style.css) — flip it to the other side by editing that one rule,
-         nothing in this markup or app.js assumes a side. -->
+    <!-- Two-column body: chat-main (scrollback with its dice bubbles,
+         input) on the left, the character sidebar on the right. Sidebar
+         placement is a pure CSS choice (see the .chat-body/
+         .character-sidebar rules in style.css) — flip it to the other
+         side by editing that one rule, nothing in this markup or app.js
+         assumes a side. -->
     <div class="chat-body">
       <div class="chat-main">
         <button id="load-earlier-button" type="button" class="load-earlier" hidden>
           Load earlier history
         </button>
-        <!-- .log-frame is a non-scrolling positioned wrapper so the
-             cosmetic dice canvas (#dice-overlay) can be layered over
-             exactly the visible message viewport without scrolling with
-             the conversation. #dice-overlay is pointer-events:none (hard
-             constraint #4) — it never blocks log scroll or text
-             selection. dice.js sizes the canvas to the overlay's client
-             rect and builds its physics walls from those pixels. -->
+        <!-- .log-frame is a non-scrolling positioned wrapper around #log
+             — it anchors the tooled-leather border (.log-frame::after),
+             which must stay fixed in place rather than scroll with the
+             conversation. A resolved check (resolve_check, whether DM-
+             triggered or player-initiated) shows up as an interactive
+             client.roll bubble directly in #log, not a separate tray —
+             see app.js's "client.roll* interactive dice" section. -->
         <div class="log-frame">
           <div id="log" class="log"></div>
-          <div id="dice-overlay" class="dice-overlay" aria-hidden="true"></div>
-        </div>
-
-        <!-- Dice tray: the last-result readout for every roll in the
-             campaign (design doc §3.1, §4 — roll.request/roll.result
-             broadcasts, whoever or whatever triggered them). The die
-             itself tumbles in #dice-overlay above; players don't roll
-             their own checks from here — the DM's mechanics pass does
-             that via resolve_check. -->
-        <div class="dice-tray">
-          <div class="dice-tray-controls">
-            <div id="dice-tray-result" class="dice-tray-result"></div>
-          </div>
         </div>
 
         <form id="input-form" class="input-form">
@@ -220,12 +208,8 @@ If you do not agree, do not join this game.</pre>
     </div>
   </div>
 
-  <!-- Both modules: dice.js imports three.js/cannon-es as ES modules
-       (vendor/, see vendor/README.md) and must be one itself; app.js is
-       one too so its execution is guaranteed to wait until after dice.js
-       has attached window.Dice — module scripts run in document order,
-       after parsing, unlike a plain classic script. -->
-  <script type="module" src="dice.js"></script>
+  <!-- module, not a plain classic script: app.js imports
+       character-sheet.js as an ES module. -->
   <script type="module" src="app.js"></script>
 </body>
 </html>

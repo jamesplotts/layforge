@@ -82,13 +82,10 @@ pass's narration and the incapacitated-turn skip emit `client.display`
 the single-use pending-prompt registry that pairs a query/choice with
 its response live in `internal/server/clientmsg.go`.
 
-Also specced but **not built**: `client.roll` / `client.roll_spectate` /
-`client.roll_reveal` / `client.roll_spectate_reveal` /
-`client.roll_complete` — the interactive dice-roll bubble. The payloads
-round-trip and the AsyncAPI entries exist so it isn't a protocol
-migration later; the UI, the DM-waits-for-the-roll slow-pass change, and
-retiring `roll.request`/`roll.result` are a follow-up. See
-[`docs/client-roll-followup.md`](../docs/client-roll-followup.md).
+`client.roll` / `client.roll_spectate` / `client.roll_reveal` /
+`client.roll_spectate_reveal` / `client.roll_complete` — the interactive
+dice-roll bubble — are also now built; see the dedicated entry further
+down this file for the full writeup.
 
 The narrative-transform pipeline's slow pass (design doc §7, §8) now
 runs too: after the fast pass's literal echo of the player's action,
@@ -2527,6 +2524,76 @@ ReturnsFailureToolResult`, and `SpendCurrency_PvPGate` (the same
 own-character/different-player's-character/allowed-policy/NPC/dead-source
 matrix `TransferCurrency_PvPGate` already covers). Not yet live-verified
 against a real DM model this pass.
+
+**The interactive `client.roll` dice bubble is built** (was "specced but
+not built" above, and in `docs/client-roll-followup.md`, now removed —
+its brief is done). `roll.check_request` (player-initiated) and
+`resolve_check`/an automatic death save (DM-triggered, `dm_tools.go`/
+`turn_order.go`) both now flow through `client.roll`/`client.roll_
+spectate`/`client.roll_reveal`/`client.roll_spectate_reveal`/`client.
+roll_complete` instead of the old `roll.request`/`roll.result`
+broadcast pair, which are retired (`MessageTypeRollRequest`/
+`MessageTypeRollResult`, `RollRequestPayload`/`RollResultPayload`/
+`RollSpec`/`DieRoll` all deleted). Master still computes the
+authoritative roll exactly as before — the change is purely in how the
+result reaches the table: the roller's own client gets a clickable
+ghost die showing the already-decided result only once clicked, every
+other client gets a read-only ghost twin that fills in the instant the
+roller reveals it (anti-metagaming, design doc §9.7), and a composed
+label + breakdown line (e.g. "Charisma (Persuasion) Check: 13 -1 = 12",
+built server-side by `checkLabel`/`checkResultSummary` in the new
+`internal/server/client_roll.go`) appears once every die is revealed.
+A revealer who never clicks doesn't block the table forever — `Client
+RollTimeout` (25s, reassignable for tests) self-reveals and completes
+the roll on Master's behalf.
+Two call sites (`dmResolveCheck`, the death-save branch in
+`turn_order.go`) already ran on a detached goroutine and wait on the
+reveal inline; the player-initiated path (`resolveCheck`) runs on its
+own connection's read loop, which must stay free to read that
+connection's own `client.roll_reveal` back, so it hands the wait off to
+a new goroutine instead of blocking inline (a real self-deadlock risk
+this change had to design around, not an arbitrary style choice) —
+initiative rolls at combat start go further still and don't wait for the
+reveal at all (fire-and-forget: turn order is computed immediately from
+the already-known total), since blocking a serial per-combatant loop on
+NPCs that have no owner to ever reveal would slow every multi-NPC combat
+start down to the full timeout, combatant by combatant.
+The old WebGL dice tray (`web/dice.js`, `dice-skins.js`, `dice.css`, the
+vendored three.js/cannon-es) is gone — the die now renders as a plain
+SVG outline directly in the chat bubble (`web/app.js`'s "client.roll*
+interactive dice" section); see `web/README.md` for the client-side
+writeup.
+
+**The character sheet's Ability Scores/Skills got real, computed tables**
+(design doc §4 — a schema-driven sidebar, no client-side D&D knowledge).
+`character.schema_response`'s schema and `character.get`'s state both
+gained two new arrays alongside the existing `abilityScores` object:
+`abilities` (six `{name, score, modifier}` rows in STR/DEX/CON/INT/WIS/
+CHA order) and `skills` (all 18 SRD skills, each `{name, ability,
+proficient, modifier}` — `ability` is the 3-letter abbreviation, and
+`modifier` is the real computed value, including any standing
+ability-check bonus from an active effect: the engine reuses
+`Effects.ApplyStatBonuses(StatType.AbilityCheck, ...)`, the exact same
+hook a real roll's total already goes through). This closed a real,
+independent OpenCombatEngine bug along the way: skill and saving-throw
+proficiencies were never persisted at all (no `IStateful` state, nothing
+on `CreatureState`) — every proficient skill's bonus was silently lost
+on the next save/restore, the same bug class as the earlier Gender/
+RaceName/Background/ActionEconomy round-trip gaps. Fixed with a new
+`CheckManagerState` on `CreatureState`, additive like those earlier
+fixes. On the client, `character-sheet.js` gained one *structural*
+capability rather than hardcoded D&D knowledge: any schema array whose
+items are 2+ scalar-only properties now renders as a real `<table>`
+(`isUniformScalarArraySchema`/`renderArrayAsTable`) instead of the
+stacked field-row list — `abilities`/`skills` get tabs automatically
+from the existing tab-detection logic, with no new tab-naming code, and
+any future engine's own array-of-records data gets the same table
+rendering for free. **Honest, flagged limitation**: `StatType` has no
+per-skill granularity today — an item or feat that boosts one *named*
+skill only (not ability checks generally) has no representation
+anywhere in the engine yet, so the Skills tab can't yet show that kind
+of bonus; it accurately reflects everything the engine can currently
+compute, and nothing it can't.
 
 ## Layout
 

@@ -82,10 +82,11 @@ func (s *Server) characterIsDead(ctx context.Context, character store.Character)
 // the SRD rule that this happens every turn without the DM having to
 // remember it. Persists the character's updated state (action-economy
 // reset, condition ticks, and any death-save mutation all live in the
-// same character_data StartTurn returns) and broadcasts the death save
-// as a real roll.request/roll.result (design doc §3.1, §4) if one was
-// rolled, so the whole table sees it animate on the dice tray exactly
-// like any other roll — never applied silently.
+// same character_data StartTurn returns) and, if one was rolled, sends
+// the death save through the same interactive client.roll flow any
+// other check uses — the character's own owner gets a real die to
+// click, everyone else sees a ghost die fill in — never applied
+// silently.
 func (s *Server) startTurnFor(ctx context.Context, campaignID, characterID string) error {
 	character, err := s.campaignCharacter(ctx, campaignID, characterID)
 	if err != nil {
@@ -122,8 +123,15 @@ func (s *Server) startTurnFor(ctx context.Context, campaignID, characterID strin
 	}
 
 	if resp.DeathSaveRolled && resp.DeathSaveOutcome != nil {
-		if err := s.broadcastRollOutcome(ctx, campaignID, characterID, resp.DeathSaveOutcome); err != nil {
-			s.logger.Warn("failed to broadcast automatic death save roll", "error", err, "campaign_id", campaignID, "character_id", characterID)
+		// Inline, not via `go` — safe because this whole call chain
+		// (advanceToNextActionableCharacter <- startCombat/advanceTurn <-
+		// callDMTool <- runMechanicsPass) runs entirely on the detached
+		// goroutine renderPlayerBubble starts via `go s.runSlowPass(...)`,
+		// confirmed by inspection, not assumed — unlike resolveCheck,
+		// nothing here is a connection's own read-loop goroutine that
+		// needs to stay free to read this roll's own reveal.
+		if err := s.sendClientRollAndWait(ctx, campaignID, character, protocol.ClientRollPurposeDeathSave, checkLabel("death_save", "", ""), resp.DeathSaveOutcome); err != nil {
+			s.logger.Warn("failed sending/waiting for interactive death save roll", "error", err, "campaign_id", campaignID, "character_id", characterID)
 		}
 	}
 
@@ -331,12 +339,26 @@ func (s *Server) startCombat(ctx context.Context, campaignID string, characterID
 		if !resp.Success {
 			return protocol.TurnStatePayload{}, fmt.Errorf("rolling initiative for %q: %s", id, resp.Error)
 		}
-		// Initiative is as much a shared table event as any other check —
-		// broadcast it the same way so every client's dice tray animates
-		// it (design doc §3.1, §4).
-		if err := s.broadcastRollOutcome(ctx, campaignID, character.ID, resp.Outcome); err != nil {
-			s.logger.Warn("failed to broadcast initiative roll outcome", "error", err, "character_id", character.ID)
-		}
+		// Fire-and-forget, not awaited: this loop rolls initiative for
+		// every combatant in one pass at combat start, and turn order
+		// needs the real totals immediately, not after however many of
+		// them have a connected owner willing to click their own die —
+		// unlike startTurnFor's single-character death save, blocking
+		// here would serialize up to ClientRollTimeout per combatant
+		// (worst case for every NPC, which has no owner to ever reveal
+		// it) before combat could even start. The interactive reveal
+		// still happens for whoever's watching, just asynchronously,
+		// after turn order is already announced from the authoritative
+		// resp.Outcome.Total below — same reasoning resolveCheck's own
+		// `go` wrapping uses, applied here for pacing rather than
+		// deadlock-avoidance.
+		go func(character store.Character, outcome *systemenginepb.Outcome) {
+			rollCtx, cancel := context.WithTimeout(context.Background(), ClientRollTimeout+5*time.Second)
+			defer cancel()
+			if err := s.sendClientRollAndWait(rollCtx, campaignID, character, protocol.ClientRollPurposeInitiative, "Initiative", outcome); err != nil {
+				s.logger.Warn("failed sending/waiting for interactive initiative roll", "error", err, "character_id", character.ID)
+			}
+		}(character, resp.Outcome)
 		rolls = append(rolls, rolled{characterID: character.ID, total: resp.Outcome.Total})
 	}
 
@@ -416,8 +438,7 @@ func (s *Server) endCombat(ctx context.Context, campaignID string) (protocol.Tur
 
 // broadcastTurnState announces payload to the whole campaign as
 // turn.state, recording it to the durable event log first the same way
-// every other Master-originated broadcast does (see broadcastToolResult,
-// broadcastRollOutcome).
+// every other Master-originated broadcast does (see broadcastToolResult).
 func (s *Server) broadcastTurnState(ctx context.Context, campaignID string, payload protocol.TurnStatePayload) error {
 	msg, err := newMessage(campaignID, protocol.MessageTypeTurnState, payload)
 	if err != nil {

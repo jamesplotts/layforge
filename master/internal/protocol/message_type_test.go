@@ -24,8 +24,6 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "CharacterUpload_ReturnsTrue", t: MessageTypeCharacterUpload, want: true},
 		{name: "CharacterValidationResult_ReturnsTrue", t: MessageTypeCharacterValidationResult, want: true},
 		{name: "RollCheckRequest_ReturnsTrue", t: MessageTypeRollCheckRequest, want: true},
-		{name: "RollRequest_ReturnsTrue", t: MessageTypeRollRequest, want: true},
-		{name: "RollResult_ReturnsTrue", t: MessageTypeRollResult, want: true},
 		{name: "CharacterSchemaRequest_ReturnsTrue", t: MessageTypeCharacterSchemaRequest, want: true},
 		{name: "CharacterSchemaResponse_ReturnsTrue", t: MessageTypeCharacterSchemaResponse, want: true},
 		{name: "CharacterGet_ReturnsTrue", t: MessageTypeCharacterGet, want: true},

@@ -126,7 +126,13 @@ const narrationPassMaxToolIterations = 5
 // mechanics took fixes the starvation; sendSlowPassFailureNotice fixes
 // the silence itself, for this and every other failure path here, since
 // a slow self-hosted model can still legitimately exhaust either budget.
-const mechanicsPassTimeout = 90 * time.Second
+// mechanicsPassTimeout raised 90s -> 180s once resolve_check started
+// waiting on a real player click (client_roll.go): a single mechanics
+// pass can now contain more than one resolve_check/automatic-death-save
+// wait, each independently bounded by ClientRollTimeout (25s worst
+// case) — 90s only comfortably covered ~2-3 such worst-case waits on
+// top of ordinary LLM completion latency.
+const mechanicsPassTimeout = 180 * time.Second
 const narrationPassTimeout = 90 * time.Second
 
 // runSlowPass runs design doc §7's slow pass for input: build the

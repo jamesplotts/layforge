@@ -158,6 +158,52 @@ func TestHub_SendToSender_UnknownSender_NoOp(t *testing.T) {
 	h.SendToSender("campaign-1", "nobody-registered", []byte("hello"))
 }
 
+func TestHub_BroadcastExceptSender_DeliversToEveryoneButTheExcludedSender(t *testing.T) {
+	h := session.NewHub()
+	a := h.Register("campaign-1", "player-a")
+	b := h.Register("campaign-1", "player-b")
+	c := h.Register("campaign-1", "player-c")
+
+	h.BroadcastExceptSender("campaign-1", "player-a", []byte("everyone-but-a"))
+
+	if got, ok := recvOrTimeout(t, a.Outbox(), 200*time.Millisecond); ok {
+		t.Errorf("player-a (excluded): received %q, want nothing", got)
+	}
+	for name, conn := range map[string]*session.Client{"player-b": b, "player-c": c} {
+		got, ok := recvOrTimeout(t, conn.Outbox(), time.Second)
+		if !ok {
+			t.Fatalf("%s: no message received", name)
+		}
+		if string(got) != "everyone-but-a" {
+			t.Errorf("%s: got %q, want %q", name, got, "everyone-but-a")
+		}
+	}
+}
+
+func TestHub_BroadcastExceptSender_MultipleConnectionsSameExcludedSender_AllExcluded(t *testing.T) {
+	h := session.NewHub()
+	tab1 := h.Register("campaign-1", "player-a")
+	tab2 := h.Register("campaign-1", "player-a")
+	other := h.Register("campaign-1", "player-b")
+
+	h.BroadcastExceptSender("campaign-1", "player-a", []byte("hello"))
+
+	for name, conn := range map[string]*session.Client{"tab1": tab1, "tab2": tab2} {
+		if got, ok := recvOrTimeout(t, conn.Outbox(), 200*time.Millisecond); ok {
+			t.Errorf("%s: received %q, want nothing (every connection for the excluded sender)", name, got)
+		}
+	}
+	if _, ok := recvOrTimeout(t, other.Outbox(), time.Second); !ok {
+		t.Error("player-b: no message received")
+	}
+}
+
+func TestHub_BroadcastExceptSender_UnknownCampaign_NoOp(t *testing.T) {
+	h := session.NewHub()
+	// No Register call for this campaign at all — must not panic or block.
+	h.BroadcastExceptSender("nobody-here", "player-a", []byte("hello"))
+}
+
 func TestHub_Kick_ConnectedSender_InvokesCloserAndReturnsTrue(t *testing.T) {
 	h := session.NewHub()
 	c := h.Register("campaign-1", "player-a")

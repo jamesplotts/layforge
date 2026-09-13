@@ -145,8 +145,8 @@ func TestServe_RollCheckRequest_CombatActive_YourTurn_Succeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading response to char-a's on-turn roll: %v", err)
 	}
-	if typ != protocol.MessageTypeRollRequest {
-		t.Errorf("response type = %q, want %q (it is char-a's turn)", typ, protocol.MessageTypeRollRequest)
+	if typ != protocol.MessageTypeClientRoll {
+		t.Errorf("response type = %q, want %q (it is char-a's turn)", typ, protocol.MessageTypeClientRoll)
 	}
 }
 

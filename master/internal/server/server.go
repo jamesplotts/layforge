@@ -247,6 +247,15 @@ type Server struct {
 	pendingPrompts   map[string]promptWaiter
 	pendingPromptsMu sync.Mutex
 
+	// pendingRolls holds each in-flight client.roll exchange
+	// (client_roll.go) — same ephemeral, in-memory, mutex-guarded shape as
+	// pendingPrompts, but a real blocking wait rather than a fire-and-
+	// forget callback registry: the goroutine that sent the roll blocks
+	// on pendingRoll.done until either client.roll_reveal resolves every
+	// die or ClientRollTimeout fires.
+	pendingRolls   map[string]*pendingRoll
+	pendingRollsMu sync.Mutex
+
 	// adminSettings backs the operator-terms gate (terms.go): dispatch
 	// checks whether the Host has accepted internal/terms.Version via
 	// this same store the admin panel's own /api/terms endpoints read
@@ -336,6 +345,7 @@ func New(logger *slog.Logger, events store.EventStore, llmProvider llm.Provider,
 		pregens:          pregenStore,
 		creationSessions: make(map[string]creationSession),
 		pendingPrompts:   make(map[string]promptWaiter),
+		pendingRolls:     make(map[string]*pendingRoll),
 		adminSettings:    adminSettings,
 		safety:           safetyStore,
 	}
@@ -745,6 +755,15 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed client.choice_response payload: %w", err))
 		}
 		return s.handleClientChoiceResponse(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
+	case protocol.MessageTypeClientRollReveal:
+		var req protocol.ClientRollRevealMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed client.roll_reveal payload: %w", err))
+		}
+		// Not recorded — same reasoning as client.query_response/
+		// client.choice_response above; the roll's own client.roll_complete
+		// is what a client actually needs to reconstruct history from.
+		return s.handleClientRollReveal(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}
@@ -962,16 +981,18 @@ func (s *Server) importCharacter(ctx context.Context, conn *websocket.Conn, camp
 // concept this codebase has, but it's real and enforced here, not
 // aspirational), rejects it if structured combat is active and it isn't
 // that character's turn (enforceTurnOrder, design doc §3.1, §9.3), calls
-// the System Engine's ResolveCheck for it, and broadcasts the outcome to
-// the whole campaign as roll.request (so every client's dice tray can
-// pre-stage an animation) followed by roll.result (the authoritative
-// outcome, design doc §3.1, §4) — never just to the requester, since
-// design doc §4's dice tray is meant to be a shared, visible-to-everyone
-// table event, not a private roll.
+// the System Engine's ResolveCheck for it, and delivers the outcome
+// through the client.roll* family (sendClientRollAndWait, below): the
+// roller gets a clickable client.roll whose result is already decided,
+// everyone else in the campaign gets a result-less client.roll_spectate
+// ghost that fills in the instant the roller reveals it (anti-
+// metagaming, design doc §9.7) — never just to the requester, since a
+// roll is meant to be a shared, visible-to-everyone table event, not a
+// private one.
 //
-// roll.request's RollSpec is derived from the real, already-resolved
-// Outcome.Rolls (grouped by die size), not assumed — Master never
-// hardcodes which dice a system engine uses (design doc §6.1, CLAUDE.md).
+// The dice a client.roll carries are derived from the real,
+// already-resolved Outcome.Rolls, not assumed — Master never hardcodes
+// which dice a system engine uses (design doc §6.1, CLAUDE.md).
 func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.RollCheckRequestMessage) error {
 	if s.systemEngine == nil {
 		return s.sendError(ctx, conn, campaignID, req.MessageID, errors.New("dice resolution unavailable: no system engine configured"))
@@ -1022,58 +1043,28 @@ func (s *Server) resolveCheck(ctx context.Context, conn *websocket.Conn, campaig
 		return s.sendError(ctx, conn, campaignID, req.MessageID, fmt.Errorf("check could not be resolved: %s", resp.Error))
 	}
 
-	return s.broadcastRollOutcome(ctx, campaignID, character.ID, resp.Outcome)
-}
-
-// broadcastRollOutcome announces a resolved check to every client in
-// campaignID as roll.request (so a dice tray can pre-stage an animation,
-// RollSpec derived from outcome.Rolls grouped by die size — never
-// assumed, Master doesn't hardcode which dice a system engine uses,
-// design doc §6.1, CLAUDE.md) followed by roll.result (the authoritative
-// outcome, design doc §3.1, §4). Shared by resolveCheck (a player's own
-// roll.check_request) and the DM tool-use resolve_check tool (design doc
-// §8) — a DM-triggered check is just as much a shared table event as a
-// player-triggered one, so both animate the same way.
-func (s *Server) broadcastRollOutcome(ctx context.Context, campaignID, characterID string, outcome *systemenginepb.Outcome) error {
-	rolls := make([]protocol.DieRoll, len(outcome.Rolls))
-	var diceOrder []int
-	diceCounts := make(map[int]int)
-	for i, r := range outcome.Rolls {
-		rolls[i] = protocol.DieRoll{Sides: int(r.Sides), Result: int(r.Result), Label: r.Label}
-		sides := int(r.Sides)
-		if _, seen := diceCounts[sides]; !seen {
-			diceOrder = append(diceOrder, sides)
+	label := checkLabel(req.Payload.CheckType, req.Payload.Ability, req.Payload.Skill)
+	purpose := checkPurpose(req.Payload.CheckType)
+	outcome := resp.Outcome
+	// Detached: this dispatch is running on this very connection's own
+	// readLoop goroutine, which must stay free to read the
+	// client.roll_reveal this roll is about to wait for — blocking here
+	// inline (the way dmResolveCheck/startTurnFor safely do, since both
+	// already run on the detached mechanics-pass goroutine) would
+	// self-deadlock into a timeout on every player-initiated check, since
+	// this same connection could never read its own reveal while stuck
+	// waiting for it. context.Background(), not ctx: this wait shouldn't
+	// be tied to this WebSocket request's own lifetime, only to
+	// ClientRollTimeout — the same posture runSlowPass's own detached
+	// mechCtx already takes for the DM-triggered path.
+	go func() {
+		rollCtx, cancel := context.WithTimeout(context.Background(), ClientRollTimeout+5*time.Second)
+		defer cancel()
+		if err := s.sendClientRollAndWait(rollCtx, campaignID, character, purpose, label, outcome); err != nil {
+			s.logger.Warn("interactive roll failed", "error", err, "character_id", character.ID)
 		}
-		diceCounts[sides]++
-	}
-	dice := make([]protocol.RollDie, len(diceOrder))
-	for i, sides := range diceOrder {
-		dice[i] = protocol.RollDie{Sides: sides, Count: diceCounts[sides]}
-	}
-
-	requestMsg, err := newMessage(campaignID, protocol.MessageTypeRollRequest, protocol.RollRequestPayload{
-		CharacterID: characterID,
-		RollSpec:    protocol.RollSpec{Dice: dice},
-	})
-	if err != nil {
-		return err
-	}
-	recordEvent(ctx, s, requestMsg)
-	if err := broadcastMessage(s, requestMsg); err != nil {
-		return err
-	}
-
-	resultMsg, err := newMessage(campaignID, protocol.MessageTypeRollResult, protocol.RollResultPayload{
-		CharacterID:   characterID,
-		Rolls:         rolls,
-		Total:         int(outcome.Total),
-		ResultSummary: outcome.ResultSummary,
-	})
-	if err != nil {
-		return err
-	}
-	recordEvent(ctx, s, resultMsg)
-	return broadcastMessage(s, resultMsg)
+	}()
+	return nil
 }
 
 // sendCharacterSchema answers a character.schema_request with the active

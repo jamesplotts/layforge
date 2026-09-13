@@ -143,6 +143,30 @@ func (h *Hub) SendToSender(campaignID, sender string, payload []byte) {
 	}
 }
 
+// BroadcastExceptSender delivers payload to every Client registered
+// under campaignID except whichever one(s) are attributed to
+// excludeSender — the client.roll_spectate/client.roll_spectate_reveal
+// case neither Broadcast nor SendToSender can express alone: everyone
+// in the campaign except the one player who's actually rolling, since
+// the anti-metagaming design (docs/design.md §9.7) requires spectators
+// see a ghost die, never the real result, until the roller reveals it
+// themselves. Same drop-if-full, no-registered-clients-is-a-no-op
+// semantics as Broadcast, for the same reason.
+func (h *Hub) BroadcastExceptSender(campaignID, excludeSender string, payload []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for c := range h.rooms[campaignID] {
+		if c.senderID == excludeSender {
+			continue
+		}
+		select {
+		case c.outbox <- payload:
+		default:
+		}
+	}
+}
+
 // SetCloser attaches the function Hub.Kick invokes to forcibly end c's
 // underlying connection. Package session has no transport dependency
 // (see this file's own package doc comment) — the closer is an opaque

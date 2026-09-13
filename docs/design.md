@@ -43,7 +43,7 @@ Everything beyond the core loop — rendering, rules system, campaign content, i
       │ - Narrative   │   │  - Talespire- │   │                │
       │   scrollback  │   │    style OR   │   │                │
       │ - Stat panel  │   │  - Gold Box-  │   │                │
-      │ - Dice tray   │   │    style      │   │                │
+      │ - Dice rolls  │   │    style      │   │                │
       │ - Push-to-talk│   │                │   │                │
       └───────────────┘   └───────────────┘   └────────────────┘
 ```
@@ -97,7 +97,7 @@ The concrete realization of §3.1's "privileged operator views," beyond the char
 - V1 default client renders:
   - Scrollable narrative chat log (DM prose + in-character narration bubbles — see §7).
   - Schema-driven stat/inventory/spells/actions panel — rendered from whatever fields the active **system engine's character schema** declares, not hardcoded to D&D's HP/AC/spell-slots shape. This matters even in V1 because retrofitting a hardcoded UI later, once other systems and community campaign packs depend on schema-driven rendering, is expensive.
-  - Dice tray: grab-and-release animation. Master sends the *authoritative result*; client animates a tumble that lands on that predetermined outcome. Roll spec (die types, pool size, success threshold, botch rules) comes from the system engine, not assumed to be d20-shaped.
+  - Interactive dice-roll bubble (`client.roll*`, §4): Master sends the *authoritative result* pre-decided; the roller clicks a ghost die to reveal it with a short tumble animation, and everyone else at the table sees a read-only twin fill in at the same moment (anti-metagaming, §9.7). Die shape comes from the system engine's own resolved roll, not assumed to be d20-shaped.
   - Push-to-talk button: streaming (chunked) audio to Master, live partial-transcription feedback shown to the speaking player, finalized text becomes a normal narrative-transform input. Voice Activity Detection (Silero VAD or similar) segments speech within the held-button window.
   - No synthesized DM voice output — the DM only communicates via chat text. No ambient/music system — remote players use their own music or silence.
 - Any client can send a `safety.flag` message (X-card/veil) at any time — see §9.2.
@@ -293,7 +293,7 @@ See §6.5. Governs both DM text generation and image-gen calls; enforced via pro
 **V1**
 - Chat scrollback narrative UI with narrative-transform pipeline
 - Schema-driven stat/inventory/spells/actions panel
-- Dice tray (authoritative server roll, cosmetic client animation), roll spec from system engine
+- Interactive dice-roll bubble (authoritative server roll, cosmetic client reveal animation), roll shape from system engine
 - Streaming push-to-talk voice input (Master-side Whisper, VAD, live partial transcription)
 - Discord OAuth
 - Remote-reachable Master/Slave over WebSocket, room tokens, TLS via reverse proxy

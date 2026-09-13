@@ -15,6 +15,7 @@ import (
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
 	"github.com/jamesplotts/layforge/master/internal/protocol"
+	"github.com/jamesplotts/layforge/master/internal/server"
 	"github.com/jamesplotts/layforge/master/internal/systemenginepb"
 )
 
@@ -299,6 +300,14 @@ func TestServe_NarrativePlayerInput_SlowPass_AdvanceTurn_UnconsciousCharacter_Ro
 			{Text: "Kestrel's turn ends; the fallen goblin fights for its life."},
 		},
 	}
+	// This test never sends client.roll_reveal for any of the (up to) 4
+	// interactive rolls now in flight — 3 initiative rolls (start_combat)
+	// plus char-b's own death save — so shrink the self-reveal timeout
+	// rather than wait out the real production one 4 times over.
+	origTimeout := server.ClientRollTimeout
+	server.ClientRollTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { server.ClientRollTimeout = origTimeout })
+
 	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
 	defer ts.Close()
 	seedCharacter(t, st, "char-a", "campaign-turn2b", "player-a")
@@ -322,13 +331,19 @@ func TestServe_NarrativePlayerInput_SlowPass_AdvanceTurn_UnconsciousCharacter_Ro
 	_ = readTurnState(ctx, t, conn) // start_combat's turn.state (order [a b c])
 
 	// advance_turn's own effects arrive next, in order: the automatic
-	// death save's roll.request/roll.result (startTurnFor runs and
-	// broadcasts before advanceTurn broadcasts turn.state), then
-	// turn.state itself. Read generically by type — like
-	// dm_slow_pass_test.go's tool-call test — rather than assuming exact
-	// ordering beyond "the death save broadcasts before turn.state",
-	// which the code path guarantees.
-	var sawDeathSaveResult bool
+	// death save's client.roll/client.roll_complete (startTurnFor runs
+	// and sends it before advanceTurn broadcasts turn.state), then
+	// turn.state itself — interleaved with client.roll/client.roll_complete
+	// for the 3 fire-and-forget initiative rolls start_combat already
+	// kicked off. Read generically by type — like dm_slow_pass_test.go's
+	// tool-call test — rather than assuming exact ordering beyond "the
+	// death save's own client.roll arrives before turn.state", which the
+	// code path guarantees; the death save's own client.roll_complete
+	// isn't ordering-guaranteed relative to turn.state at all (it's on a
+	// self-reveal timer), so it's tracked separately via its PromptID
+	// rather than assumed to arrive within this same read loop.
+	var deathSavePromptID string
+	var sawDeathSaveComplete bool
 	var state protocol.TurnStatePayload
 	for i := 0; i < 20; i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
@@ -336,15 +351,23 @@ func TestServe_NarrativePlayerInput_SlowPass_AdvanceTurn_UnconsciousCharacter_Ro
 			t.Fatalf("reading message %d: %v", i, err)
 		}
 		switch typ {
-		case protocol.MessageTypeRollResult:
-			var rr protocol.RollResultMessage
-			if err := json.Unmarshal(data, &rr); err != nil {
-				t.Fatalf("unmarshaling roll.result: %v", err)
+		case protocol.MessageTypeClientRoll:
+			var cr protocol.ClientRollMessage
+			if err := json.Unmarshal(data, &cr); err != nil {
+				t.Fatalf("unmarshaling client.roll: %v", err)
 			}
-			if rr.Payload.CharacterID == "char-b" {
-				sawDeathSaveResult = true
-				if rr.Payload.Total != 13 {
-					t.Errorf("death save roll.result Total = %d, want 13", rr.Payload.Total)
+			if cr.Payload.CharacterID == "char-b" {
+				deathSavePromptID = cr.Payload.PromptID
+			}
+		case protocol.MessageTypeClientRollComplete:
+			var rc protocol.ClientRollCompleteMessage
+			if err := json.Unmarshal(data, &rc); err != nil {
+				t.Fatalf("unmarshaling client.roll_complete: %v", err)
+			}
+			if deathSavePromptID != "" && rc.Payload.PromptID == deathSavePromptID {
+				sawDeathSaveComplete = true
+				if rc.Payload.Total != 13 {
+					t.Errorf("death save client.roll_complete Total = %d, want 13", rc.Payload.Total)
 				}
 			}
 		case protocol.MessageTypeTurnState:
@@ -365,8 +388,18 @@ func TestServe_NarrativePlayerInput_SlowPass_AdvanceTurn_UnconsciousCharacter_Ro
 	if state.CurrentCharacterID != "char-b" {
 		t.Errorf("turn.state CurrentCharacterID = %q, want %q (unconscious characters get a turn, they aren't skipped)", state.CurrentCharacterID, "char-b")
 	}
-	if !sawDeathSaveResult {
-		t.Error("no roll.result for char-b's automatic death save arrived, want startTurnFor to broadcast it like any other roll")
+	if deathSavePromptID == "" {
+		t.Error("no client.roll for char-b's automatic death save arrived, want startTurnFor to send it like any other roll")
+	}
+	// startTurnFor calls sendClientRollAndWait inline (not via `go`) —
+	// its self-reveal timeout must fire and finishRoll must run before
+	// startTurnFor returns and advanceTurn can go on to broadcast
+	// turn.state, so client.roll_complete for the death save is
+	// guaranteed to arrive before turn.state does, same ordering
+	// guarantee the original roll.request/roll.result version of this
+	// test relied on.
+	if !sawDeathSaveComplete {
+		t.Error("no client.roll_complete for char-b's automatic death save arrived before turn.state")
 	}
 
 	found := false

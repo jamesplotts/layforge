@@ -264,10 +264,11 @@ and persisted, with the engine's warnings sent back
 (`character.validation_result`, design doc §9.4's mechanical half), and a
 player can roll an authoritative check for a character they own
 (`roll.check_request`), with the real outcome — including individual
-dice, not just a total — broadcast to the whole table as
-`roll.request`/`roll.result`, animated on a real WebGL d20 (three.js +
-cannon-es physics) with a swappable community-skin system in the web
-client. A player can also read back their own character's current data
+dice, not just a total — delivered as an interactive `client.roll`
+bubble: the roller clicks a ghost die to reveal the already-decided
+result, everyone else at the table sees a read-only twin fill in at the
+same moment. A player can also read back their own character's current
+data
 and mechanical status, rendered as a read-only sheet generated directly
 from the system engine's own JSON Schema — no D&D-specific fields
 hardcoded into the UI — and apply a real effect (damage/heal) to it,

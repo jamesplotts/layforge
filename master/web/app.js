@@ -12,8 +12,10 @@
 // creation_start, then generic client.query / client.choice prompts and
 // their *_response replies, ending in the same character.
 // validation_result an ordinary character.upload also produces — design
-// doc §9.4), the dice tray (roll.check_request -> roll.request/
-// roll.result — see dice.js for the actual 3D die), and now a read-only
+// doc §9.4), the interactive dice roll (roll.check_request triggers the
+// client.roll* message family — a clickable ghost die the roller reveals
+// themselves, a read-only spectator twin for everyone else — see the
+// "client.roll* interactive dice" section below), and now a read-only
 // character sheet: character.
 // schema_request/character.get, rendered generically from whatever
 // json_schema the active system engine publishes (see
@@ -27,7 +29,7 @@
 // client needs no protocol/capture change to receive that, since
 // audio.transcription already carried is_final for exactly this).
 //
-// The dice tray (and the sheet) needs a character Master's store
+// The dice roll (and the sheet) needs a character Master's store
 // actually recognizes (roll.check_request/character.get are gated on
 // store.Character.OwnerID — see package server's resolveCheck/
 // sendCharacterState); onJoined now gets one through a real join-time
@@ -62,8 +64,7 @@ function saveTermsAccepted() {
     localStorage.setItem(TERMS_STORAGE_KEY, TERMS_VERSION);
   } catch {
     // Best-effort — a private-browsing/storage-disabled session just
-    // re-shows the modal next time, same as dice.js's own skin
-    // persistence falls back when storage is unavailable.
+    // re-shows the modal next time.
   }
 }
 
@@ -194,7 +195,6 @@ const state = {
   // every message this protocol carries has a real, unique message_id
   // (design doc §5) to key that de-dupe on.
   renderedMessageIds: new Set(),
-  // --- Dice tray ---
   // rollCharacterId is Master's own store.Character.ID, assigned once
   // character creation finishes (see onCharacterValidationResult). Every
   // message
@@ -206,7 +206,12 @@ const state = {
   // slow pass (design doc §8) hands that value straight to the System
   // Engine, and "Kestrel" isn't a lookup key.
   rollCharacterId: null,
-  dieHandle: null,
+  // --- client.roll* interactive dice ---
+  // openRolls tracks each roll bubble currently awaiting reveal, keyed
+  // by prompt_id: { wrap, dieEls: Map(die_id -> element), summaryEl }.
+  // See onClientRoll/onClientRollSpectate/onClientRollSpectateReveal/
+  // onClientRollComplete.
+  openRolls: new Map(),
   // --- Character sheet ---
   // characterSchema (parsed JSON Schema) and characterData (the raw
   // character_data object) each arrive independently (character.
@@ -266,8 +271,6 @@ const el = {
   inputText: document.getElementById("input-text"),
   inputSend: document.getElementById("input-send"),
   micButton: document.getElementById("mic-button"),
-  diceOverlay: document.getElementById("dice-overlay"),
-  diceTrayResult: document.getElementById("dice-tray-result"),
   characterIdentity: document.getElementById("character-identity"),
   characterTabs: document.getElementById("character-tabs"),
   characterTabPanels: document.getElementById("character-tab-panels"),
@@ -316,86 +319,6 @@ el.combatMapLightboxClose.addEventListener("click", closeCombatMapLightbox);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !el.combatMapLightbox.hidden) closeCombatMapLightbox();
 });
-
-// The dice tray has no player-facing skin picker; the die just uses
-// whatever skin was last saved (or the default). Community skins still
-// ship in dice-skins.js and can be selected via Dice.saveDiceSkin() from
-// the console.
-const savedSkin = Dice.loadSavedDiceSkin(Dice.DEFAULT_SKIN_ID);
-// The die is mounted once at load into #dice-overlay, the canvas layered
-// over the message log (see index.html). While the chat screen is still
-// hidden the overlay measures 0×0 — Dice.mountDie falls back to a stub
-// size and initDiceArena's ResizeObserver re-sizes the physics arena to
-// the real log viewport the moment the chat screen is shown.
-state.dieHandle = Dice.mountDie(el.diceOverlay, savedSkin);
-// Exposed for console/automation testing of the cosmetic tumble without a
-// backend, e.g. `Dice.startTumble(dieHandle)` then
-// `Dice.settleOnResult(dieHandle, 17, () => {})` — see README / dice.js.
-window.dieHandle = state.dieHandle;
-initDiceArena();
-
-// initDiceArena keeps the cosmetic dice physics in sync with the live
-// layout: the tumbling box tracks the message log's pixel size, and a
-// static collider is placed over every visible chat bubble so the die
-// caroms off them. Rebuilt on resize (ResizeObserver), on scroll
-// (throttled — bubbles enter/leave the viewport), and on DOM mutation
-// (debounced MutationObserver — history prepends at the top, live
-// messages append at the bottom). Never rebuilt per animation frame
-// (hard constraint #5).
-function initDiceArena() {
-  const overlay = el.diceOverlay;
-  const log = el.log;
-
-  const syncSize = () => Dice.resizeArena(state.dieHandle, overlay.clientWidth, overlay.clientHeight);
-
-  const rebuildColliders = () => {
-    const logRect = log.getBoundingClientRect();
-    if (logRect.width < 4 || logRect.height < 4) return;
-    const rects = [];
-    for (const node of log.querySelectorAll(".bubble, .client-prompt, .scene-image")) {
-      const r = node.getBoundingClientRect();
-      if (r.bottom <= logRect.top || r.top >= logRect.bottom) continue; // off-screen — skip.
-      rects.push({
-        x: r.left - logRect.left + r.width / 2,
-        y: r.top - logRect.top + r.height / 2,
-        w: r.width,
-        h: r.height,
-      });
-    }
-    Dice.setBubbleColliders(state.dieHandle, rects);
-  };
-
-  const refresh = () => {
-    syncSize();
-    rebuildColliders();
-  };
-
-  if (typeof ResizeObserver === "function") {
-    new ResizeObserver(refresh).observe(overlay);
-  }
-  window.addEventListener("resize", refresh);
-
-  let scrollThrottle = null;
-  log.addEventListener(
-    "scroll",
-    () => {
-      if (scrollThrottle) return;
-      scrollThrottle = setTimeout(() => {
-        scrollThrottle = null;
-        rebuildColliders();
-      }, 120);
-    },
-    { passive: true }
-  );
-
-  let mutationDebounce = null;
-  new MutationObserver(() => {
-    clearTimeout(mutationDebounce);
-    mutationDebounce = setTimeout(rebuildColliders, 150);
-  }).observe(log, { childList: true, subtree: true });
-
-  refresh();
-}
 
 function defaultWsUrl() {
   // location.host is empty when opened via file://, and there's no
@@ -768,12 +691,6 @@ function handleMessage(msg) {
     case "character.validation_result":
       onCharacterValidationResult(msg);
       break;
-    case "roll.request":
-      onRollRequest();
-      break;
-    case "roll.result":
-      onRollResult(msg);
-      break;
     case "character.schema_response":
       onCharacterSchemaResponse(msg);
       break;
@@ -806,14 +723,16 @@ function handleMessage(msg) {
       onClientChoice(msg.payload || {});
       break;
     case "client.roll":
+      onClientRoll(msg.payload || {});
+      break;
     case "client.roll_spectate":
+      onClientRollSpectate(msg.payload || {});
+      break;
     case "client.roll_spectate_reveal":
+      onClientRollSpectateReveal(msg.payload || {});
+      break;
     case "client.roll_complete":
-      // The interactive dice bubble is a follow-up (see the client.roll*
-      // spec in protocol/asyncapi.yaml). Nothing sends these yet; warn
-      // rather than fall through to the generic "unhandled" path so an
-      // early server can't surprise a player with a silent drop.
-      console.warn("client.roll* message received but the dice UI is not built yet", msg.type, msg);
+      onClientRollComplete(msg.payload || {});
       break;
     case "character.review_result":
       appendCharacterReviewNote(msg.payload || {});
@@ -1464,12 +1383,10 @@ function clientPromptWrap(promptText) {
   return wrap;
 }
 
-// --- Dice tray ---
-
 function onCharacterValidationResult(msg) {
   const payload = msg.payload || {};
   if (!payload.character_id) {
-    el.diceTrayResult.textContent = "Character setup failed.";
+    appendErrorNote("Character setup failed.");
     return;
   }
   state.rollCharacterId = payload.character_id;
@@ -1565,28 +1482,146 @@ function closeCombatMapLightbox() {
   el.combatMapLightbox.hidden = true;
 }
 
-// onRollRequest / onRollResult handle roll.request / roll.result
-// broadcasts — every roll in the campaign, whoever triggered it (a DM
-// mechanics-pass resolve_check, an automatic death save, ...). The
-// client never initiates a roll itself.
-function onRollRequest() {
-  Dice.startTumble(state.dieHandle);
+// --- client.roll* interactive dice ---
+//
+// A resolved check (resolve_check, whether DM-triggered or player-
+// initiated, or an automatic death save) is pre-computed server-side —
+// the client never determines a result itself — but the reveal is
+// interactive: client.roll shows the roller (this connection, if it
+// owns the acting character) a clickable outlined die whose already-
+// decided result is hidden until clicked; client.roll_spectate shows
+// everyone else the same outline with no result at all (anti-
+// metagaming, design doc §9.7), filled in by client.roll_spectate_reveal
+// the instant the roller reveals it. client.roll_complete settles the
+// whole bubble and shows the labeled breakdown line.
+//
+// state.openRolls tracks each bubble currently awaiting reveal, keyed by
+// prompt_id, so the *_reveal/*_complete handlers below know which DOM
+// elements to update.
+
+// DIE_VERTEX_COUNTS maps a die's sides to how many vertices its outline
+// polygon gets. Only d20 ships this pass (resolve_check's own checks are
+// always a single d20) — not hard-blocked from growing; an unlisted size
+// falls back to a hexagon rather than failing to render at all.
+const DIE_VERTEX_COUNTS = { 20: 20 };
+
+function regularPolygonPoints(vertices, cx, cy, r) {
+  const pts = [];
+  for (let i = 0; i < vertices; i++) {
+    const angle = (Math.PI * 2 * i) / vertices - Math.PI / 2;
+    pts.push(`${(cx + r * Math.cos(angle)).toFixed(2)},${(cy + r * Math.sin(angle)).toFixed(2)}`);
+  }
+  return pts.join(" ");
 }
 
-function onRollResult(msg) {
-  const payload = msg.payload || {};
-  const rolls = payload.rolls || [];
-  const firstDie = rolls[0];
+function dieOutlineSvg(sides) {
+  const vertices = DIE_VERTEX_COUNTS[sides] || 6;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 40 40");
+  svg.classList.add("roll-die-svg");
+  const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  polygon.setAttribute("points", regularPolygonPoints(vertices, 20, 20, 18));
+  svg.appendChild(polygon);
+  return svg;
+}
 
-  Dice.settleOnResult(state.dieHandle, firstDie ? firstDie.result : 1, () => {
-    const dieText = firstDie ? `d${firstDie.sides}: ${firstDie.result}` : "";
-    el.diceTrayResult.innerHTML = "";
-    const strongTotal = document.createElement("strong");
-    strongTotal.textContent = `Total: ${payload.total}`;
-    el.diceTrayResult.append(strongTotal, dieText ? ` (${dieText})` : "");
-  });
+// buildDieEl builds one die element — a real <button> when the roller
+// can click it, a plain <div> for a spectator's read-only ghost.
+function buildDieEl(die, interactive) {
+  const dieEl = document.createElement(interactive ? "button" : "div");
+  if (interactive) dieEl.type = "button";
+  dieEl.className = "roll-die " + (interactive ? "interactive" : "ghost");
+  dieEl.dataset.dieId = die.id;
+  dieEl.appendChild(dieOutlineSvg(die.sides));
+  const face = document.createElement("span");
+  face.className = "roll-die-face";
+  dieEl.appendChild(face);
+  return dieEl;
+}
 
-  appendRollNote(payload);
+// settleDie plays a short tumble then shows result — the face was
+// already decided server-side; this is purely a reveal animation, never
+// a computation.
+function settleDie(dieEl, result) {
+  dieEl.classList.add("tumbling");
+  window.setTimeout(() => {
+    dieEl.classList.remove("tumbling");
+    dieEl.classList.add("revealed");
+    dieEl.querySelector(".roll-die-face").textContent = String(result);
+  }, 550);
+}
+
+function rollBubbleWrap(text) {
+  const wrap = clientPromptWrap(text);
+  wrap.classList.add("client-roll");
+  return wrap;
+}
+
+// renderRollDice builds the die row + summary line shared by
+// onClientRoll/onClientRollSpectate. Interactive dice send
+// client.roll_reveal on click; ghost dice have no click handler at all
+// (a spectator never decides when a die reveals — only the roller does).
+function renderRollDice(controls, promptId, dice, interactive) {
+  const row = document.createElement("div");
+  row.className = "roll-die-row";
+  const dieEls = new Map();
+  for (const die of dice) {
+    const dieEl = buildDieEl(die, interactive);
+    if (interactive) {
+      dieEl.addEventListener("click", () => {
+        if (dieEl.classList.contains("revealed") || dieEl.classList.contains("tumbling")) return;
+        settleDie(dieEl, die.result);
+        send({ ...newEnvelope("client.roll_reveal"), payload: { prompt_id: promptId, die_id: die.id } });
+      });
+    }
+    row.appendChild(dieEl);
+    dieEls.set(die.id, dieEl);
+  }
+  controls.appendChild(row);
+  const summary = document.createElement("div");
+  summary.className = "roll-summary";
+  controls.appendChild(summary);
+  return { dieEls, summaryEl: summary };
+}
+
+function onClientRoll(payload) {
+  const wrap = rollBubbleWrap(payload.text);
+  const controls = wrap.querySelector(".client-prompt-controls");
+  const { dieEls, summaryEl } = renderRollDice(controls, payload.prompt_id, payload.dice || [], true);
+  state.openRolls.set(payload.prompt_id, { wrap, dieEls, summaryEl });
+  el.log.appendChild(wrap);
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+function onClientRollSpectate(payload) {
+  const wrap = rollBubbleWrap(`${bubbleDisplayName(payload.character_id)} — ${payload.text}`);
+  const controls = wrap.querySelector(".client-prompt-controls");
+  const { dieEls, summaryEl } = renderRollDice(controls, payload.prompt_id, payload.dice || [], false);
+  state.openRolls.set(payload.prompt_id, { wrap, dieEls, summaryEl });
+  el.log.appendChild(wrap);
+  el.log.scrollTop = el.log.scrollHeight;
+}
+
+function onClientRollSpectateReveal(payload) {
+  const open = state.openRolls.get(payload.prompt_id);
+  const dieEl = open && open.dieEls.get(payload.die_id);
+  if (!dieEl || dieEl.classList.contains("revealed")) return;
+  settleDie(dieEl, payload.result);
+}
+
+// onClientRollComplete settles the whole bubble (the same .answered
+// dimming client.query/client.choice bubbles already use) and shows the
+// labeled breakdown line beside the dice. Also re-fetches this client's
+// own character state — a check/save/death-save can be immediately
+// followed by a mechanics-pass effect that changes HP/currency, the same
+// reason the old roll.result handler always did this.
+function onClientRollComplete(payload) {
+  const open = state.openRolls.get(payload.prompt_id);
+  if (open) {
+    open.summaryEl.textContent = payload.result_summary || `Total: ${payload.total}`;
+    open.wrap.classList.add("answered");
+    state.openRolls.delete(payload.prompt_id);
+  }
   requestCharacterState();
 }
 
@@ -1813,22 +1848,6 @@ function appendCharacterReviewNote(payload) {
   el.log.scrollTop = el.log.scrollHeight;
 }
 
-// appendRollNote renders a roll.result broadcast — every roll in the
-// campaign, per the shared-dice-tray design (design doc §3.1, §4: every
-// client animates every roll). It doesn't claim a specific ability
-// (e.g. "Strength check"): RollResultPayload carries no ability field
-// (see protocol.RollResultPayload), so result_summary (if the engine
-// set one) is the only characterization used, rather than guessing.
-function appendRollNote(payload) {
-  const note = document.createElement("div");
-  note.className = "note";
-  const die = (payload.rolls || [])[0];
-  const dieText = die ? ` (d${die.sides}: ${die.result})` : "";
-  const summary = payload.result_summary ? ` (${payload.result_summary})` : "";
-  note.textContent = `🎲 ${bubbleDisplayName(payload.character_id)} rolled: ${payload.total}${dieText}${summary}`;
-  el.log.appendChild(note);
-  el.log.scrollTop = el.log.scrollHeight;
-}
 
 function showPendingBubble() {
   clearPendingBubble();

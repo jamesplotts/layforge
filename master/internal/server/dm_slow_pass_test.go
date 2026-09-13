@@ -369,12 +369,16 @@ func TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAn
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
 
-	// The slow pass's tool call produces roll.request/roll.result (a
-	// DM-triggered check is a shared table event, same as a player's own
-	// roll.check_request), a tool.result, and finally narrative.dm_prose
-	// — read generically by type rather than assuming a strict order,
-	// since only "all four eventually arrive" is the actual contract.
-	var sawRollRequest, sawRollResult, sawToolResult bool
+	// The slow pass's tool call now sends the DM-triggered check through
+	// the same interactive client.roll flow a player's own
+	// roll.check_request uses — a client.roll (this connection is the
+	// roller, since it owns char-1), a tool.result, and finally
+	// narrative.dm_prose — read generically by type rather than assuming
+	// a strict order, since only "all of these eventually arrive" is the
+	// actual contract. This test's own connection reveals the one die as
+	// soon as it sees client.roll, exercising the real reveal round trip
+	// rather than the timeout self-reveal path.
+	var sawClientRoll, sawClientRollComplete, sawToolResult bool
 	var prose protocol.ClientDisplayMessage
 	for i := 0; i < 10; i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
@@ -382,16 +386,36 @@ func TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAn
 			t.Fatalf("reading message %d error = %v", i, err)
 		}
 		switch typ {
-		case protocol.MessageTypeRollRequest:
-			sawRollRequest = true
-		case protocol.MessageTypeRollResult:
-			sawRollResult = true
-			var rr protocol.RollResultMessage
-			if err := json.Unmarshal(data, &rr); err != nil {
-				t.Fatalf("unmarshaling roll.result error = %v", err)
+		case protocol.MessageTypeClientRoll:
+			sawClientRoll = true
+			var cr protocol.ClientRollMessage
+			if err := json.Unmarshal(data, &cr); err != nil {
+				t.Fatalf("unmarshaling client.roll error = %v", err)
 			}
-			if rr.Payload.Total != 14 {
-				t.Errorf("roll.result Total = %d, want 14", rr.Payload.Total)
+			if len(cr.Payload.Dice) != 1 {
+				t.Fatalf("client.roll Dice = %+v, want exactly 1 die", cr.Payload.Dice)
+			}
+			if err := wsjson.Write(ctx, conn, protocol.ClientRollRevealMessage{
+				Envelope: protocol.Envelope{
+					ProtocolVersion: protocol.CurrentProtocolVersion,
+					MessageID:       "reveal-1",
+					Timestamp:       time.Now().UTC(),
+					SenderID:        "player-a",
+					CampaignID:      "campaign-slow",
+					Type:            protocol.MessageTypeClientRollReveal,
+				},
+				Payload: protocol.ClientRollRevealPayload{PromptID: cr.Payload.PromptID, DieID: cr.Payload.Dice[0].ID},
+			}); err != nil {
+				t.Fatalf("Write(client.roll_reveal) error = %v", err)
+			}
+		case protocol.MessageTypeClientRollComplete:
+			sawClientRollComplete = true
+			var rc protocol.ClientRollCompleteMessage
+			if err := json.Unmarshal(data, &rc); err != nil {
+				t.Fatalf("unmarshaling client.roll_complete error = %v", err)
+			}
+			if rc.Payload.Total != 14 {
+				t.Errorf("client.roll_complete Total = %d, want 14", rc.Payload.Total)
 			}
 		case protocol.MessageTypeToolResult:
 			sawToolResult = true
@@ -420,8 +444,8 @@ func TestServe_NarrativePlayerInput_SlowPass_ToolCall_BroadcastsRollToolResultAn
 		}
 	}
 
-	if !sawRollRequest || !sawRollResult || !sawToolResult {
-		t.Errorf("sawRollRequest=%v sawRollResult=%v sawToolResult=%v, want all true", sawRollRequest, sawRollResult, sawToolResult)
+	if !sawClientRoll || !sawClientRollComplete || !sawToolResult {
+		t.Errorf("sawClientRoll=%v sawClientRollComplete=%v sawToolResult=%v, want all true", sawClientRoll, sawClientRollComplete, sawToolResult)
 	}
 	if prose.Payload.Text != "Kestrel's fingers slip, but they catch a ledge just in time." {
 		t.Errorf("narrative.dm_prose Text = %q, want %q", prose.Payload.Text, "Kestrel's fingers slip, but they catch a ledge just in time.")
@@ -503,22 +527,35 @@ func TestServe_NarrativePlayerInput_SlowPass_StartCombatFails_ClaimsTurnOrderAny
 
 	// char-1 (the tool call's first, real ID) rolls a genuine initiative
 	// check before the loop ever reaches char-npc-never-created and
-	// fails — so a roll.request/roll.result pair for that roll is
-	// expected here too, not just the tool.result; read generically by
-	// type (same approach the ToolCall_BroadcastsRollToolResultAndDmProse
-	// test above uses) rather than assuming a strict order.
-	var sawToolResult bool
+	// fails — sent asynchronously as its own client.roll/
+	// client.roll_spectate/client.roll_complete (fire-and-forget, see
+	// turn_order.go's own doc comment on why start_combat can't block on
+	// it), with no ordering guarantee relative to anything else this test
+	// reads. Read everything generically by type in one pass, ignoring
+	// client.roll* wherever it lands, until both the expected tool.result
+	// and system.error have been seen.
+	var sawToolResult, sawSystemError bool
 	var toolResult protocol.ToolResultMessage
-	for i := 0; i < 10 && !sawToolResult; i++ {
+	var errMsg protocol.SystemErrorMessage
+	for i := 0; i < 15 && (!sawToolResult || !sawSystemError); i++ {
 		typ, data, err := readEnvelopeType(ctx, conn)
 		if err != nil {
 			t.Fatalf("reading message %d error = %v", i, err)
 		}
-		if typ == protocol.MessageTypeToolResult {
+		switch typ {
+		case protocol.MessageTypeToolResult:
 			sawToolResult = true
 			if err := json.Unmarshal(data, &toolResult); err != nil {
 				t.Fatalf("unmarshaling tool.result error = %v", err)
 			}
+		case protocol.MessageTypeSystemError:
+			sawSystemError = true
+			if err := json.Unmarshal(data, &errMsg); err != nil {
+				t.Fatalf("unmarshaling system.error error = %v", err)
+			}
+		case protocol.MessageTypeClientRoll, protocol.MessageTypeClientRollSpectate,
+			protocol.MessageTypeClientRollSpectateReveal, protocol.MessageTypeClientRollComplete:
+			// char-1's own real initiative roll — unrelated noise.
 		}
 	}
 	if !sawToolResult {
@@ -527,19 +564,32 @@ func TestServe_NarrativePlayerInput_SlowPass_StartCombatFails_ClaimsTurnOrderAny
 	if toolResult.Payload.Success {
 		t.Fatalf("tool.result Success = true, want false (start_combat should have failed on a nonexistent character_id)")
 	}
-
-	var errMsg protocol.SystemErrorMessage
-	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
-		t.Fatalf("Read(system.error) error = %v", err)
+	if !sawSystemError {
+		t.Fatal("never saw a system.error message")
 	}
 	if errMsg.Payload.Code != "dm_reaction_failed" {
 		t.Errorf("system.error Code = %q, want %q", errMsg.Payload.Code, "dm_reaction_failed")
 	}
 
-	shortCtx, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer shortCancel()
-	if typ, _, err := readEnvelopeType(shortCtx, conn); err == nil {
-		t.Fatalf("expected no client.display after start_combat failed and the model claimed turn order anyway, but a %q arrived", typ)
+	// A client.display narration despite the failure above is the one
+	// thing this test actually guards against — still tolerating
+	// char-1's own initiative-roll noise, which may continue arriving
+	// (its client.roll_complete rides a real timeout).
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		shortCtx, shortCancel := context.WithTimeout(context.Background(), time.Until(deadline))
+		typ, _, err := readEnvelopeType(shortCtx, conn)
+		shortCancel()
+		if err != nil {
+			break // nothing else arrived before the deadline — the expected case
+		}
+		switch typ {
+		case protocol.MessageTypeClientRoll, protocol.MessageTypeClientRollSpectate,
+			protocol.MessageTypeClientRollSpectateReveal, protocol.MessageTypeClientRollComplete:
+			continue
+		default:
+			t.Fatalf("expected no client.display after start_combat failed and the model claimed turn order anyway, but a %q arrived", typ)
+		}
 	}
 }
 
@@ -755,6 +805,14 @@ func TestServe_NarrativePlayerInput_SlowPass_NarrationPass_ReceivesMechanicsTran
 			{Text: "Kestrel clears the gap easily."}, // narration pass
 		},
 	}
+	// This test never sends client.roll_reveal back, so resolve_check's
+	// wait would otherwise run out the real production ClientRollTimeout
+	// (25s) before self-revealing — shrink it so the test exercises that
+	// same self-reveal path quickly instead of waiting it out for real.
+	origTimeout := server.ClientRollTimeout
+	server.ClientRollTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { server.ClientRollTimeout = origTimeout })
+
 	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
 	defer ts.Close()
 	seedCharacter(t, st, "char-1", "campaign-transcript", "player-a")

@@ -3,9 +3,10 @@
 The default Slave client (design doc §4): no LLM credentials, no rules
 engine, no local game logic — renders what Master sends over the
 protocol. Plain HTML/CSS/JS, no build step, matching the protocol's own
-"devtools-readable" ethos (design doc §6) — the dice tray's two
-dependencies (`vendor/`, see `vendor/README.md`) are plain ES modules
-loaded via `<script type="module">`, not an npm/bundler toolchain.
+"devtools-readable" ethos (design doc §6) — dice rolls render as plain
+SVG/CSS in the chat log itself (see "Status" below), so this client has
+no third-party dependency at all today; `vendor/` (see `vendor/README.md`)
+is kept empty for whatever needs one next.
 
 Lives under `master/` and is served by Master itself by default (see
 `../README.md`'s Running section) — plain files on disk, not embedded
@@ -26,21 +27,26 @@ control (`safety.flag` → `safety.flag_broadcast`), history: on join,
 the most recent page loads automatically (design doc §10's tail default,
 not the campaign's first message), with a "Load earlier history" button
 to page further back (`log.history_request`'s `before_sequence`); and now
-a dice tray — a real WebGL d20 (`dice.js`, three.js's own
-`IcosahedronGeometry` — a proper shared-vertex mesh, not hand-rolled
-transforms) that physically tumbles (cannon-es) then settles on the
-authoritative face once `roll.check_request` gets back
-`roll.request`/`roll.result` from Master. The physics is purely cosmetic,
-same as the tumble itself — the settle is always forced to the server's
-actual result, never determined by the simulation. Joining now goes straight into a real character-creation flow instead
-of a silent stock-character upload — see the new section below.
+an interactive die roll rendered right in the chat log: a resolved check
+(`roll.check_request`, or a DM-triggered `resolve_check`, or an automatic
+death save) arrives as `client.roll` — a clickable SVG-outline die bubble
+whose result was already decided server-side and stays hidden until the
+roller clicks it, playing a short CSS tumble (`@keyframes roll-tumble`)
+before showing the number and a labeled breakdown line ("Charisma
+(Persuasion) Check: 13 -1 = 12"). Everyone else at the table sees the
+same bubble as a greyed, non-interactive ghost (`client.roll_spectate`,
+no result on the wire — an anti-metagaming gate, design doc §9.7) that
+fills in the instant the roller reveals it (`client.roll_spectate_reveal`)
+— see `app.js`'s "client.roll* interactive dice" section. Joining now
+goes straight into a real character-creation flow instead of a silent
+stock-character upload — see the new section below.
 
 There's also now a read-only character sheet (`character-sheet.js`),
 rendered generically from whatever `json_schema`
 `character.schema_response` publishes — walking `properties`/`items`/
 `$ref` recursively, not a hardcoded D&D field list — populated with a
 `character.get` for the sheet the client already knows it owns
-(`state.rollCharacterId`, the same character the dice tray rolls for).
+(`state.rollCharacterId`, the same character `client.roll` rolls for).
 It lives in a fixed-width sidebar alongside the chat log (`.chat-body`'s
 two-column layout in `style.css`; flip `.character-sidebar`'s side with
 one CSS edit, no markup or `app.js` change needed) rather than an
@@ -72,17 +78,14 @@ character's actual mechanical state. Every tool call is broadcast as
 `tool.result` and rendered as a small note in the log (🎲 on success, ⚠
 plus a reason code on failure) regardless of outcome, so a table can see
 what the DM actually did, not just read the prose that followed. A
-DM-triggered `resolve_check` reuses the same `roll.request`/`roll.result`
-broadcast a player's own roll uses, so it animates on the same dice tray.
-`roll.result`'s note no longer names a specific ability check (e.g. "a
-Strength check") — that used to be pulled from this client's own
-roll-ability dropdown, which is simply wrong for anyone else's roll or a
-DM-triggered one (initiative, resolve_check); the wire payload has no
-ability field to report correctly instead, so the note now just states
-who rolled (via `bubbleDisplayName`) and the result, not a guessed
-ability name — a bug caught by watching a real DM-triggered initiative
-roll render with the local player's own last-picked dropdown value
-attached to it.
+DM-triggered `resolve_check` reuses the same `client.roll` family a
+player-initiated `roll.check_request` uses, so it renders as the same
+interactive die bubble either way. The label ("Strength Check",
+"Charisma (Persuasion) Check", "Dexterity Saving Throw", "Death Save")
+is composed server-side (`checkLabel` in Master) from the actual check
+type/ability/skill Master resolved, not guessed client-side — correct
+for anyone's roll, including a DM-triggered one (initiative,
+resolve_check) that never came from this client's own input at all.
 
 There's also now a `turn.state` note (design doc §3.1, §9.3) — whenever
 the DM starts, advances, or ends structured combat, a "⚔ Round N —
@@ -135,8 +138,8 @@ pregenerated characters — see the admin-web README for authoring one).
 Whichever path is taken, completion is signalled the same way
 `character.upload`'s own successful import already was
 (`character.validation_result`) — the existing completion handling
-(`state.rollCharacterId`, schema fetch, dice tray activation) fires
-exactly as before, just from a new caller.
+(`state.rollCharacterId`, schema fetch) fires exactly as before, just
+from a new caller.
 
 Live-verified against a real sidecar + Master + browser: joined fresh,
 worked through a full quick-roll (Human Wizard, race/class/gender only)
@@ -175,14 +178,14 @@ any time. Either way, the outcome arrives as its own
 parsed" and "a review of it just concluded" are genuinely different
 events that can land seconds or minutes apart. A character that isn't
 yet `Approved` still shows its own sheet (`character.get` always
-works) but gets a real rejection from the dice tray's Roll Check and
-the sheet's Take Damage/Heal — not a silent no-op.
+works) but gets a real rejection from Roll Check and the sheet's Take
+Damage/Heal — not a silent no-op.
 
 Not implemented: schema-driven sheet *editing* (still view-only, no
 per-field form submission), effects tied automatically to a *player's
 own* check result (a hit doesn't apply its own damage outside the DM
-slow pass — the tray's Roll Check and the sheet's Take Damage/Heal are
-two independent actions for a player), and any client-side way to
+slow pass — Roll Check and the sheet's Take Damage/Heal are two
+independent actions for a player), and any client-side way to
 restart character creation after a rejection — the player sees the
 note but has to rejoin to try again.
 
@@ -245,40 +248,6 @@ Go, a rebuild, or even a restart:
 - **Behavior** — edit `app.js`; it's plain functions and DOM calls, no
   framework or build tooling to fight.
 
-### Dice skins
-
-The dice tray takes this further: a die's *material* is entirely
-data-driven from `dice-skins.js` — the only file a community skin needs
-to touch (plus optional PNGs alongside it), never `dice.js` itself. Each
-entry is:
-
-```js
-{
-  id: "mint",
-  label: "Mint",
-  baseColor: "#bdead9",       // fallback/base material color
-  baseTexture: null,          // optional PNG: marble, wood grain, metal, ...
-  numberTexture: null,        // optional PNG: a 5x4 grid of hand-drawn digits 1-20
-  font: "700 72px Georgia, serif", // used only when numberTexture is null
-  numberColor: "#204030",     // used only when numberTexture is null
-}
-```
-
-The skin `<select>` on the join screen is populated from this list at
-load (`Dice.listSkins()`), so a new entry shows up with no `index.html`
-change either. Full field reference is the comment at the top of
-`dice-skins.js`.
-
-**Honest limitation:** the three built-in skins (ivory, obsidian,
-emerald) only exercise the color+font path — this repo has no way to
-author actual PNG texture art, so `baseTexture`/`numberTexture` are
-fully implemented (loaded via `THREE.TextureLoader`, applied as a
-standard material map / atlas UV window) but untested against real
-community art. `baseTexture` also isn't unwrapped per-face — it's a
-single UV map across the whole mesh, so expect some stretching; that's
-an acceptable v1 tradeoff for a general material look, not a promise of
-per-facet precision.
-
 Master doesn't cache these files beyond what `http.FileServer` does — a
 browser reload picks up the change immediately. To run a genuinely
 different skin rather than editing in place, copy this whole directory
@@ -318,14 +287,10 @@ and point `-web-dir` at the copy instead.
   `character-sheet.js` only walks `properties`/`items`/`$ref`, not the
   full JSON Schema spec (no `oneOf`/`anyOf`/`patternProperties`/etc.),
   since nothing today's schema uses needs more than that.
-- **The d20's face numbering is synthetic**, not a claim to reproduce any
-  particular physical die's layout (opposite faces on a real d20 sum to
-  21; this one doesn't) — see `extractFaces`'s doc comment in `dice.js`.
-- **The die only shows results from checks (d20).** Nothing here rolls
-  damage dice or any non-d20 shape yet — `roll.check_request` only
+- **The die outline is a generic polygon, not real d20 face art.**
+  `DIE_VERTEX_COUNTS` in `app.js` only has an entry for 20 sides today;
+  an unlisted size falls back to a hexagon outline rather than failing
+  to render.
+- **The die bubble only shows results from checks (d20).** Nothing here
+  rolls damage dice or any non-d20 shape yet — `roll.check_request` only
   triggers `ResolveCheck`, not `ApplyEffect`.
-- **Physics uses a sphere collider, not the true icosahedron shape** —
-  cannon-es doesn't need face-accurate collision for a small cosmetic
-  tumble to read as believable, and a sphere is dramatically simpler/more
-  stable than convex-polyhedron collision. The *visible* mesh is a real
-  icosahedron regardless; only the invisible physics body is approximate.

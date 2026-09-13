@@ -371,67 +371,13 @@ type RollCheckRequestPayload struct {
 // RollCheckRequestMessage is a roll.check_request Message.
 type RollCheckRequestMessage = Message[RollCheckRequestPayload]
 
-// RollDie describes one die in a RollSpec: sides and how many of that die
-// are rolled — not an individual result, see DieRoll for that. See
-// protocol/asyncapi.yaml components.schemas.RollSpec.
-type RollDie struct {
-	Sides int `json:"sides"`
-	Count int `json:"count"`
-}
-
-// RollSpec describes the dice about to be rolled, sourced from the system
-// engine's actual resolved Outcome (design doc §4) rather than assumed —
-// Master never hardcodes "d20" here; see server's roll.check_request
-// dispatch for how RollSpec.Dice is derived from a real ResolveCheck
-// response before RollRequestPayload is sent. See protocol/asyncapi.yaml
-// components.schemas.RollSpec.
-type RollSpec struct {
-	Dice []RollDie `json:"dice"`
-	// SuccessThreshold: for pool-based systems (count successes at or
-	// above this value); omitted for simple total-vs-DC systems.
-	SuccessThreshold *int `json:"success_threshold,omitempty"`
-	// BotchRule is an engine-defined description of botch/fumble
-	// handling, if any.
-	BotchRule string `json:"botch_rule,omitempty"`
-}
-
-// RollRequestPayload is the payload of a roll.request message: Master
-// informing every client in the campaign that a roll is about to happen,
-// so a dice-tray UI can pre-stage its animation before the actual result
-// is known (design doc §3.1, §4). See protocol/asyncapi.yaml
-// components.messages.RollRequest.
-type RollRequestPayload struct {
-	CharacterID string   `json:"character_id"`
-	RollSpec    RollSpec `json:"roll_spec"`
-}
-
-// RollRequestMessage is a roll.request Message.
-type RollRequestMessage = Message[RollRequestPayload]
-
-// DieRoll is one resolved die's face value — mirrors the System Engine
-// gRPC contract's DieRoll message field-for-field
-// (protocol/system_engine.proto), since Master forwards the engine's own
-// resolved dice rather than reinterpreting them.
-type DieRoll struct {
-	Sides  int    `json:"sides"`
-	Result int    `json:"result"`
-	Label  string `json:"label,omitempty"`
-}
-
-// RollResultPayload is the payload of a roll.result message: the
-// authoritative, server-computed outcome of a roll.check_request. Clients
-// animate their dice tray to land on this outcome; they never determine
-// it themselves (design doc §3.1, §4). See protocol/asyncapi.yaml
-// components.messages.RollResult.
-type RollResultPayload struct {
-	CharacterID   string    `json:"character_id"`
-	Rolls         []DieRoll `json:"rolls"`
-	Total         int       `json:"total"`
-	ResultSummary string    `json:"result_summary,omitempty"`
-}
-
-// RollResultMessage is a roll.result Message.
-type RollResultMessage = Message[RollResultPayload]
+// A roll.check_request's outcome is delivered through the client.roll*
+// message family (below) rather than a dedicated roll.request/
+// roll.result pair: the interactive reveal (a ghost die the roller
+// clicks, a real animation landing on the already-decided result) needs
+// the roller/spectator split client.roll/client.roll_spectate provide,
+// which a single broadcast-to-everyone pair couldn't express at all —
+// see internal/server/client_roll.go for the implementation.
 
 // CharacterSchemaRequestPayload is the payload of a
 // character.schema_request message: a client asking for the active
@@ -891,17 +837,10 @@ type ClientRollDie struct {
 
 // ClientRollPayload is the payload of a client.roll message: sent to the
 // player who has to roll. The client shows one clickable outline per die;
-// each click reveals that die's already-decided Result with a tumble
-// animation. When every die is revealed the client sends a
-// client.roll_result... actually no — see the reveal sequence below:
-// each click sends a client.roll_reveal, and Master emits
-// client.roll_complete once all are in.
-//
-// NOTE: nothing in Master emits or consumes client.roll* yet — a
-// follow-up (a Fable subagent) builds the interactive dice UI, the
-// per-die reveal relay, and the DM-slow-pass "wait for the roll" gate.
-// The shapes are specced now so that follow-up doesn't ship a protocol
-// migration. See docs and the plan for the full design.
+// each click sends a client.roll_reveal and plays a tumble animation onto
+// that die's already-decided Result. Once every die is revealed Master
+// emits client.roll_complete. See internal/server/client_roll.go for the
+// sending/reveal-tracking implementation.
 type ClientRollPayload struct {
 	PromptID    string            `json:"prompt_id"`
 	CharacterID string            `json:"character_id"`

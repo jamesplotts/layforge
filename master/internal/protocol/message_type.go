@@ -32,8 +32,6 @@ const (
 	MessageTypeCharacterUpload           MessageType = "character.upload"
 	MessageTypeCharacterValidationResult MessageType = "character.validation_result"
 	MessageTypeRollCheckRequest          MessageType = "roll.check_request"
-	MessageTypeRollRequest               MessageType = "roll.request"
-	MessageTypeRollResult                MessageType = "roll.result"
 	MessageTypeCharacterSchemaRequest    MessageType = "character.schema_request"
 	MessageTypeCharacterSchemaResponse   MessageType = "character.schema_response"
 	MessageTypeCharacterGet              MessageType = "character.get"
@@ -55,8 +53,11 @@ const (
 	// bubble (client.display), a typed-answer prompt (client.query /
 	// client.query_response), a pick-one prompt (client.choice /
 	// client.choice_response), an image bubble (client.image), and the
-	// dice-roll exchange (client.roll and friends — see messages.go for
-	// the roller/spectator reveal sequence; nothing emits those yet).
+	// interactive dice-roll exchange (client.roll and friends — see
+	// messages.go and internal/server/client_roll.go for the roller/
+	// spectator reveal sequence) — the one and only path a resolved
+	// check reaches a client through; roll.check_request's own response
+	// no longer goes through a separate roll.request/roll.result pair.
 	MessageTypeClientDisplay            MessageType = "client.display"
 	MessageTypeClientQuery              MessageType = "client.query"
 	MessageTypeClientQueryResponse      MessageType = "client.query_response"
@@ -85,7 +86,7 @@ func (t MessageType) IsValid() bool {
 		MessageTypeLogHistoryRequest, MessageTypeLogHistoryResponse,
 		MessageTypeNarrativePlayerInput, MessageTypeNarrativePlayerBubble,
 		MessageTypeCharacterUpload, MessageTypeCharacterValidationResult,
-		MessageTypeRollCheckRequest, MessageTypeRollRequest, MessageTypeRollResult,
+		MessageTypeRollCheckRequest,
 		MessageTypeCharacterSchemaRequest, MessageTypeCharacterSchemaResponse,
 		MessageTypeCharacterGet, MessageTypeCharacterState,
 		MessageTypeCharacterApplyEffect,

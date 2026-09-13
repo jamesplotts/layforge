@@ -624,10 +624,18 @@ func (s *Server) dmResolveCheck(ctx context.Context, campaignID string, argsJSON
 	}
 
 	// A DM-triggered check is just as much a shared table event as a
-	// player-triggered roll.check_request — broadcast it the same way so
-	// every client's dice tray animates it (design doc §3.1, §4).
-	if err := s.broadcastRollOutcome(ctx, campaignID, character.ID, resp.Outcome); err != nil {
-		s.logger.Warn("failed to broadcast DM-triggered roll outcome", "error", err, "character_id", character.ID)
+	// player-triggered roll.check_request — send it through the same
+	// interactive client.roll flow, so the acting character's owner gets
+	// a real die to click and the DM's own narration (waiting on this
+	// same call) reflects the real outcome once it's revealed. Inline,
+	// not via `go`: this already runs on the mechanics pass's own
+	// detached goroutine (runMechanicsPass <- runSlowPass <-
+	// `go s.runSlowPass(...)`), not a connection's read loop, so blocking
+	// here is safe.
+	label := checkLabel(args.CheckType, args.Ability, args.Skill)
+	purpose := checkPurpose(args.CheckType)
+	if err := s.sendClientRollAndWait(ctx, campaignID, character, purpose, label, resp.Outcome); err != nil {
+		s.logger.Warn("failed sending/waiting for DM-triggered interactive roll", "error", err, "character_id", character.ID)
 	}
 
 	rolls := make([]map[string]any, len(resp.Outcome.Rolls))
