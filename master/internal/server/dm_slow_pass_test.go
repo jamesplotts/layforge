@@ -213,7 +213,14 @@ func TestServe_NarrativePlayerInput_SlowPass_CharacterFound_IncludesCharacterDat
 		t.Fatalf("slow pass call Messages length = %d, want 2 (system + user)", len(slowPassCall.Messages))
 	}
 	userContent := slowPassCall.Messages[1].Content
-	wantContent := "Character ID: char-1\nCharacter data: {\"name\":\"Kestrel\"}\nPlayer action: I draw my sword."
+	// Includes a "Recent conversation" section (recent_conversation.go):
+	// the fast pass's own narrative.player_bubble, just recorded and
+	// broadcast a moment earlier, is itself the most recent event in the
+	// campaign log by the time the slow pass builds its context.
+	wantContent := "Character ID: char-1\nCharacter data: {\"name\":\"Kestrel\"}\n" +
+		"Recent conversation (oldest first — what has actually already happened; continue from here, don't repeat or contradict it):\n" +
+		"Kestrel: Kestrel draws a sword.\n" +
+		"Player action: I draw my sword."
 	if userContent != wantContent {
 		t.Errorf("slow pass user message = %q, want %q", userContent, wantContent)
 	}
@@ -258,7 +265,13 @@ func TestServe_NarrativePlayerInput_SlowPass_CharacterNotFound_OmitsDataButStill
 
 	slowPassCall := fakeLLM.callAt(t, 1)
 	userContent := slowPassCall.Messages[1].Content
-	wantContent := "Character ID: char-does-not-exist\nPlayer action: I draw my sword."
+	// No Character data section (never seeded), but still a "Recent
+	// conversation" one — the fast pass's own bubble, keyed by the raw
+	// character_id since there's no store row to resolve a name from.
+	wantContent := "Character ID: char-does-not-exist\n" +
+		"Recent conversation (oldest first — what has actually already happened; continue from here, don't repeat or contradict it):\n" +
+		"char-does-not-exist: Someone draws a sword.\n" +
+		"Player action: I draw my sword."
 	if userContent != wantContent {
 		t.Errorf("slow pass user message = %q, want %q (no Character data section)", userContent, wantContent)
 	}

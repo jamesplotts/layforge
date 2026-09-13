@@ -222,6 +222,12 @@ func (s *Server) slowPassGroundingContext(ctx context.Context, campaignID string
 	// characters/events store, fewer than two players, nobody's actually
 	// quiet right now) — nothing here needs its own error handling.
 	userContent += s.spotlightContextText(ctx, campaignID)
+	// Recent conversation goes last, immediately before the current
+	// action, so the causal link between "what just happened" and "what
+	// the player did next" is as close together as possible. Same
+	// best-effort reasoning as every section above: recentConversation
+	// ContextText already returns "" when there's nothing recorded yet.
+	userContent += s.recentConversationContextText(ctx, campaignID)
 	userContent += fmt.Sprintf("Player action: %s", input.Payload.Text)
 	return userContent
 }

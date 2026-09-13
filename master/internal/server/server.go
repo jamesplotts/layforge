@@ -18,9 +18,13 @@
 //     (resolve_check/apply_effect/get_character_status, see dm_tools.go)
 //     to resolve mechanical uncertainty rather than inventing outcomes,
 //     broadcasting a tool.result per call and the final reaction as
-//     client.display. Neither pass is fed campaign/character context
-//     beyond the player's own input yet — no persistent context-assembly
-//     exists in Master to feed it.
+//     client.display. Both passes share one assembled grounding context
+//     (slowPassGroundingContext, dm_slow_pass.go) — the acting
+//     character's own data, the rest of the party roster, the current
+//     location, spotlight-balance notes, and a recent-conversation
+//     transcript pulled from the event log (recentConversationContextText)
+//     so a turn isn't a memoryless completion with no idea what the DM
+//     itself said a moment ago.
 //   - character.upload (§9.4, see importCharacter): validated via
 //     package systemenginepb, answered with character.validation_result,
 //     saved pending_review. The review/veto half now exists too (see

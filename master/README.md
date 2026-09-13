@@ -123,6 +123,31 @@ or refusal instead of inventing a reply when nobody present would
 plausibly answer. Prompt-only; no new tool or gate needed, since NPC
 dialogue content isn't a mechanical/trust matter.
 
+**New**: recent-conversation memory (`internal/server/recent_conversation.go`).
+Every slow-pass turn used to be a fresh completion with zero memory of
+the turn before it — `slowPassGroundingContext` fed the model character
+data, the party roster, the current location, and only the player's
+single current action line, nothing about what had actually just
+happened. Observed live: a player told an in-scene NPC (met moments
+earlier) "I'm looking to earn coin," and with no idea this was
+mid-conversation, the model reached for an unrelated real encounter from
+the bound pack instead of continuing the actual scene it was already
+in — grounded in genuine authored content, just the wrong content for
+what was actually happening. `recentConversationContextText` pulls the
+last `recentConversationTurnLimit` (8) public `narrative.player_bubble`/
+`client.display` events straight from the already-durable event log
+(the same store `log.history_request` reads) and folds them into the
+grounding context as a plain "Player: .../DM: ..." transcript,
+immediately before the current action. Deliberately excludes any
+private-scoped `client.display` (a `narrate_privately` aside, a
+character's own one-time creation intro) — what was whispered to one
+player must never resurface as "memory" feeding a different player's
+later public turn (design doc §9.7). This is a bespoke fit to Master's
+own event store and privacy model, not a wrapped third-party memory
+library — the underlying idea (a sliding window of recent turns) is the
+same one every conversational-agent framework already uses, but nothing
+off the shelf understands this project's own visibility scoping.
+
 The turn-order state machine (design doc §3.1, §9.3) now exists too:
 three more DM tools — `start_combat`, `advance_turn`, `end_combat` (see
 `turn_order.go`) — give the model a way to trigger it, but the mechanical
