@@ -764,6 +764,14 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		// client.choice_response above; the roll's own client.roll_complete
 		// is what a client actually needs to reconstruct history from.
 		return s.handleClientRollReveal(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
+	case protocol.MessageTypeClientAbilityScoreRollsAck:
+		var req protocol.ClientAbilityScoreRollsAckMessage
+		if err := json.Unmarshal(data, &req); err != nil {
+			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed client.ability_score_rolls_ack payload: %w", err))
+		}
+		// Not recorded — a flow step, same reasoning as the other
+		// prompt/response pairs above.
+		return s.handleClientAbilityScoreRollsAck(ctx, conn, campaignID, actingSender(cs, envelope.SenderID), req)
 	default:
 		return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("unsupported message type %q", envelope.Type))
 	}

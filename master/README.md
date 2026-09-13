@@ -2588,12 +2588,58 @@ items are 2+ scalar-only properties now renders as a real `<table>`
 stacked field-row list — `abilities`/`skills` get tabs automatically
 from the existing tab-detection logic, with no new tab-naming code, and
 any future engine's own array-of-records data gets the same table
-rendering for free. **Honest, flagged limitation**: `StatType` has no
-per-skill granularity today — an item or feat that boosts one *named*
-skill only (not ability checks generally) has no representation
-anywhere in the engine yet, so the Skills tab can't yet show that kind
-of bonus; it accurately reflects everything the engine can currently
-compute, and nothing it can't.
+rendering for free. **Honest, flagged limitation, since closed below**:
+at the time this landed, `StatType` had no per-skill granularity — an
+item or feat that boosted one *named* skill only (not ability checks
+generally) had no representation anywhere in the engine.
+
+**The per-skill limitation above is now fixed** (OpenCombatEngine):
+`IActiveEffect.ModifyStat`/`IEffectManager.ApplyStatBonuses` gained an
+optional `skillName` parameter — `StandardCheckManager.RollAbilityCheck`
+already received it (for the proficiency-bonus lookup) but dropped it
+before reaching the effects layer; `StandardCreature.BuildSkillEntries()`
+(the Skills-tab display probe) had the identical gap. Both now forward
+it, so a real roll and the sheet display resolve through the identical
+skill-aware call and can never disagree. `StatBonusEffect` gained an
+optional `targetSkillName`: unset (the default) keeps every existing
+whole-ability-check effect's behavior exactly as before; set, it matches
+only that one named skill, case-insensitively. New `SkillBonusFeature`
+(sibling to `StatBonusFeature`, shaped like `ProficiencyFeature`) is the
+authoring surface a magic item or feat attaches for a bonus like "+2
+Intimidation." Not yet wired into the JSON magic-item importer — that
+needs a real 5e.tools per-skill-bonus item example to map a DTO field
+against rather than a guessed shape, flagged rather than guessed at in
+OpenCombatEngine's own `RELEASE_NOTES.md`.
+
+There's also now an interactive reveal for `detailed_roll` character
+creation's 4d6-drop-lowest ability-score method — a regression fix for a
+live player report: choosing that method used to blind-assign six
+already-summed totals ("5 12's and one 13") with zero visibility into
+what was actually rolled, using a "roll.check_request"-shaped mental
+model this repo doesn't even have here — the whole creation conversation
+is a 100% opaque relay of `CharacterCreationPromptResponse.prompt_text`/
+`choices` from OpenCombatEngine, so Master had no concept of "these are
+dice" to work with at all until now. `CharacterCreationPromptResponse`
+gained an additive `ability_score_rolls` field (populated only for the
+one response where the player just chose the dice method) carrying all
+six already-decided sets — `DieRoll` gained a `dropped` bool alongside
+its existing `sides`/`result` so the excluded die is flagged, not
+omitted. Master relays this as a new, dedicated `client.ability_score_
+rolls` (not a `client.choice`) via `sendCreationAbilityScoreRolls`
+(`character_creation.go`); once the player has watched the reveal, the
+client sends `client.ability_score_rolls_ack`, which round-trips through
+the ordinary `AnswerCharacterCreationPrompt` RPC with a fixed sentinel
+answer (`abilityScoreRollsAckAnswer`) the engine's new `RevealAbilityRolls`
+phase ignores entirely — needing no new session state on Master's side,
+since the engine computes the real next question fresh. That next
+question is also improved: `NextAssignScorePrompt`/`HandleAssignScore`
+(OpenCombatEngine) now ask **by ability** ("Assign which score to
+Strength?", offering the remaining rolled totals as buttons) instead of
+by score ("Assign the score 14 to which ability?"), closing the other
+half of the original report — `standard_array` shares the same
+assignment phase, so it gets the same by-ability wording as a natural
+side effect, not extra scope. See `web/README.md` for the client-side
+dice-reveal writeup.
 
 ## Layout
 

@@ -221,6 +221,31 @@ still down, restarted Master, and confirmed the client reconnected on
 its own with the first flag shown exactly once and the second — posted
 entirely while disconnected — correctly appended, no console errors.
 
+There's also now an interactive reveal for `detailed_roll` character
+creation's 4d6-drop-lowest ability-score method — a regression fix for a
+live player report: choosing that method used to blind-assign six
+already-summed totals with zero visibility into what was actually
+rolled. `client.ability_score_rolls` arrives once, carrying all six sets
+of four already-decided dice; `onClientAbilityScoreRolls` renders them as
+six sequential bubbles (`renderAbilityScoreRollSet`, reusing the
+`client.roll` dice machinery above — `buildDieEl`/`settleDie`/
+`dieOutlineSvg`, which already renders a d6 correctly via its existing
+unlisted-size hexagon fallback), each with four ghost d6 the player
+clicks to reveal (a purely local animation — no round trip per die,
+since there's no spectator to hide a result from in a private,
+single-player conversation, unlike combat's `client.roll`). Once a set's
+four dice are all revealed it shows its own "5 + 3 + 2 = 10" line (the
+dropped die shown dimmed and struck through via a new `.roll-die.dropped`
+class, not hidden), and the next ability score's bubble appears. Once
+the sixth set is revealed, the client sends
+`client.ability_score_rolls_ack`, which is what actually advances
+Master's relay to the real by-ability assignment questions — those are
+now asked as "Assign which score to Strength?" (one button per remaining
+rolled total) rather than the old "Assign the score 14 to which
+ability?", closing the other half of the original report (no visibility
+into the other five totals while assigning). `standard_array` shares the
+same assignment phase, so it gets the same by-ability wording too.
+
 ## Running
 
 From `master/`:

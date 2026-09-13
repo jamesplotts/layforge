@@ -734,6 +734,9 @@ function handleMessage(msg) {
     case "client.roll_complete":
       onClientRollComplete(msg.payload || {});
       break;
+    case "client.ability_score_rolls":
+      onClientAbilityScoreRolls(msg.payload || {});
+      break;
     case "character.review_result":
       appendCharacterReviewNote(msg.payload || {});
       break;
@@ -1500,10 +1503,12 @@ function closeCombatMapLightbox() {
 // elements to update.
 
 // DIE_VERTEX_COUNTS maps a die's sides to how many vertices its outline
-// polygon gets. Only d20 ships this pass (resolve_check's own checks are
-// always a single d20) — not hard-blocked from growing; an unlisted size
-// falls back to a hexagon rather than failing to render at all.
-const DIE_VERTEX_COUNTS = { 20: 20 };
+// polygon gets. d20 is resolve_check's own checks; d6 is ability-score
+// generation's 4d6-drop-lowest (below) — not hard-blocked from growing
+// further; an unlisted size falls back to a hexagon rather than failing
+// to render at all (which happens to already be exactly right for d6,
+// the explicit entry below is for clarity, not correctness).
+const DIE_VERTEX_COUNTS = { 20: 20, 6: 6 };
 
 function regularPolygonPoints(vertices, cx, cy, r) {
   const pts = [];
@@ -1541,12 +1546,14 @@ function buildDieEl(die, interactive) {
 
 // settleDie plays a short tumble then shows result — the face was
 // already decided server-side; this is purely a reveal animation, never
-// a computation.
-function settleDie(dieEl, result) {
+// a computation. dropped (used by the ability-score-roll dice below, not
+// combat's client.roll) adds a visual "excluded from the total" marker.
+function settleDie(dieEl, result, dropped) {
   dieEl.classList.add("tumbling");
   window.setTimeout(() => {
     dieEl.classList.remove("tumbling");
     dieEl.classList.add("revealed");
+    if (dropped) dieEl.classList.add("dropped");
     dieEl.querySelector(".roll-die-face").textContent = String(result);
   }, 550);
 }
@@ -1623,6 +1630,86 @@ function onClientRollComplete(payload) {
     state.openRolls.delete(payload.prompt_id);
   }
   requestCharacterState();
+}
+
+// --- client.ability_score_rolls interactive dice (character creation) ---
+//
+// The 4d6-drop-lowest ability-score generation step (design doc §9.4) —
+// a private, single-player conversation, unlike client.roll's combat
+// checks, so there's no spectator to hide a result from: every die's
+// result arrives already decided, and each reveal is a purely local
+// animation with no round trip per die (contrast client.roll_reveal).
+// The six sets appear as six sequential bubbles — set N+1 only appears
+// once set N's four dice are all revealed — matching the tabletop feel
+// of rolling one score at a time. Once the sixth set is fully revealed,
+// the client sends client.ability_score_rolls_ack, which is what
+// actually advances the session to the by-ability assignment questions
+// (ordinary client.choice bubbles from there on, unrelated to this code).
+
+const ABILITY_SCORE_ROLL_ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth"];
+
+// abilityScoreRollBubbleText: the engine's own intro line (payload.text)
+// covers the whole six-set sequence, so only the first bubble uses it;
+// the rest get a short client-composed ordinal line — UI pacing text,
+// not domain content the engine needs to author.
+function abilityScoreRollBubbleText(index, introText) {
+  if (index === 0) return introText;
+  const ordinal = ABILITY_SCORE_ROLL_ORDINALS[index] || `${index + 1}th`;
+  return `Roll your ${ordinal} ability score.`;
+}
+
+// renderAbilityScoreRollSet builds one set's bubble (4 dice + summary
+// line) and wires its own advance-to-the-next-set (or, on the last set,
+// send-the-ack) logic — recursing forward rather than a shared loop,
+// since each set's completion is driven by that set's own click events.
+function renderAbilityScoreRollSet(promptId, sets, index, introText) {
+  const wrap = rollBubbleWrap(abilityScoreRollBubbleText(index, introText));
+  const controls = wrap.querySelector(".client-prompt-controls");
+  const set = sets[index];
+  const dice = set.dice || [];
+
+  const row = document.createElement("div");
+  row.className = "roll-die-row";
+  const summary = document.createElement("div");
+  summary.className = "roll-summary";
+
+  let revealedCount = 0;
+  for (const die of dice) {
+    const dieEl = buildDieEl(die, true);
+    dieEl.addEventListener("click", () => {
+      if (dieEl.classList.contains("revealed") || dieEl.classList.contains("tumbling")) return;
+      settleDie(dieEl, die.result, die.dropped);
+      revealedCount++;
+      if (revealedCount < dice.length) return;
+      // Wait out the last die's own tumble (settleDie's 550ms) before
+      // showing the sum and advancing, so the summary never appears
+      // before the player can see what it's summing.
+      window.setTimeout(() => {
+        const kept = dice.filter((d) => !d.dropped).map((d) => d.result);
+        summary.textContent = `${kept.join(" + ")} = ${set.total}`;
+        wrap.classList.add("answered");
+        if (index + 1 < sets.length) {
+          const next = renderAbilityScoreRollSet(promptId, sets, index + 1, introText);
+          el.log.appendChild(next);
+          el.log.scrollTop = el.log.scrollHeight;
+        } else {
+          send({ ...newEnvelope("client.ability_score_rolls_ack"), payload: { prompt_id: promptId } });
+        }
+      }, 600);
+    });
+    row.appendChild(dieEl);
+  }
+  controls.appendChild(row);
+  controls.appendChild(summary);
+  return wrap;
+}
+
+function onClientAbilityScoreRolls(payload) {
+  const sets = payload.rolls || [];
+  if (sets.length === 0) return;
+  const wrap = renderAbilityScoreRollSet(payload.prompt_id, sets, 0, payload.text);
+  el.log.appendChild(wrap);
+  el.log.scrollTop = el.log.scrollHeight;
 }
 
 // --- Rendering ---

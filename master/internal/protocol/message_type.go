@@ -69,6 +69,16 @@ const (
 	MessageTypeClientRollReveal         MessageType = "client.roll_reveal"
 	MessageTypeClientRollSpectateReveal MessageType = "client.roll_spectate_reveal"
 	MessageTypeClientRollComplete       MessageType = "client.roll_complete"
+	// MessageTypeClientAbilityScoreRolls/MessageTypeClientAbilityScoreRollsAck
+	// are the 4d6-drop-lowest ability-score reveal exchange (character
+	// creation only, design doc §9.4) — a private, single-player
+	// conversation with no spectator to hide a result from, unlike
+	// client.roll above, so there is no spectate/reveal-relay pair here:
+	// Master sends every rolled die up front and the client's reveal is a
+	// local animation, only acking once done. See internal/server/
+	// character_creation.go.
+	MessageTypeClientAbilityScoreRolls    MessageType = "client.ability_score_rolls"
+	MessageTypeClientAbilityScoreRollsAck MessageType = "client.ability_score_rolls_ack"
 	// MessageTypeTermsAccept is sent by a client once per connection to
 	// accept the current terms.Version (see internal/terms and
 	// internal/server's dispatch gate) — required before any other
@@ -99,7 +109,8 @@ func (t MessageType) IsValid() bool {
 		MessageTypeClientDisplay, MessageTypeClientQuery, MessageTypeClientQueryResponse,
 		MessageTypeClientChoice, MessageTypeClientChoiceResponse, MessageTypeClientImage,
 		MessageTypeClientRoll, MessageTypeClientRollSpectate, MessageTypeClientRollReveal,
-		MessageTypeClientRollSpectateReveal, MessageTypeClientRollComplete:
+		MessageTypeClientRollSpectateReveal, MessageTypeClientRollComplete,
+		MessageTypeClientAbilityScoreRolls, MessageTypeClientAbilityScoreRollsAck:
 		return true
 	default:
 		return false

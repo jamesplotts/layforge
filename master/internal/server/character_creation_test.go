@@ -521,6 +521,127 @@ func TestServe_CreationRoll_EngineReportsFailure_ReturnsSystemError(t *testing.T
 	}
 }
 
+// TestServe_CreationRoll_AbilityScoreRolls_SendsInteractiveDiceThenRelaysAssignPrompt
+// is a regression test for a live player report: choosing 4d6-drop-lowest
+// used to blind-assign six totals with zero visibility into what was
+// rolled. When the engine's response carries AbilityScoreRolls, Master
+// must send client.ability_score_rolls (not a client.choice) — and once
+// the player acks it, the ack must round-trip through
+// AnswerCharacterCreationPrompt with the fixed sentinel answer, relaying
+// whatever ordinary prompt the engine returns next as a normal
+// client.choice.
+func TestServe_CreationRoll_AbilityScoreRolls_SendsInteractiveDiceThenRelaysAssignPrompt(t *testing.T) {
+	fake := &fakeSystemEngineClient{
+		// Master relays whatever the engine returns first, whatever step
+		// that represents — jump straight to the ability-method question,
+		// since race/class/gender/background are exercised by the other
+		// creation tests already and are irrelevant to this mechanism.
+		startCharacterCreationResp: &systemenginepb.CharacterCreationPromptResponse{
+			Success: true, PromptText: "Choose your ability score method.",
+			Choices: []string{"standard_array", "random_4d6_drop_lowest"},
+		},
+		answerCharacterCreationPromptFunc: func(req *systemenginepb.AnswerCharacterCreationPromptRequest) (*systemenginepb.CharacterCreationPromptResponse, error) {
+			if req.Answer == "random_4d6_drop_lowest" {
+				return &systemenginepb.CharacterCreationPromptResponse{
+					Success: true, PromptText: "Time to roll your six ability scores!",
+					AbilityScoreRolls: []*systemenginepb.AbilityScoreRollSet{
+						{
+							Dice: []*systemenginepb.DieRoll{
+								{Sides: 6, Result: 5}, {Sides: 6, Result: 3},
+								{Sides: 6, Result: 2, Dropped: true}, {Sides: 6, Result: 6},
+							},
+							Total: 14,
+						},
+					},
+				}, nil
+			}
+			if req.Answer == "acknowledged" { // matches character_creation.go's unexported abilityScoreRollsAckAnswer sentinel
+				return &systemenginepb.CharacterCreationPromptResponse{
+					Success: true, PromptText: "Assign which score to Strength?", Choices: []string{"14"},
+				}, nil
+			}
+			t.Fatalf("unexpected AnswerCharacterCreationPrompt answer %q", req.Answer)
+			return nil, nil
+		},
+	}
+	ts, _ := newTestServerForCreation(t, fake)
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-creation-d6", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := sendCreationStart(ctx, conn, "campaign-creation-d6", "player-a"); err != nil {
+		t.Fatalf("sendCreationStart() error = %v", err)
+	}
+	top := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-d6", "player-a", top, "detailed_roll")
+
+	methodPrompt := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-creation-d6", "player-a", methodPrompt, "random_4d6_drop_lowest")
+
+	// The reveal step must be client.ability_score_rolls, never a
+	// client.choice — this is the whole point of the fix.
+	var raw struct {
+		Type    protocol.MessageType                    `json:"type"`
+		Payload protocol.ClientAbilityScoreRollsPayload `json:"payload"`
+	}
+	if err := wsjson.Read(ctx, conn, &raw); err != nil {
+		t.Fatalf("Read(client.ability_score_rolls) error = %v", err)
+	}
+	if raw.Type != protocol.MessageTypeClientAbilityScoreRolls {
+		t.Fatalf("got %q, want client.ability_score_rolls", raw.Type)
+	}
+	if raw.Payload.PromptID == "" {
+		t.Error("PromptID is empty, want a generated id")
+	}
+	if len(raw.Payload.Rolls) != 1 || len(raw.Payload.Rolls[0].Dice) != 4 {
+		t.Fatalf("Rolls = %+v, want exactly one set of 4 dice", raw.Payload.Rolls)
+	}
+	set := raw.Payload.Rolls[0]
+	if set.Total != 14 {
+		t.Errorf("Total = %d, want 14", set.Total)
+	}
+	droppedCount := 0
+	for _, d := range set.Dice {
+		if d.ID == "" {
+			t.Error("die ID is empty, want a generated id")
+		}
+		if d.Sides != 6 {
+			t.Errorf("Sides = %d, want 6", d.Sides)
+		}
+		if d.Dropped {
+			droppedCount++
+		}
+	}
+	if droppedCount != 1 {
+		t.Errorf("dropped die count = %d, want exactly 1", droppedCount)
+	}
+
+	// Ack it — the ack's own content is never inspected; PromptID is what
+	// matters, matching it back to the pending prompt.
+	if err := wsjson.Write(ctx, conn, protocol.ClientAbilityScoreRollsAckMessage{
+		Envelope: creationEnv(protocol.MessageTypeClientAbilityScoreRollsAck, "player-a-ack", "player-a", "campaign-creation-d6"),
+		Payload:  protocol.ClientAbilityScoreRollsAckPayload{PromptID: raw.Payload.PromptID},
+	}); err != nil {
+		t.Fatalf("write client.ability_score_rolls_ack error = %v", err)
+	}
+
+	// The engine's real next question (an ordinary prompt this time)
+	// relays as a normal client.choice.
+	assignPrompt := readCreationPrompt(t, ctx, conn)
+	if !assignPrompt.isChoice {
+		t.Fatal("assignment prompt is not a client.choice")
+	}
+	if assignPrompt.text != "Assign which score to Strength?" {
+		t.Errorf("text = %q, want %q", assignPrompt.text, "Assign which score to Strength?")
+	}
+	if len(assignPrompt.choiceValues) != 1 || assignPrompt.choiceValues[0] != "14" {
+		t.Errorf("choiceValues = %v, want [\"14\"]", assignPrompt.choiceValues)
+	}
+}
+
 func TestServe_CreationPregen_ChoiceCarriesReadableLabels(t *testing.T) {
 	ts, st := newTestServerForCreation(t, nil)
 	defer ts.Close()

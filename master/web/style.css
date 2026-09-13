@@ -487,7 +487,10 @@ button.secondary {
    result is decided server-side before any of this renders; the die
    itself is only a reveal animation. .client-roll is a .client-prompt,
    so it inherits that card's chrome/.answered dimming; the rules below
-   add just the die row and the outline/reveal states. */
+   add just the die row and the outline/reveal states. Shared by
+   client.ability_score_rolls (character creation's 4d6-drop-lowest
+   reveal, design doc §9.4) — .roll-die.dropped is that flow's own
+   addition, marking the one die per set excluded from its total. */
 .roll-die-row {
   display: flex;
   flex-wrap: wrap;
@@ -537,6 +540,22 @@ button.secondary {
 .roll-die.revealed .roll-die-svg polygon {
   fill: var(--parchment-hi);
   stroke: var(--brass);
+}
+
+/* The one die per 4d6-drop-lowest set excluded from its total — shown,
+   not hidden (the player should see what was rolled and dropped), just
+   visually dimmed with its face struck through. */
+.roll-die.dropped {
+  opacity: 0.55;
+}
+
+.roll-die.dropped .roll-die-svg polygon {
+  stroke: var(--parchment-line);
+}
+
+.roll-die.dropped .roll-die-face {
+  text-decoration: line-through;
+  color: var(--parchment-ink-dim);
 }
 
 .roll-die-face {

@@ -909,3 +909,57 @@ type ClientRollCompletePayload struct {
 
 // ClientRollCompleteMessage is a client.roll_complete Message.
 type ClientRollCompleteMessage = Message[ClientRollCompletePayload]
+
+// AbilityScoreDie is one d6 within an AbilityScoreRollSet. Unlike
+// ClientRollDie, Result is always present — there is no spectator to hide
+// it from (character creation is a private, single-player conversation),
+// so the client's reveal-by-click is purely a local animation, never a
+// round trip back to Master.
+type AbilityScoreDie struct {
+	ID     string `json:"id"`
+	Sides  int    `json:"sides"`
+	Result int    `json:"result"`
+	// Dropped is true for the one die (of four) a drop-lowest roll
+	// excluded from Total.
+	Dropped bool `json:"dropped,omitempty"`
+}
+
+// AbilityScoreRollSet is one ability score's worth of dice from a
+// drop-lowest roll: all 4 dice (the dropped one included, flagged rather
+// than omitted) plus the sum of the 3 kept.
+type AbilityScoreRollSet struct {
+	Dice  []AbilityScoreDie `json:"dice"`
+	Total int               `json:"total"`
+}
+
+// ClientAbilityScoreRollsPayload is the payload of a
+// client.ability_score_rolls message: sent once, to the player rolling
+// ability scores via the 4d6-drop-lowest method, carrying all six already-
+// decided sets so the client can reveal them (by whatever pacing it
+// chooses — see master/web/app.js) without any further round trip for the
+// rolling itself. Once the player has seen every set, the client sends
+// client.ability_score_rolls_ack, which is what actually advances the
+// character-creation session to the by-ability assignment questions
+// (ordinary client.choice prompts from there on).
+type ClientAbilityScoreRollsPayload struct {
+	PromptID string `json:"prompt_id"`
+	// Text is the roll-intro line (e.g. "Time to roll your six ability
+	// scores! Click each die to reveal it.").
+	Text  string                `json:"text"`
+	Rolls []AbilityScoreRollSet `json:"rolls"`
+}
+
+// ClientAbilityScoreRollsMessage is a client.ability_score_rolls Message.
+type ClientAbilityScoreRollsMessage = Message[ClientAbilityScoreRollsPayload]
+
+// ClientAbilityScoreRollsAckPayload is the payload of a
+// client.ability_score_rolls_ack message: the player telling Master
+// they've finished watching the client.ability_score_rolls reveal for
+// PromptID. It carries no other content — there is nothing to validate,
+// only a pending prompt to resolve.
+type ClientAbilityScoreRollsAckPayload struct {
+	PromptID string `json:"prompt_id"`
+}
+
+// ClientAbilityScoreRollsAckMessage is a client.ability_score_rolls_ack Message.
+type ClientAbilityScoreRollsAckMessage = Message[ClientAbilityScoreRollsAckPayload]

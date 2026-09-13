@@ -31,6 +31,14 @@ const (
 	creationChoicePregen       = "pregen"
 )
 
+// abilityScoreRollsAckAnswer is the fixed sentinel Master sends as the
+// "answer" to AnswerCharacterCreationPrompt once a player has finished
+// watching their client.ability_score_rolls reveal. The System Engine's
+// RevealAbilityRolls phase ignores an answer's content entirely — any
+// non-empty value would do — but a real, readable constant beats an
+// arbitrary empty string in logs/traces.
+const abilityScoreRollsAckAnswer = "acknowledged"
+
 // creationStage records what kind of answer an in-progress creation
 // session is currently waiting on, so routeCreationAnswer knows how to
 // interpret the next answer it receives (a client.query_response or a
@@ -338,7 +346,45 @@ func (s *Server) handleCreationEngineResponse(ctx context.Context, conn *websock
 		return s.finishCreationRoll(ctx, conn, campaignID, senderID, resp.Actor)
 	}
 	s.setCreationSession(sessionID, creationSession{senderID: senderID, stage: creationStageEngine})
+	if len(resp.AbilityScoreRolls) > 0 {
+		return s.sendCreationAbilityScoreRolls(ctx, conn, campaignID, senderID, sessionID, resp.PromptText, resp.AbilityScoreRolls)
+	}
 	return s.sendCreationPrompt(ctx, conn, campaignID, senderID, sessionID, resp.PromptText, resp.Choices, false)
+}
+
+// sendCreationAbilityScoreRolls sends the 4d6-drop-lowest reveal step
+// (design doc §9.4) as a client.ability_score_rolls — the engine has
+// already fully decided all six sets (server computes, client reveals,
+// the same principle client.roll's combat checks use), so this maps
+// straight across with no rolling logic of its own. Registered under
+// promptKindAbilityScoreRollsAck via the same registerCreationPrompt
+// every other creation prompt uses — its deliver callback just calls
+// routeCreationAnswer, which works unchanged for this kind too, since the
+// session is still in creationStageEngine: the eventual ack round-trips
+// through AnswerCharacterCreationPrompt like any other answer, and the
+// engine (now past RevealAbilityRolls) computes the real next question.
+func (s *Server) sendCreationAbilityScoreRolls(ctx context.Context, conn *websocket.Conn, campaignID, senderID, sessionID, promptText string, sets []*systemenginepb.AbilityScoreRollSet) error {
+	rolls := make([]protocol.AbilityScoreRollSet, len(sets))
+	for i, set := range sets {
+		dice := make([]protocol.AbilityScoreDie, len(set.Dice))
+		for j, die := range set.Dice {
+			dieID, err := newRandomID()
+			if err != nil {
+				return err
+			}
+			dice[j] = protocol.AbilityScoreDie{ID: dieID, Sides: int(die.Sides), Result: int(die.Result), Dropped: die.Dropped}
+		}
+		rolls[i] = protocol.AbilityScoreRollSet{Dice: dice, Total: int(set.Total)}
+	}
+	promptID, err := s.sendClientAbilityScoreRolls(ctx, conn, campaignID, protocol.ClientAbilityScoreRollsPayload{
+		Text:  promptText,
+		Rolls: rolls,
+	})
+	if err != nil {
+		return err
+	}
+	s.registerCreationPrompt(promptID, campaignID, senderID, sessionID, promptKindAbilityScoreRollsAck)
+	return nil
 }
 
 // finishCreationRoll persists a System-Engine-generated character —

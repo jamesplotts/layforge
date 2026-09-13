@@ -38,6 +38,8 @@ func TestMessageType_IsValid(t *testing.T) {
 		{name: "AudioChunk_ReturnsTrue", t: MessageTypeAudioChunk, want: true},
 		{name: "AudioTranscription_ReturnsTrue", t: MessageTypeAudioTranscription, want: true},
 		{name: "CharacterCreationStart_ReturnsTrue", t: MessageTypeCharacterCreationStart, want: true},
+		{name: "ClientAbilityScoreRolls_ReturnsTrue", t: MessageTypeClientAbilityScoreRolls, want: true},
+		{name: "ClientAbilityScoreRollsAck_ReturnsTrue", t: MessageTypeClientAbilityScoreRollsAck, want: true},
 		{name: "CharacterCreationPrompt_ReturnsFalse_Removed", t: MessageType("character.creation_prompt"), want: false},
 		{name: "CharacterCreationAnswer_ReturnsFalse_Removed", t: MessageType("character.creation_answer"), want: false},
 		{name: "NarrativeDmProse_ReturnsFalse_Removed", t: MessageType("narrative.dm_prose"), want: false},

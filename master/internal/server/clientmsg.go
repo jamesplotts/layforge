@@ -20,13 +20,16 @@ import (
 // client.choice with its eventual response. Character creation
 // (character_creation.go) is built entirely on top of these.
 
-// promptKind distinguishes a pending client.query from a client.choice so
-// a response of the wrong type is rejected rather than silently accepted.
+// promptKind distinguishes a pending client.query from a client.choice
+// (or, for the 4d6-drop-lowest ability-score reveal, a
+// client.ability_score_rolls_ack) so a response of the wrong type is
+// rejected rather than silently accepted.
 type promptKind int
 
 const (
 	promptKindQuery promptKind = iota
 	promptKindChoice
+	promptKindAbilityScoreRollsAck
 )
 
 // promptWaiter is what a pending prompt_id resolves to: who is allowed to
@@ -108,6 +111,28 @@ func (s *Server) sendClientChoice(ctx context.Context, conn *websocket.Conn, cam
 	return p.PromptID, nil
 }
 
+// sendClientAbilityScoreRolls writes a client.ability_score_rolls on conn
+// and returns the prompt_id it was sent with (generated here if
+// p.PromptID is empty). See character_creation.go for the character-
+// creation flow this belongs to.
+func (s *Server) sendClientAbilityScoreRolls(ctx context.Context, conn *websocket.Conn, campaignID string, p protocol.ClientAbilityScoreRollsPayload) (string, error) {
+	if p.PromptID == "" {
+		id, err := newRandomID()
+		if err != nil {
+			return "", err
+		}
+		p.PromptID = id
+	}
+	msg, err := newMessage(campaignID, protocol.MessageTypeClientAbilityScoreRolls, p)
+	if err != nil {
+		return "", err
+	}
+	if err := wsjson.Write(ctx, conn, msg); err != nil {
+		return "", fmt.Errorf("writing client.ability_score_rolls: %w", err)
+	}
+	return p.PromptID, nil
+}
+
 // sendClientDisplay sends a client.display: broadcast to the whole
 // campaign when recipient is empty (and recorded to the event log), or
 // to one connection only when it names a sender_id/account (per-player
@@ -168,6 +193,16 @@ func (s *Server) handleClientQueryResponse(ctx context.Context, conn *websocket.
 
 func (s *Server) handleClientChoiceResponse(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.ClientChoiceResponseMessage) error {
 	return s.deliverPromptAnswer(ctx, conn, campaignID, senderID, req.MessageID, req.Payload.PromptID, promptKindChoice, req.Payload.Value)
+}
+
+// handleClientAbilityScoreRollsAck is dispatch's entry point for
+// client.ability_score_rolls_ack — the payload carries no content beyond
+// prompt_id, so the "answer" handed to the registered callback is always
+// abilityScoreRollsAckAnswer (character_creation.go), a fixed sentinel
+// the System Engine's RevealAbilityRolls phase ignores entirely; only its
+// presence (any answer at all) matters.
+func (s *Server) handleClientAbilityScoreRollsAck(ctx context.Context, conn *websocket.Conn, campaignID, senderID string, req protocol.ClientAbilityScoreRollsAckMessage) error {
+	return s.deliverPromptAnswer(ctx, conn, campaignID, senderID, req.MessageID, req.Payload.PromptID, promptKindAbilityScoreRollsAck, abilityScoreRollsAckAnswer)
 }
 
 func (s *Server) deliverPromptAnswer(ctx context.Context, conn *websocket.Conn, campaignID, senderID, inReplyTo, promptID string, kind promptKind, answer string) error {

@@ -93,6 +93,7 @@ channels:
           - $ref: '#/components/messages/ClientRollSpectate'
           - $ref: '#/components/messages/ClientRollSpectateReveal'
           - $ref: '#/components/messages/ClientRollComplete'
+          - $ref: '#/components/messages/ClientAbilityScoreRolls'
     publish:
       operationId: sendClientMessage
       summary: Messages a client sends to Master.
@@ -117,6 +118,7 @@ channels:
           - $ref: '#/components/messages/ClientQueryResponse'
           - $ref: '#/components/messages/ClientChoiceResponse'
           - $ref: '#/components/messages/ClientRollReveal'
+          - $ref: '#/components/messages/ClientAbilityScoreRollsAck'
 
 components:
   messages:
@@ -1410,6 +1412,93 @@ components:
                   result_summary:
                     type: string
                     description: 'The composed label + breakdown line for display beside the dice, e.g. "Charisma (Persuasion) Check: 13 -1 = 12".'
+
+    ClientAbilityScoreRolls:
+      name: client.ability_score_rolls
+      messageId: client_ability_score_rolls
+      title: Reveal a 4d6-drop-lowest ability-score roll
+      summary: >
+        Sent once, to the player rolling ability scores via the
+        4d6-drop-lowest method during character creation (docs/design.md
+        §9.4) — a private, single-player exchange, unlike client.roll's
+        combat checks, so there is no spectator to hide a result from:
+        every die's result is already decided and sent up front, and the
+        client's reveal is a purely local animation with no per-die round
+        trip. Once the player has watched all six sets reveal, the client
+        sends client.ability_score_rolls_ack, which is what actually
+        advances character creation to the by-ability assignment
+        questions (ordinary client.choice from there on).
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.ability_score_rolls
+              payload:
+                type: object
+                required: [prompt_id, text, rolls]
+                properties:
+                  prompt_id:
+                    type: string
+                  text:
+                    type: string
+                    description: The roll-intro line, e.g. "Time to roll your six ability scores! Click each die to reveal it."
+                  rolls:
+                    type: array
+                    description: Always six sets — one per ability score, in rolled order.
+                    items:
+                      type: object
+                      required: [dice, total]
+                      properties:
+                        dice:
+                          type: array
+                          description: All 4 dice of this set, in rolled order — the dropped one included, flagged rather than omitted.
+                          items:
+                            type: object
+                            required: [id, sides, result]
+                            properties:
+                              id:
+                                type: string
+                                description: Unique within the roll. Unlike client.roll's dice, there is no reveal round trip that needs to name this id back to Master — it exists only for the client's own DOM bookkeeping.
+                              sides:
+                                type: integer
+                              result:
+                                type: integer
+                                description: Always present — there is no spectator to hide it from, unlike client.roll.
+                              dropped:
+                                type: boolean
+                                description: True for the one die (of four) excluded from total.
+                        total:
+                          type: integer
+                          description: The sum of the 3 kept dice.
+
+    ClientAbilityScoreRollsAck:
+      name: client.ability_score_rolls_ack
+      messageId: client_ability_score_rolls_ack
+      title: Acknowledge an ability-score-roll reveal
+      summary: >
+        The player telling Master they've finished watching the
+        client.ability_score_rolls reveal for prompt_id. Carries no other
+        content — there is nothing to validate, only a pending prompt to
+        resolve; Master forwards this to the System Engine as an ordinary
+        AnswerCharacterCreationPrompt call with a fixed sentinel answer
+        the engine's reveal phase ignores entirely.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/Envelope'
+          - type: object
+            required: [payload]
+            properties:
+              type:
+                const: client.ability_score_rolls_ack
+              payload:
+                type: object
+                required: [prompt_id]
+                properties:
+                  prompt_id:
+                    type: string
 
   schemas:
 

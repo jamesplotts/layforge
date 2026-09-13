@@ -201,6 +201,48 @@ func TestClientMessages_RoundTrip(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "client.ability_score_rolls",
+			msg: ClientAbilityScoreRollsMessage{
+				Envelope: clientEnvelope(MessageTypeClientAbilityScoreRolls),
+				Payload: ClientAbilityScoreRollsPayload{
+					PromptID: "d-1", Text: "Time to roll your six ability scores!",
+					Rolls: []AbilityScoreRollSet{{
+						Dice: []AbilityScoreDie{
+							{ID: "die-1", Sides: 6, Result: 5},
+							{ID: "die-2", Sides: 6, Result: 3},
+							{ID: "die-3", Sides: 6, Result: 2, Dropped: true},
+							{ID: "die-4", Sides: 6, Result: 6},
+						},
+						Total: 14,
+					}},
+				},
+			},
+			check: func(t *testing.T, wire []byte) {
+				var got ClientAbilityScoreRollsMessage
+				mustUnmarshal(t, wire, &got)
+				if len(got.Payload.Rolls) != 1 || got.Payload.Rolls[0].Total != 14 {
+					t.Errorf("got %+v", got.Payload)
+				}
+				if !got.Payload.Rolls[0].Dice[2].Dropped {
+					t.Errorf("dropped die lost its flag: %+v", got.Payload.Rolls[0].Dice[2])
+				}
+			},
+		},
+		{
+			name: "client.ability_score_rolls_ack",
+			msg: ClientAbilityScoreRollsAckMessage{
+				Envelope: clientEnvelope(MessageTypeClientAbilityScoreRollsAck),
+				Payload:  ClientAbilityScoreRollsAckPayload{PromptID: "d-1"},
+			},
+			check: func(t *testing.T, wire []byte) {
+				var got ClientAbilityScoreRollsAckMessage
+				mustUnmarshal(t, wire, &got)
+				if got.Payload.PromptID != "d-1" {
+					t.Errorf("got %+v", got.Payload)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
