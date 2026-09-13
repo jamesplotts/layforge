@@ -483,3 +483,202 @@ func TestServe_NarrativePlayerInput_SlowPass_TransferCurrency_PvPGate(t *testing
 		})
 	}
 }
+
+func TestServe_NarrativePlayerInput_SlowPass_SpendCurrency_Success_Persists(t *testing.T) {
+	actorData, err := structpb.NewStruct(map[string]any{"name": "Reorx"})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct() error = %v", err)
+	}
+	fakeEngine := &fakeSystemEngineClient{
+		removeCurrencyResp: &systemenginepb.RemoveCurrencyResponse{
+			Success:       true,
+			ResultMessage: "Reorx loses 0cp, 0sp, 2gp, 0pp.",
+			Actor:         &systemenginepb.Actor{ActorId: "actor-char", CharacterData: actorData, SchemaVersion: "opencombatengine-v1"},
+		},
+	}
+	fakeLLM := toolCallLLM("spend_currency", `{"character_id":"actor-char","gold":2}`)
+
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "actor-char", "campaign-spend-currency", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-spend-currency", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-spend-currency", "player-a", "actor-char", "I set two gold pieces on the bar — one for an ale, one for information."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var toolResult protocol.ToolResultMessage
+	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+		t.Fatalf("Read(tool.result) error = %v", err)
+	}
+	if !toolResult.Payload.Success {
+		t.Fatalf("tool.result Success = false, want true (payload: %+v)", toolResult.Payload)
+	}
+	if fakeEngine.lastRemoveCurrencyRequest == nil {
+		t.Fatal("RemoveCurrency was never called")
+	}
+	if fakeEngine.lastRemoveCurrencyRequest.Gold != 2 {
+		t.Errorf("RemoveCurrency called with Gold = %d, want 2", fakeEngine.lastRemoveCurrencyRequest.Gold)
+	}
+
+	if _, err := st.GetCharacter(ctx, "actor-char"); err != nil {
+		t.Fatalf("GetCharacter(actor-char) error = %v", err)
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_SpendCurrency_EngineRejects_ReturnsFailureToolResult(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{
+		removeCurrencyResp: &systemenginepb.RemoveCurrencyResponse{
+			Success: false,
+			Error:   "Insufficient currency.",
+		},
+	}
+	fakeLLM := toolCallLLM("spend_currency", `{"character_id":"actor-char","gold":2}`)
+
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "actor-char", "campaign-spend-currency-reject", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-spend-currency-reject", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-spend-currency-reject", "player-a", "actor-char", "I try to pay with gold I don't have."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var toolResult protocol.ToolResultMessage
+	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+		t.Fatalf("Read(tool.result) error = %v", err)
+	}
+	if toolResult.Payload.Success {
+		t.Fatalf("tool.result Success = true, want false (the engine rejected the spend)")
+	}
+	if toolResult.Payload.ReasonCode != "insufficient_funds" {
+		t.Errorf("tool.result ReasonCode = %q, want %q", toolResult.Payload.ReasonCode, "insufficient_funds")
+	}
+}
+
+// TestServe_NarrativePlayerInput_SlowPass_SpendCurrency_PvPGate mirrors
+// TransferCurrency_PvPGate's exact matrix — spend_currency removes
+// currency from character_id exactly like transfer_currency's source
+// side does, so it needs the same gate under the same reasoning.
+func TestServe_NarrativePlayerInput_SlowPass_SpendCurrency_PvPGate(t *testing.T) {
+	tests := []struct {
+		name             string
+		ownerID          string
+		dead             bool
+		policies         map[string]policy.CampaignPolicy
+		wantSuccess      bool
+		wantReasonCode   string
+		wantEngineCalled bool
+	}{
+		{
+			name:             "SpendFromOwnCharacter_NotGated_SucceedsEvenUnderPveOnly",
+			ownerID:          "player-a",
+			policies:         map[string]policy.CampaignPolicy{"campaign-spend-currency-pvp": {PvPPolicy: policy.PvPPolicyPveOnly}},
+			wantSuccess:      true,
+			wantEngineCalled: true,
+		},
+		{
+			name:             "SpendFromDifferentPlayersCharacter_PveOnly_Blocked",
+			ownerID:          "player-b",
+			policies:         map[string]policy.CampaignPolicy{"campaign-spend-currency-pvp": {PvPPolicy: policy.PvPPolicyPveOnly}},
+			wantSuccess:      false,
+			wantReasonCode:   "pvp_blocked",
+			wantEngineCalled: false,
+		},
+		{
+			name:             "SpendFromDifferentPlayersCharacter_Allowed_Succeeds",
+			ownerID:          "player-b",
+			policies:         map[string]policy.CampaignPolicy{"campaign-spend-currency-pvp": {PvPPolicy: policy.PvPPolicyAllowed}},
+			wantSuccess:      true,
+			wantEngineCalled: true,
+		},
+		{
+			name:             "SpendFromNPC_NotGated_SucceedsEvenUnderPveOnly",
+			ownerID:          "master",
+			policies:         map[string]policy.CampaignPolicy{"campaign-spend-currency-pvp": {PvPPolicy: policy.PvPPolicyPveOnly}},
+			wantSuccess:      true,
+			wantEngineCalled: true,
+		},
+		{
+			// The party spending a fallen ally's own coin — logistics, not
+			// theft — even under the strictest policy. Same exemption
+			// TransferCurrency_PvPGate's own dead-source case covers.
+			name:             "SpendFromDeadDifferentPlayersCharacter_NotGated_SucceedsEvenUnderPveOnly",
+			ownerID:          "player-b",
+			dead:             true,
+			policies:         map[string]policy.CampaignPolicy{"campaign-spend-currency-pvp": {PvPPolicy: policy.PvPPolicyPveOnly}},
+			wantSuccess:      true,
+			wantEngineCalled: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actorData, err := structpb.NewStruct(map[string]any{"name": "Reorx"})
+			if err != nil {
+				t.Fatalf("structpb.NewStruct() error = %v", err)
+			}
+			characterStatus := systemenginepb.CharacterStatus_CHARACTER_STATUS_ACTIVE
+			if tt.dead {
+				characterStatus = systemenginepb.CharacterStatus_CHARACTER_STATUS_DEAD
+			}
+			fakeEngine := &fakeSystemEngineClient{
+				removeCurrencyResp: &systemenginepb.RemoveCurrencyResponse{
+					Success:       true,
+					ResultMessage: "The spend resolves.",
+					Actor:         &systemenginepb.Actor{ActorId: "actor-char", CharacterData: actorData, SchemaVersion: "opencombatengine-v1"},
+				},
+				getCharacterStatusResp: &systemenginepb.GetCharacterStatusResponse{Status: characterStatus},
+			}
+			fakeLLM := toolCallLLM("spend_currency", `{"character_id":"actor-char","gold":2}`)
+
+			ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine, policy.NewJSONFileProvider(tt.policies))
+			defer ts.Close()
+			seedCharacter(t, st, "actor-char", "campaign-spend-currency-pvp", tt.ownerID)
+
+			conn := dialAndJoin(t, ts, "campaign-spend-currency-pvp", "player-a")
+			defer conn.CloseNow()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if _, err := sendPlayerInput(ctx, conn, "campaign-spend-currency-pvp", "player-a", "actor-char", "I pay for the drinks."); err != nil {
+				t.Fatalf("sendPlayerInput() error = %v", err)
+			}
+			var bubble protocol.NarrativePlayerBubbleMessage
+			if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+				t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+			}
+			var toolResult protocol.ToolResultMessage
+			if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+				t.Fatalf("Read(tool.result) error = %v", err)
+			}
+
+			if toolResult.Payload.Success != tt.wantSuccess {
+				t.Errorf("tool.result Success = %v, want %v (payload: %+v)", toolResult.Payload.Success, tt.wantSuccess, toolResult.Payload)
+			}
+			if tt.wantReasonCode != "" && toolResult.Payload.ReasonCode != tt.wantReasonCode {
+				t.Errorf("tool.result ReasonCode = %q, want %q", toolResult.Payload.ReasonCode, tt.wantReasonCode)
+			}
+			if (fakeEngine.lastRemoveCurrencyRequest != nil) != tt.wantEngineCalled {
+				t.Errorf("RemoveCurrency called = %v, want %v", fakeEngine.lastRemoveCurrencyRequest != nil, tt.wantEngineCalled)
+			}
+		})
+	}
+}

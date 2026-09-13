@@ -2493,6 +2493,38 @@ cases (success-persists and engine-rejects, mirroring the existing
 end to end against a real DM model this pass — a genuine gap, named
 rather than glossed over.
 
+**Spent currency wasn't being deducted for a narrative purchase with no
+tracked recipient.** Live-observed bug: a player had their character set
+two gold pieces on a bar — one for an ale, one for information — and the
+character's Gold never dropped from 15. Root cause: the mechanics prompt
+had no rule at all telling the model to track spent currency, and even if
+it had tried, no DM tool existed for "just deduct currency" — only
+`add_currency` (creates from nothing), `transfer_currency` (needs a real
+tracked recipient character), and `stash_currency` (leaves it at a
+location for the *same* character to reclaim later, not a real spend).
+New `spend_currency` DM tool, built on OpenCombatEngine's existing
+`RemoveCurrency` RPC (the same one `stash_currency` already uses) —
+deducts currency with no recipient credited, for exactly this case: a
+tip, a toll, a bribe, an incidental purchase from someone not worth
+`create_npc`-ing. Same PvP gate as `transfer_currency`'s own remove-half
+(taking currency away from a different player's character is subject to
+campaign policy; a self-owned, NPC-owned, or dead source is exempt) since
+`spend_currency` removes currency from `character_id` the same way.
+`transfer_currency`'s own description now points to `spend_currency` for
+the no-real-recipient case, and the mechanics prompt gained an explicit
+rule: any stated action that pays, spends, tips, or bribes away currency
+must actually deduct it, however the player phrased it — dialogue,
+description, or an explicit amount — never left untracked for lack of a
+formal purchase tool.
+
+Covered by three new tests in `internal/server/loot_test.go`, mirroring
+`TransferCurrency_*`'s own shape exactly:
+`SpendCurrency_Success_Persists`, `SpendCurrency_EngineRejects_
+ReturnsFailureToolResult`, and `SpendCurrency_PvPGate` (the same
+own-character/different-player's-character/allowed-policy/NPC/dead-source
+matrix `TransferCurrency_PvPGate` already covers). Not yet live-verified
+against a real DM model this pass.
+
 ## Layout
 
 ```

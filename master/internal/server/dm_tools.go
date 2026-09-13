@@ -298,13 +298,28 @@ func dmTools() []llm.Tool {
 		},
 		{
 			Name:        "transfer_currency",
-			Description: "Move copper/silver/gold/platinum from one character's inventory into another's — looting a corpse's coin after combat, or a trade between characters. Fails if the source doesn't carry enough of a requested denomination (this does not make change across denominations). Taking currency away FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy and may be rejected.",
+			Description: "Move copper/silver/gold/platinum from one character's inventory into another's — looting a corpse's coin after combat, or a trade between characters. Fails if the source doesn't carry enough of a requested denomination (this does not make change across denominations). Taking currency away FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy and may be rejected. If the recipient isn't a real tracked character worth create_npc-ing (a barkeep taking a coin for an ale, a bribe to a guard), use spend_currency instead.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"required": ["character_id", "target_character_id"],
 				"properties": {
 					"character_id": {"type": "string", "description": "The character the currency is coming from."},
 					"target_character_id": {"type": "string", "description": "The receiving character's ID."},
+					"copper": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"silver": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"gold": {"type": "integer", "description": "Defaults to 0 if omitted."},
+					"platinum": {"type": "integer", "description": "Defaults to 0 if omitted."}
+				}
+			}`),
+		},
+		{
+			Name:        "spend_currency",
+			Description: "Deduct copper/silver/gold/platinum from a character's own currency for something paid, spent, tipped, or bribed away where the recipient isn't a real tracked character worth create_npc-ing (a round of drinks, a toll, a bribe) — the currency is simply gone, not credited to anyone. If the recipient IS a real tracked character, use transfer_currency instead so their side gets credited too. Distinct from stash_currency, which leaves currency at the party's current location for the SAME character to retrieve_currency later — spent currency never comes back. Fails if the character doesn't carry enough of a requested denomination. Taking currency away FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy and may be rejected.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id"],
+				"properties": {
+					"character_id": {"type": "string"},
 					"copper": {"type": "integer", "description": "Defaults to 0 if omitted."},
 					"silver": {"type": "integer", "description": "Defaults to 0 if omitted."},
 					"gold": {"type": "integer", "description": "Defaults to 0 if omitted."},
@@ -498,6 +513,8 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmAddCurrency(ctx, campaignID, call.Arguments)
 	case "transfer_currency":
 		return s.dmTransferCurrency(ctx, campaignID, actingSenderID, call.Arguments)
+	case "spend_currency":
+		return s.dmSpendCurrency(ctx, campaignID, actingSenderID, call.Arguments)
 	case "get_available_actions":
 		return s.dmGetAvailableActions(ctx, campaignID, call.Arguments)
 	case "get_character_status":
@@ -1895,6 +1912,69 @@ func (s *Server) dmTransferCurrency(ctx context.Context, campaignID, actingSende
 	}
 
 	payload, err := json.Marshal(map[string]any{"transferred": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmSpendCurrency deducts currency from a character for something paid,
+// tipped, or bribed away with no real tracked character on the receiving
+// end worth create_npc-ing — a real, live-observed gap this closes: a
+// player narrating a payment (two gold set on a bar, one for the ale and
+// one for information) had no tool that just removed the money, so
+// nothing was ever deducted at all. Built on the same engine RemoveCurrency
+// RPC dmStashCurrency (location.go) already uses, but for spending rather
+// than caching at a location — the currency here never comes back.
+func (s *Server) dmSpendCurrency(ctx context.Context, campaignID, actingSenderID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+		Copper      int32  `json:"copper"`
+		Silver      int32  `json:"silver"`
+		Gold        int32  `json:"gold"`
+		Platinum    int32  `json:"platinum"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	// PvP gate (design doc §9.1) — same reasoning and same exemptions
+	// (self/NPC-owned or dead source skip the check) as dmTransferCurrency's
+	// own remove-half; spend_currency removes currency from character_id
+	// exactly like transfer_currency's source side does, it just never
+	// credits anyone with it.
+	if reason, code, err := s.pvpGateBlocked(ctx, campaignID, actingSenderID, "currency", character); err != nil {
+		return fmt.Sprintf("checking character status: %v", err), false, "engine_error"
+	} else if reason != "" {
+		return reason, false, code
+	}
+
+	resp, err := s.systemEngine.RemoveCurrency(ctx, &systemenginepb.RemoveCurrencyRequest{
+		RequestId:  "dm-tool-spend-currency-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		Copper:     args.Copper, Silver: args.Silver, Gold: args.Gold, Platinum: args.Platinum,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "insufficient_funds"
+	}
+	if err := s.saveUpdatedCharacter(ctx, character, resp.Actor); err != nil {
+		return err.Error(), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"spent": true, "message": resp.ResultMessage})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
 	}
