@@ -259,14 +259,14 @@ func dmTools() []llm.Tool {
 		},
 		{
 			Name:        "give_item",
-			Description: "Move a real item from one character's inventory directly into another's (a trade, a handoff, a gift). If the item is currently attuned, attunement ends. Giving an item away FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy and may be rejected.",
+			Description: "Move a real item from one character's inventory directly into another's (a trade, a handoff, a gift, looting a corpse's own carried items — equipped, quick-access, or stowed inside a container). If the item is currently attuned, attunement ends. Always lands loose/quick-access on the receiving character, never inside one of their own containers — equip_item/pack_item it from there if it needs to go somewhere specific. Giving an item away FROM a different player's character than the one whose narrative turn triggered this is subject to this campaign's PvP policy and may be rejected.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"required": ["character_id", "target_character_id", "item_name"],
 				"properties": {
 					"character_id": {"type": "string", "description": "The giving character's ID."},
 					"target_character_id": {"type": "string", "description": "The receiving character's ID."},
-					"item_name": {"type": "string", "description": "Must already be a real member of the giving character's inventory."}
+					"item_name": {"type": "string", "description": "Must already be a real item the giving character is carrying — equipped, quick-access, or stowed inside a container."}
 				}
 			}`),
 		},

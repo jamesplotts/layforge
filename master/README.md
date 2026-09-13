@@ -2466,13 +2466,16 @@ model to respect, never something the engine itself checked. Both system
 prompts now name "Item locations" explicitly and are told never to
 narrate an item as drawn, readied, or stowed ahead of the tool call that
 actually did it.
-**Known, honestly-scoped gap**: looting a *stowed* item off a corpse
-still isn't possible — `give_item`/`TransferItem` only ever searches a
-character's flat inventory list, never walks into a container's
-contents. This predates this feature (the same limitation already
-existed for any character's own stowed items before "stowed" was a
-narratable concept at all) and is simply more visible now; closing it is
-real future work, not a silent omission.
+**Fixed since this feature first landed**: looting a *stowed* item off a
+corpse now works — `give_item`/`TransferItem` used to search only a
+character's flat inventory list, never walking into a container's
+contents, so a crowbar left in a dead goblin's own pack could never be
+looted, only whatever it had equipped or on its belt. `TransferItem` now
+finds an item at any nesting depth (the same `GetCarriedItemLocations`
+traversal `pack_item`/`draw_item`/`ListCarriedItems` already share); it
+always lands loose/quick-access on the receiving character, never
+re-nested inside one of their own containers, and transferring a
+container itself carries its own nested contents along intact.
 
 Covered on the OpenCombatEngine side by `StandardEquipmentManagerTests`'
 hand-slot-gate cases, `ActionEconomyTests`' free-object-interaction
