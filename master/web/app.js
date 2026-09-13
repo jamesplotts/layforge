@@ -785,6 +785,7 @@ function handleMessage(msg) {
       break;
     case "tool.result":
       appendToolResultNote(msg.payload || {});
+      maybeRefreshCharacterAfterTool(msg.payload || {});
       break;
     case "turn.state":
       appendTurnStateNote(msg.payload || {});
@@ -1655,6 +1656,7 @@ const TOOL_FLAVOR_CATEGORY = {
   equip_item: "inventory", unequip_item: "inventory", give_item: "inventory", receive_item: "inventory",
   discard_item: "inventory", generate_loot: "inventory", add_currency: "inventory", transfer_currency: "inventory",
   retrieve_currency: "inventory", stash_currency: "inventory", retrieve_item: "inventory", stash_item: "inventory",
+  pack_item: "inventory", draw_item: "inventory", spend_currency: "inventory",
   check_item_price: "vendor", list_vendor_inventory: "vendor", vendor_buy_item: "vendor", vendor_sell_item: "vendor",
   create_npc: "npc",
   travel_to: "travel", claim_location: "travel",
@@ -1713,6 +1715,27 @@ function toolResultNoteEl(payload) {
 function appendToolResultNote(payload) {
   el.log.appendChild(toolResultNoteEl(payload));
   el.log.scrollTop = el.log.scrollHeight;
+}
+
+// TOOL_CATEGORIES_AFFECTING_CHARACTER_DATA are the TOOL_FLAVOR_CATEGORY
+// buckets whose underlying DM tool call can change a character's own
+// currency/inventory/equipment. A real, live-observed bug this closes:
+// the narration would describe gold or an item changing hands, the
+// server-side character record really did update, but the open
+// character sheet kept showing stale numbers — nothing ever told the
+// client to re-fetch it. requestCharacterState() was already called
+// after every roll.result regardless of whose roll it was; tool.result
+// carries no character_id at all (only tool_name/success/reason_code),
+// so this follows that exact same "just refetch, unconditionally"
+// precedent rather than trying to work out whether it was actually this
+// client's own character that changed.
+const TOOL_CATEGORIES_AFFECTING_CHARACTER_DATA = new Set(["inventory", "vendor"]);
+
+function maybeRefreshCharacterAfterTool(payload) {
+  if (!payload.success) return;
+  if (TOOL_CATEGORIES_AFFECTING_CHARACTER_DATA.has(TOOL_FLAVOR_CATEGORY[payload.tool_name])) {
+    requestCharacterState();
+  }
 }
 
 // turnStateNoteEl renders a turn.state broadcast (design doc §3.1, §9.3)
