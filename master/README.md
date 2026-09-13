@@ -151,7 +151,14 @@ announcement and the recent-conversation transcript below, which had
 each grown their own copy of the same "read character_data's own name
 field" logic) and includes it as a "Character name: ..." line;
 `narrativeFastPassSystemPrompt` explicitly forbids "the player" (or bare
-"the character") in the output now, a name or pronoun only.
+"the character") in the output now, a name or pronoun only. Race
+(`characterRace`) and gender (`characterGender`) ride along too, for the
+same reason: without them, a pronoun was a guess from the name and a
+plain noun defaulted to "man"/"woman" — which specifically mean *Human*
+in D&D terms, so a Dwarf or an Elf rendered that way silently misstates
+their own race. The model now has the real gender for an accurate
+pronoun and the real race for an accurate noun ("the dwarf") instead of
+guessing either.
 
 **New**: recent-conversation memory (`internal/server/recent_conversation.go`).
 Every slow-pass turn used to be a fresh completion with zero memory of

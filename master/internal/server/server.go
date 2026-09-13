@@ -793,7 +793,7 @@ func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic stri
 // this pass's bubble is out).
 const narrativeFastPassSystemPrompt = `You are rendering a tabletop RPG player's stated action or dialogue into brief, third-person, present-tense narrative prose for a shared chat log.
 Rules:
-- Refer to the acting character by the name given to you ("Character name: ..."), or by a fitting pronoun if none was given — never as "the player" or "the character": only the person's in-fiction persona exists in this narration, never a reference to the real person controlling them.
+- Refer to the acting character by the name given to you ("Character name: ...") — never as "the player": only the person's in-fiction persona exists in this narration, never a reference to the real person controlling them. When you need a pronoun, match "Character gender: ..." when given (he/him, she/her — a fitting neutral pronoun otherwise); never guess it from the name. When you need a plain noun instead of a name or pronoun, pick one that fits "Character race: ..." when given ("the dwarf", "the elf") — a generic human-coded word like "man"/"woman"/"the character" specifically means Human in D&D terms, so using one for a Dwarf or an Elf silently misstates their race.
 - Describe only what the player explicitly stated — do not invent new events, dialogue, or outcomes.
 - Do not resolve success or failure of any action; that is decided elsewhere.
 - Keep it to 1-3 sentences.
@@ -815,12 +815,15 @@ Rules:
 // line-crossing detail straight back out of the player's phrasing. The
 // slow pass (runSlowPass) is where the fuller campaign/character context
 // is assembled. The one exception to "lean": the acting character's own
-// display name (characterDisplayName) — live-observed without it, the
-// model had nothing to call the character but "the player," a real
-// fourth-wall break (the player is a person at the table; only their
-// character exists in the fiction). A name is not the fuller campaign
-// context the slow pass assembles, just the minimum needed to render a
-// pronoun-free sentence correctly.
+// display name, race, and gender (characterDisplayName/characterRace/
+// characterGender) — live-observed without a name at all, the model had
+// nothing to call the character but "the player," a real fourth-wall
+// break (the player is a person at the table; only their character
+// exists in the fiction); without race/gender, a pronoun or a plain noun
+// is a guess that can misstate the character (e.g. "man"/"woman" mean
+// Human specifically in D&D terms). None of this is the fuller campaign
+// context the slow pass assembles — just the minimum needed to refer to
+// the character correctly.
 func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, campaignID string, input protocol.NarrativePlayerInputMessage) error {
 	if s.llm == nil {
 		return s.sendError(ctx, conn, campaignID, input.MessageID, errors.New("narrative rendering unavailable: no LLM provider configured"))
@@ -830,6 +833,12 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 	if s.characters != nil {
 		if character, err := s.campaignCharacter(ctx, campaignID, input.Payload.CharacterID); err == nil {
 			userPrompt += fmt.Sprintf("Character name: %s\n", characterDisplayName(character))
+			if race := characterRace(character); race != "" {
+				userPrompt += fmt.Sprintf("Character race: %s\n", race)
+			}
+			if gender := characterGender(character); gender != "" {
+				userPrompt += fmt.Sprintf("Character gender: %s\n", gender)
+			}
 		}
 	}
 	userPrompt += "Player action to render: " + input.Payload.Text

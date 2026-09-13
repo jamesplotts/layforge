@@ -877,6 +877,71 @@ func TestServe_NarrativePlayerInput_FastPass_IncludesCharacterName(t *testing.T)
 	}
 }
 
+// TestServe_NarrativePlayerInput_FastPass_IncludesCharacterRaceAndGender
+// covers the follow-up: race and gender ride along too, so the fast pass
+// can pick an accurate pronoun (matching gender, never guessed from the
+// name) and, when it needs a plain noun instead, one that actually
+// matches the character's race — "man"/"woman" specifically mean Human
+// in D&D terms, so a Dwarf rendered as "the man" silently misstates them.
+func TestServe_NarrativePlayerInput_FastPass_IncludesCharacterRaceAndGender(t *testing.T) {
+	fake := &fakeLLMProvider{response: llm.CompletionResponse{Text: "The dwarf draws his sword."}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st, err := store.OpenSQLiteEventStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	if err := st.SaveCharacter(context.Background(), store.Character{
+		ID:            "char-a",
+		CampaignID:    "campaign-narrative-race",
+		OwnerID:       "player-a",
+		SchemaVersion: "opencombatengine-v1",
+		Status:        store.CharacterStatusApproved,
+		CharacterData: json.RawMessage(`{"name":"Reorx","raceName":"Dwarf","gender":"Male"}`),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	ts := httptest.NewServer(server.New(logger, st, fake, "test-model", nil, nil, st, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-narrative-race", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := protocol.NarrativePlayerInputMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "input-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-narrative-race",
+			Type:            protocol.MessageTypeNarrativePlayerInput,
+		},
+		Payload: protocol.NarrativePlayerInputPayload{
+			CharacterID: "char-a",
+			Text:        "I draw my sword.",
+			Source:      protocol.NarrativeInputSourceTyped,
+		},
+	}
+	if err := wsjson.Write(ctx, conn, input); err != nil {
+		t.Fatalf("Write(narrative.player_input) error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	call := fake.firstCall(t)
+	want := "Character name: Reorx\nCharacter race: Dwarf\nCharacter gender: Male\nPlayer action to render: I draw my sword."
+	if call.UserPrompt != want {
+		t.Errorf("Complete() called with UserPrompt = %q, want %q", call.UserPrompt, want)
+	}
+}
+
 func TestServe_NarrativePlayerInput_NoProvider_RespondsWithError(t *testing.T) {
 	ts := newTestServer(t) // no LLM provider configured
 	defer ts.Close()
