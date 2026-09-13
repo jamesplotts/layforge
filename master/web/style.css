@@ -848,6 +848,44 @@ button.secondary {
   margin-bottom: 6px;
 }
 
+/* A uniform array of scalar-only records (e.g. Ability Scores' Name/
+   Score/Mod, Skills' Name/Ability/Proficient/Mod) renders as a real
+   table instead of the stacked field-row list above — see
+   character-sheet.js's isUniformScalarArraySchema for the structural
+   test that decides this, which knows nothing about what the columns
+   are named. The wrap's own overflow-x is a safety net for a future
+   engine's wider table, not needed by anything shipped today. */
+.sheet-table-wrap {
+  overflow-x: auto;
+}
+
+.sheet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.sheet-table th,
+.sheet-table td {
+  padding: 3px 6px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sheet-table th {
+  color: var(--text-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.sheet-table td {
+  color: var(--text);
+}
+
+.sheet-table tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .input-form {
   display: flex;
   gap: 8px;

@@ -86,6 +86,9 @@ function renderObject(schema, data, rootSchema) {
 function renderArray(schema, data, rootSchema) {
   if (!Array.isArray(data) || data.length === 0) return textNode("none");
   const itemSchema = schema.items ? resolveSchema(schema.items, rootSchema) : null;
+  if (isUniformScalarArraySchema(itemSchema, rootSchema)) {
+    return renderArrayAsTable(itemSchema, data, rootSchema);
+  }
   const list = document.createElement("ul");
   list.className = "sheet-array";
   for (const item of data) {
@@ -94,6 +97,77 @@ function renderArray(schema, data, rootSchema) {
     list.appendChild(li);
   }
   return list;
+}
+
+// isUniformScalarArraySchema reports whether itemSchema describes an
+// object with 2+ properties, every one of scalar type (string/integer/
+// number/boolean, optionally nullable — never object/array). A pure
+// structural test, same spirit as isGroupableProperty below — it
+// doesn't know or care what the properties are named, so any engine's
+// own array-of-records data (not just this project's abilities/skills)
+// gets the same table treatment for free. The 2+ threshold deliberately
+// excludes the single-populated-field shape renderArrayItem already
+// collapses to a bare value (inventory's { "name": "Quarterstaff" }
+// items) — a table would be a strictly worse rendering of that case.
+function isUniformScalarArraySchema(itemSchema, rootSchema) {
+  if (!itemSchema) return false;
+  const types = schemaTypes(itemSchema);
+  if (!types.includes("object") || !itemSchema.properties) return false;
+  const propNames = Object.keys(itemSchema.properties);
+  if (propNames.length < 2) return false;
+  const scalarTypes = new Set(["string", "integer", "number", "boolean"]);
+  return propNames.every((name) => {
+    const propTypes = schemaTypes(resolveSchema(itemSchema.properties[name], rootSchema));
+    return propTypes.length > 0
+      && propTypes.every((t) => scalarTypes.has(t) || t === "null")
+      && propTypes.some((t) => scalarTypes.has(t));
+  });
+}
+
+// renderArrayAsTable renders one column per itemSchema property (in
+// schema-declared order — JSON preserves key order, so the engine
+// controls column order simply by how it emits the schema), one row per
+// array element. A missing/null cell shows "—", the same convention
+// every other absent-value case in this file already uses. Wrapped in
+// an overflow-x scroller in case a future engine's table has more
+// columns than fit the sidebar.
+function renderArrayAsTable(itemSchema, data, rootSchema) {
+  const propNames = Object.keys(itemSchema.properties);
+
+  const table = document.createElement("table");
+  table.className = "sheet-table";
+
+  const headRow = document.createElement("tr");
+  for (const propName of propNames) {
+    const th = document.createElement("th");
+    th.textContent = humanizeFieldName(propName);
+    headRow.appendChild(th);
+  }
+  const thead = document.createElement("thead");
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const item of data) {
+    const row = document.createElement("tr");
+    for (const propName of propNames) {
+      const td = document.createElement("td");
+      const value = item ? item[propName] : undefined;
+      td.appendChild(
+        value === null || value === undefined
+          ? textNode("—")
+          : renderValue(itemSchema.properties[propName], value, rootSchema),
+      );
+      row.appendChild(td);
+    }
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+
+  const wrap = document.createElement("div");
+  wrap.className = "sheet-table-wrap";
+  wrap.appendChild(table);
+  return wrap;
 }
 
 // renderArrayItem renders one element of an array. An array of objects
