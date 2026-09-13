@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // OllamaProvider is a Provider backed by an Ollama server's /api/chat
@@ -25,6 +26,23 @@ type OllamaProvider struct {
 }
 
 var _ Provider = (*OllamaProvider)(nil)
+
+// ollamaMaxAttempts bounds Complete's own retry loop for a transient
+// Ollama failure (a network-level error, or a bare 5xx). Deliberately
+// small — unlike OpenCombatEngine's own Open5eClient retry policy (4
+// attempts, 20s each) for the same class of problem — since a single
+// Ollama completion call can already take tens of seconds on a loaded
+// local model, and this budget has to fit inside a DM slow pass's own
+// mechanicsPassTimeout/narrationPassTimeout (90s each) alongside every
+// other real attempt in the same pass.
+const ollamaMaxAttempts = 3
+
+// ollamaRetryDelay is the fixed pause between retry attempts — not
+// exponential backoff, since ollamaMaxAttempts is already small enough
+// that backoff's usual benefit (not hammering an overloaded server)
+// barely matters over two total pauses; a flat delay keeps the
+// worst-case added latency easy to reason about.
+const ollamaRetryDelay = 2 * time.Second
 
 // NewOllamaProvider creates an OllamaProvider talking to the Ollama
 // server at baseURL (e.g. "http://192.168.1.56:11434"). httpClient may
@@ -130,15 +148,46 @@ func (p *OllamaProvider) Complete(ctx context.Context, req CompletionRequest) (C
 		return CompletionResponse{}, fmt.Errorf("llm: marshaling ollama request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/api/chat", bytes.NewReader(body))
-	if err != nil {
-		return CompletionResponse{}, fmt.Errorf("llm: building ollama request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	// Retries a transient failure (a network-level error reaching Ollama
+	// at all, or a bare 5xx) up to ollamaMaxAttempts times — live-observed
+	// real failure this exists for: a local/self-hosted Ollama server
+	// under real GPU load occasionally returns a bare 500 with no other
+	// explanation, which used to kill an otherwise-healthy DM turn
+	// outright (surfaced to the player as "The DM didn't manage a reply
+	// to that — try your action again"), the exact same recovery a single
+	// internal retry gets for free. A 4xx is never retried — that's a
+	// real rejection of this specific request, not a transient hiccup.
+	var httpResp *http.Response
+	var lastErr error
+	for attempt := 1; attempt <= ollamaMaxAttempts; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/api/chat", bytes.NewReader(body))
+		if err != nil {
+			return CompletionResponse{}, fmt.Errorf("llm: building ollama request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := p.client.Do(httpReq)
-	if err != nil {
-		return CompletionResponse{}, fmt.Errorf("llm: calling ollama: %w", err)
+		resp, doErr := p.client.Do(httpReq)
+		switch {
+		case doErr != nil:
+			lastErr = fmt.Errorf("llm: calling ollama: %w", doErr)
+		case resp.StatusCode >= http.StatusInternalServerError:
+			lastErr = fmt.Errorf("llm: ollama returned status %d", resp.StatusCode)
+			resp.Body.Close()
+		default:
+			httpResp = resp
+			lastErr = nil
+		}
+		if lastErr == nil || attempt == ollamaMaxAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return CompletionResponse{}, fmt.Errorf("llm: calling ollama: %w", ctx.Err())
+		case <-time.After(ollamaRetryDelay):
+		}
+	}
+	if lastErr != nil {
+		return CompletionResponse{}, lastErr
 	}
 	defer httpResp.Body.Close()
 

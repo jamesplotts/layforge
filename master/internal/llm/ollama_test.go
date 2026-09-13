@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/jamesplotts/layforge/master/internal/llm"
 )
@@ -313,5 +314,115 @@ func TestOllamaProvider_Complete_NonOKStatus_ReturnsError(t *testing.T) {
 	_, err := p.Complete(context.Background(), llm.CompletionRequest{Model: "test-model", UserPrompt: "hi"})
 	if err == nil {
 		t.Fatal("Complete() succeeded, want an error for a 500 response")
+	}
+}
+
+// TestOllamaProvider_Complete_TransientServerError_RetriesAndSucceeds is
+// the regression test for a real, live-observed failure: a local/self-
+// hosted Ollama server under real GPU load occasionally returns a bare
+// 500 with no other explanation, which used to fail an otherwise-healthy
+// DM turn outright. A single retry recovering it is exactly the fix.
+func TestOllamaProvider_Complete_TransientServerError_RetriesAndSucceeds(t *testing.T) {
+	var requestCount int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"role": "assistant", "content": "The scene continues."},
+			"done":    true,
+		})
+	}))
+	defer ts.Close()
+
+	p := llm.NewOllamaProvider(ts.URL, nil)
+	got, err := p.Complete(context.Background(), llm.CompletionRequest{Model: "test-model", UserPrompt: "hi"})
+	if err != nil {
+		t.Fatalf("Complete() error = %v, want the retry to recover", err)
+	}
+	if got.Text != "The scene continues." {
+		t.Errorf("Text = %q, want %q", got.Text, "The scene continues.")
+	}
+	if requestCount != 2 {
+		t.Errorf("requestCount = %d, want 2 (one failure, one successful retry)", requestCount)
+	}
+}
+
+// TestOllamaProvider_Complete_PersistentServerError_GivesUpAfterMaxAttempts
+// proves the retry loop is bounded, not infinite — a genuinely down
+// Ollama server must still fail the turn (and surface a real
+// system.error to the player) rather than hang the slow pass.
+func TestOllamaProvider_Complete_PersistentServerError_GivesUpAfterMaxAttempts(t *testing.T) {
+	var requestCount int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	p := llm.NewOllamaProvider(ts.URL, nil)
+	_, err := p.Complete(context.Background(), llm.CompletionRequest{Model: "test-model", UserPrompt: "hi"})
+	if err == nil {
+		t.Fatal("Complete() succeeded, want an error once every attempt 500s")
+	}
+	// Matches ollamaMaxAttempts (unexported — this is the black-box
+	// contract, not an internal detail this test file can reference
+	// directly).
+	const wantAttempts = 3
+	if requestCount != wantAttempts {
+		t.Errorf("requestCount = %d, want %d", requestCount, wantAttempts)
+	}
+}
+
+// TestOllamaProvider_Complete_ClientErrorStatus_DoesNotRetry confirms a
+// 4xx is treated as a real rejection of this specific request, not a
+// transient hiccup — retrying it would just waste the retry budget on
+// something no amount of retrying fixes.
+func TestOllamaProvider_Complete_ClientErrorStatus_DoesNotRetry(t *testing.T) {
+	var requestCount int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer ts.Close()
+
+	p := llm.NewOllamaProvider(ts.URL, nil)
+	_, err := p.Complete(context.Background(), llm.CompletionRequest{Model: "test-model", UserPrompt: "hi"})
+	if err == nil {
+		t.Fatal("Complete() succeeded, want an error for a 400 response")
+	}
+	if requestCount != 1 {
+		t.Errorf("requestCount = %d, want 1 (a 4xx must never be retried)", requestCount)
+	}
+}
+
+// TestOllamaProvider_Complete_ContextCanceledDuringRetryDelay_ReturnsPromptly
+// proves the retry loop's own delay honors ctx rather than blocking past
+// cancellation — a canceled/timed-out slow pass must not be held hostage
+// by a retry sleep on top of it.
+func TestOllamaProvider_Complete_ContextCanceledDuringRetryDelay_ReturnsPromptly(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	p := llm.NewOllamaProvider(ts.URL, nil)
+	start := time.Now()
+	_, err := p.Complete(ctx, llm.CompletionRequest{Model: "test-model", UserPrompt: "hi"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Complete() succeeded, want an error")
+	}
+	// Well under ollamaRetryDelay (2s) — proves the ctx timeout won the
+	// race against the retry sleep, not that the sleep just happened to
+	// be short.
+	if elapsed > time.Second {
+		t.Errorf("Complete() took %v, want it to return promptly once ctx was done", elapsed)
 	}
 }
