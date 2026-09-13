@@ -123,6 +123,20 @@ or refusal instead of inventing a reply when nobody present would
 plausibly answer. Prompt-only; no new tool or gate needed, since NPC
 dialogue content isn't a mechanical/trust matter.
 
+**Fixed**: the natural overcorrection from the fix above — once the DM
+was told to make the addressed NPC actually answer, it sometimes kept
+going and answered *for the player's own character* too, in the same
+breath: an NPC posed a question, and the narration immediately supplied
+the acting character's reply, internal reasoning, and next move as well,
+before the player had said any of it. Observed live: Harrington asked
+Reorx to name his price, and the DM's own narration had Reorx already
+answer ("'Gold, obviously,' he says...") in the same turn — the player
+never got to decide what Reorx said. Added a paired rule immediately
+after the "NPC must respond" one: the acting character's own words,
+choices, and reasoning are never the DM's to invent, no matter how
+naturally an NPC's line invites a reply — narration must stop the moment
+it reaches something only the player's next turn can answer.
+
 **New**: recent-conversation memory (`internal/server/recent_conversation.go`).
 Every slow-pass turn used to be a fresh completion with zero memory of
 the turn before it — `slowPassGroundingContext` fed the model character
