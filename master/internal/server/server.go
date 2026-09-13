@@ -793,6 +793,7 @@ func (s *Server) broadcastSafetyFlag(ctx context.Context, campaignID, topic stri
 // this pass's bubble is out).
 const narrativeFastPassSystemPrompt = `You are rendering a tabletop RPG player's stated action or dialogue into brief, third-person, present-tense narrative prose for a shared chat log.
 Rules:
+- Refer to the acting character by the name given to you ("Character name: ..."), or by a fitting pronoun if none was given — never as "the player" or "the character": only the person's in-fiction persona exists in this narration, never a reference to the real person controlling them.
 - Describe only what the player explicitly stated — do not invent new events, dialogue, or outcomes.
 - Do not resolve success or failure of any action; that is decided elsewhere.
 - Keep it to 1-3 sentences.
@@ -813,16 +814,25 @@ Rules:
 // campaign's safety constraints (§9.2), since it can otherwise echo a
 // line-crossing detail straight back out of the player's phrasing. The
 // slow pass (runSlowPass) is where the fuller campaign/character context
-// is assembled.
+// is assembled. The one exception to "lean": the acting character's own
+// display name (characterDisplayName) — live-observed without it, the
+// model had nothing to call the character but "the player," a real
+// fourth-wall break (the player is a person at the table; only their
+// character exists in the fiction). A name is not the fuller campaign
+// context the slow pass assembles, just the minimum needed to render a
+// pronoun-free sentence correctly.
 func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, campaignID string, input protocol.NarrativePlayerInputMessage) error {
 	if s.llm == nil {
 		return s.sendError(ctx, conn, campaignID, input.MessageID, errors.New("narrative rendering unavailable: no LLM provider configured"))
 	}
 
-	userPrompt := input.Payload.Text
-	if constraints := s.safetyConstraintsContextText(ctx, campaignID); constraints != "" {
-		userPrompt = constraints + "\nPlayer action to render: " + input.Payload.Text
+	userPrompt := s.safetyConstraintsContextText(ctx, campaignID)
+	if s.characters != nil {
+		if character, err := s.campaignCharacter(ctx, campaignID, input.Payload.CharacterID); err == nil {
+			userPrompt += fmt.Sprintf("Character name: %s\n", characterDisplayName(character))
+		}
 	}
+	userPrompt += "Player action to render: " + input.Payload.Text
 
 	completion, err := s.llm.Complete(ctx, llm.CompletionRequest{
 		Model:        s.narrativeModel,

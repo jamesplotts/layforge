@@ -137,6 +137,22 @@ choices, and reasoning are never the DM's to invent, no matter how
 naturally an NPC's line invites a reply — narration must stop the moment
 it reaches something only the player's next turn can answer.
 
+**Fixed**: the fast pass (design doc §7's first beat — `renderPlayerBubble`,
+`narrative.player_bubble`) had no way to know the acting character's own
+name, so a player typing an action without naming their character
+themselves ("Head out to the nearest tavern") got rendered back as "The
+player steps out onto the street..." — a real fourth-wall break twice
+observed live in the same session (the player is a real person at the
+table; only their character exists in the fiction, and "the player" is
+never something the narration should say). The fast pass now resolves
+the acting character's own display name (`characterDisplayName`, a new
+shared helper — also now used by the incapacitated-turn-skip
+announcement and the recent-conversation transcript below, which had
+each grown their own copy of the same "read character_data's own name
+field" logic) and includes it as a "Character name: ..." line;
+`narrativeFastPassSystemPrompt` explicitly forbids "the player" (or bare
+"the character") in the output now, a name or pronoun only.
+
 **New**: recent-conversation memory (`internal/server/recent_conversation.go`).
 Every slow-pass turn used to be a fresh completion with zero memory of
 the turn before it — `slowPassGroundingContext` fed the model character

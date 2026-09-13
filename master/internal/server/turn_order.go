@@ -5,7 +5,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -175,13 +174,7 @@ func (s *Server) checkCanAct(ctx context.Context, campaignID, characterID string
 // turn-skip announcement can't be left to the model's own judgment
 // either.
 func (s *Server) broadcastIncapacitatedSkip(ctx context.Context, campaignID string, character store.Character, reason string) error {
-	name := character.ID
-	var data map[string]any
-	if err := json.Unmarshal(character.CharacterData, &data); err == nil {
-		if n, ok := data["name"].(string); ok && n != "" {
-			name = n
-		}
-	}
+	name := characterDisplayName(character)
 	return s.sendClientDisplay(ctx, campaignID, "", fmt.Sprintf("%s is %s and cannot act this turn.", name, reason), "")
 }
 

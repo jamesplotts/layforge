@@ -125,12 +125,7 @@ func (s *Server) recentConversationSpeakerName(ctx context.Context, names map[st
 	name := characterID
 	if s.characters != nil {
 		if character, err := s.characters.GetCharacter(ctx, characterID); err == nil {
-			var data map[string]any
-			if err := json.Unmarshal(character.CharacterData, &data); err == nil {
-				if n, ok := data["name"].(string); ok && n != "" {
-					name = n
-				}
-			}
+			name = characterDisplayName(character)
 		}
 	}
 	names[characterID] = name

@@ -804,8 +804,76 @@ func TestServe_NarrativePlayerInput_RendersAndBroadcastsBubble(t *testing.T) {
 	if call.Model != "test-model" {
 		t.Errorf("Complete() called with Model = %q, want %q", call.Model, "test-model")
 	}
-	if call.UserPrompt != "I draw my sword." {
-		t.Errorf("Complete() called with UserPrompt = %q, want %q", call.UserPrompt, "I draw my sword.")
+	// No characters store configured on this test server, so no
+	// "Character name: ..." line — just the always-present label.
+	if call.UserPrompt != "Player action to render: I draw my sword." {
+		t.Errorf("Complete() called with UserPrompt = %q, want %q", call.UserPrompt, "Player action to render: I draw my sword.")
+	}
+}
+
+// TestServe_NarrativePlayerInput_FastPass_IncludesCharacterName is the
+// direct regression test for a live-observed bug: with no character name
+// in the fast pass's own prompt, the model had nothing to call the
+// acting character but "the player" — a fourth-wall break, since the
+// player is a real person at the table and only their character exists
+// in the fiction. Once a characters store resolves a real name, it must
+// reach the model.
+func TestServe_NarrativePlayerInput_FastPass_IncludesCharacterName(t *testing.T) {
+	fake := &fakeLLMProvider{response: llm.CompletionResponse{Text: "Reorx draws his sword."}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	st, err := store.OpenSQLiteEventStore(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLiteEventStore() error = %v", err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	if err := st.SaveCharacter(context.Background(), store.Character{
+		ID:            "char-a",
+		CampaignID:    "campaign-narrative-name",
+		OwnerID:       "player-a",
+		SchemaVersion: "opencombatengine-v1",
+		Status:        store.CharacterStatusApproved,
+		CharacterData: json.RawMessage(`{"name":"Reorx"}`),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("SaveCharacter() error = %v", err)
+	}
+	ts := httptest.NewServer(server.New(logger, st, fake, "test-model", nil, nil, st, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-narrative-name", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := protocol.NarrativePlayerInputMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "input-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-narrative-name",
+			Type:            protocol.MessageTypeNarrativePlayerInput,
+		},
+		Payload: protocol.NarrativePlayerInputPayload{
+			CharacterID: "char-a",
+			Text:        "I draw my sword.",
+			Source:      protocol.NarrativeInputSourceTyped,
+		},
+	}
+	if err := wsjson.Write(ctx, conn, input); err != nil {
+		t.Fatalf("Write(narrative.player_input) error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+
+	call := fake.firstCall(t)
+	want := "Character name: Reorx\nPlayer action to render: I draw my sword."
+	if call.UserPrompt != want {
+		t.Errorf("Complete() called with UserPrompt = %q, want %q", call.UserPrompt, want)
 	}
 }
 
