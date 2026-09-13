@@ -1333,7 +1333,11 @@ function onSafetyFlagSend() {
 // ordinary-looking chat bubble rather than a separate screen so every
 // player works through their own character at their own pace without
 // blocking the table. A client.query with accepts_file_upload set (the
-// import sub-flow's "paste your JSON" step) also gets a file picker.
+// import sub-flow's "paste your JSON" step) also gets a file picker and
+// a Cancel button — the one creation prompt a player can otherwise get
+// stuck on after picking "import" by mistake, since every other step is
+// either a choice (always has other options) or the engine's own
+// free-text questions (never the first, always mid-flow already).
 function onClientQuery(payload) {
   const wrap = clientPromptWrap(payload.prompt_text);
   const controls = wrap.querySelector(".client-prompt-controls");
@@ -1373,6 +1377,22 @@ function onClientQuery(payload) {
       reader.readAsText(file);
     });
     controls.appendChild(fileInput);
+
+    // Cancel: only offered on the paste-your-JSON prompt (this is where
+    // a player who meant to quick/detailed-roll instead, or clicked
+    // "import" by mistake, would otherwise be stuck) — re-sends
+    // character.creation_start, the same restart appendCreationRetry's
+    // own button already uses, kicking the flow back to the top-level
+    // choice instead of leaving this prompt as the only way forward.
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "secondary";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => {
+      settle();
+      send({ ...newEnvelope("character.creation_start"), payload: { character_name: state.characterId || "" } });
+    });
+    controls.appendChild(cancel);
   }
 
   const submit = document.createElement("button");
