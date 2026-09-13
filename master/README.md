@@ -148,6 +148,24 @@ library — the underlying idea (a sliding window of recent turns) is the
 same one every conversational-agent framework already uses, but nothing
 off the shelf understands this project's own visibility scoping.
 
+**Fixed**: a slow-pass turn could fail in total silence, indistinguishable
+to the player from their message never having sent. Root-caused from the
+installed game's own SQLite event log against a real LAN Ollama server
+(`qwen3.8:27b`): a single `slowPassTimeout` (90s) was shared by both the
+mechanics and narration sub-passes, so a mechanics pass that legitimately
+ran long left the narration pass only seconds of budget before its own
+first completion call — which then failed outright with "context
+deadline exceeded," and `runNarrationPass`'s own failure path simply
+returned, same as every other early-return in `runSlowPass`
+(`looksLikeMalformedToolCall`, an unearned turn-order claim). Two fixes:
+mechanics and narration now each get their own full timeout rather than
+sharing one clock, so a slow mechanics phase can no longer starve
+narration's fair chance; and every one of those early-return paths now
+calls `sendSlowPassFailureNotice` — a private `system.error` telling the
+acting player their action didn't get a DM reply and to try again,
+instead of silence a player has no way to tell apart from a dropped
+message.
+
 The turn-order state machine (design doc §3.1, §9.3) now exists too:
 three more DM tools — `start_combat`, `advance_turn`, `end_combat` (see
 `turn_order.go`) — give the model a way to trigger it, but the mechanical

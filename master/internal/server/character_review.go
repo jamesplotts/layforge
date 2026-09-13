@@ -16,8 +16,8 @@ import (
 )
 
 // characterReviewTimeout bounds runCharacterReviewPass's own LLM call —
-// shorter than slowPassTimeout since this is a single-shot completion,
-// never a multi-turn tool loop.
+// shorter than mechanicsPassTimeout/narrationPassTimeout since this is a
+// single-shot completion, never a multi-turn tool loop.
 const characterReviewTimeout = 30 * time.Second
 
 // characterReviewSystemPrompt instructs the DM AI's half of design doc

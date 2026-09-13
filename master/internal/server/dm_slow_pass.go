@@ -96,21 +96,38 @@ const mechanicsPassMaxToolIterations = 10
 // sequence the way the mechanics pass does.
 const narrationPassMaxToolIterations = 3
 
-// slowPassTimeout bounds the whole slow pass — both sub-passes
-// together, via one shared ctx — independent of the triggering
-// connection's own ctx (see runSlowPass), since a player disconnecting
-// mid-narration shouldn't cut off a DM reaction the rest of the table
-// is still waiting to see.
-const slowPassTimeout = 90 * time.Second
+// mechanicsPassTimeout/narrationPassTimeout bound the slow pass's two
+// sub-passes — independent of the triggering connection's own ctx (see
+// runSlowPass), since a player disconnecting mid-narration shouldn't cut
+// off a DM reaction the rest of the table is still waiting to see.
+//
+// Each pass gets its OWN fresh budget rather than sharing one — live-
+// observed failure this was a direct fix for: a single shared 90s clock
+// meant a mechanics pass that ran long (a slow local model, several real
+// tool round-trips) could leave the narration pass only seconds before
+// its own first completion call, which then failed outright with
+// "context deadline exceeded" — a turn that silently never got a DM
+// reaction at all, not even an error, because runNarrationPass's own
+// failure path (below) used to just return. Giving narration its own
+// full mechanicsPassTimeout-sized budget regardless of how long
+// mechanics took fixes the starvation; sendSlowPassFailureNotice fixes
+// the silence itself, for this and every other failure path here, since
+// a slow self-hosted model can still legitimately exhaust either budget.
+const mechanicsPassTimeout = 90 * time.Second
+const narrationPassTimeout = 90 * time.Second
 
 // runSlowPass runs design doc §7's slow pass for input: build the
 // shared grounding context once, run the mechanics pass, then the
-// narration pass, then broadcast the result as client.display (or
-// nothing, if either pass fails or the narration fails one of the
-// gates below). Meant to be called via `go s.runSlowPass(...)` — see
-// renderPlayerBubble — so it recovers its own panics rather than
-// relying on handleConnection's recover, which only covers the
-// triggering goroutine, not this detached one.
+// narration pass, then broadcast the result as client.display. Meant to
+// be called via `go s.runSlowPass(...)` — see renderPlayerBubble — so it
+// recovers its own panics rather than relying on handleConnection's
+// recover, which only covers the triggering goroutine, not this
+// detached one.
+//
+// Every early-return path here sends input's own player a private
+// system.error first (sendSlowPassFailureNotice) — a turn that produces
+// no usable narration must never look identical to a turn whose message
+// simply never arrived.
 func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerInputMessage) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -118,19 +135,24 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), slowPassTimeout)
-	defer cancel()
+	mechCtx, mechCancel := context.WithTimeout(context.Background(), mechanicsPassTimeout)
+	defer mechCancel()
 
-	groundingContext := s.slowPassGroundingContext(ctx, campaignID, input)
-	pol := s.campaignPolicy(ctx, campaignID)
+	groundingContext := s.slowPassGroundingContext(mechCtx, campaignID, input)
+	pol := s.campaignPolicy(mechCtx, campaignID)
 
-	mechResult, ok := s.runMechanicsPass(ctx, campaignID, input, groundingContext)
+	mechResult, ok := s.runMechanicsPass(mechCtx, campaignID, input, groundingContext)
 	if !ok {
+		s.sendSlowPassFailureNotice(campaignID, input.SenderID, input.MessageID)
 		return
 	}
 
-	finalText, ok := s.runNarrationPass(ctx, campaignID, input, groundingContext, mechResult.transcript, pol)
+	narrCtx, narrCancel := context.WithTimeout(context.Background(), narrationPassTimeout)
+	defer narrCancel()
+
+	finalText, ok := s.runNarrationPass(narrCtx, campaignID, input, groundingContext, mechResult.transcript, pol)
 	if !ok {
+		s.sendSlowPassFailureNotice(campaignID, input.SenderID, input.MessageID)
 		return
 	}
 
@@ -146,6 +168,7 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		// usable narration this turn, not a best-effort display of
 		// whatever the model produced.
 		s.logger.Warn("DM slow pass produced a malformed tool-call artifact instead of narration; not broadcasting", "campaign_id", campaignID)
+		s.sendSlowPassFailureNotice(campaignID, input.SenderID, input.MessageID)
 		return
 	}
 	if mechResult.turnOrderCallFailed && looksLikeUnearnedTurnOrderClaim(finalText) {
@@ -162,11 +185,44 @@ func (s *Server) runSlowPass(campaignID string, input protocol.NarrativePlayerIn
 		// reliable way to strip just the false claim out of otherwise-fine
 		// prose.
 		s.logger.Warn("DM slow pass claimed turn order was established after start_combat/advance_turn failed; not broadcasting", "campaign_id", campaignID)
+		s.sendSlowPassFailureNotice(campaignID, input.SenderID, input.MessageID)
 		return
 	}
 
-	if err := s.sendClientDisplay(ctx, campaignID, "", finalText, input.MessageID); err != nil {
+	if err := s.sendClientDisplay(narrCtx, campaignID, "", finalText, input.MessageID); err != nil {
 		s.logger.Warn("failed to broadcast DM narration as client.display", "error", err, "campaign_id", campaignID)
+	}
+}
+
+// slowPassFailureNoticeTimeout bounds sendSlowPassFailureNotice's own
+// send — independent of whichever pass's budget just ran out, so a slow
+// completion call can't also delay the player's notice that it happened.
+const slowPassFailureNoticeTimeout = 10 * time.Second
+
+// sendSlowPassFailureNotice tells the acting player, privately, that
+// their turn didn't produce a DM reaction. Every runSlowPass failure
+// path above used to simply return, in total silence — a turn that
+// timed out against a slow model, one whose narration failed a gate, and
+// a message that was never sent at all were all indistinguishable to the
+// player. Never broadcast: nobody else at the table needs to see one
+// player's own LLM hiccup, and it isn't a game event worth a shared log
+// entry — same reasoning sendToSender's own doc comment gives for a
+// from-Master, per-recipient-only notice.
+func (s *Server) sendSlowPassFailureNotice(campaignID, senderID, inReplyTo string) {
+	ctx, cancel := context.WithTimeout(context.Background(), slowPassFailureNoticeTimeout)
+	defer cancel()
+	msg, err := newMessage(campaignID, protocol.MessageTypeSystemError, protocol.SystemErrorPayload{
+		Code:               "dm_reaction_failed",
+		Message:            "The DM didn't manage a reply to that — try your action again.",
+		InReplyToMessageID: inReplyTo,
+	})
+	if err != nil {
+		s.logger.Warn("failed to build slow-pass failure notice", "error", err, "campaign_id", campaignID)
+		return
+	}
+	recordEvent(ctx, s, msg)
+	if err := sendToSender(s, senderID, msg); err != nil {
+		s.logger.Warn("failed to deliver slow-pass failure notice", "error", err, "campaign_id", campaignID, "sender_id", senderID)
 	}
 }
 

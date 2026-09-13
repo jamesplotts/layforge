@@ -34,7 +34,8 @@ const characterIntroPassMaxToolIterations = 4
 // characterIntroTimeout bounds sendCharacterIntro's own context —
 // generous relative to how little work this pass actually does (at
 // most a few lore lookups plus one narration), the same "the model
-// might just be slow, not stuck" reasoning slowPassTimeout documents.
+// might just be slow, not stuck" reasoning mechanicsPassTimeout/
+// narrationPassTimeout document.
 const characterIntroTimeout = 60 * time.Second
 
 // sendCharacterIntro launches, in its own goroutine (mirroring

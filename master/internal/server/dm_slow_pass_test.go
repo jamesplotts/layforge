@@ -284,8 +284,10 @@ func TestServe_NarrativePlayerInput_SlowPass_CharacterNotFound_OmitsDataButStill
 // garbled) <tool_call> tag — instead of populating the structured
 // tool-call field. Broadcasting that verbatim to the whole table would
 // violate CLAUDE.md's "gates over prompting" rule, so runSlowPass must
-// recognize it (looksLikeMalformedToolCall) and broadcast nothing rather
-// than the raw artifact.
+// recognize it (looksLikeMalformedToolCall) and never broadcast the raw
+// artifact as client.display — it sends the acting player a private
+// system.error instead (sendSlowPassFailureNotice), so the turn doesn't
+// look identical to a message that was never sent.
 func TestServe_NarrativePlayerInput_SlowPass_MalformedToolCallText_DoesNotBroadcast(t *testing.T) {
 	fakeLLM := &fakeLLMProvider{
 		responses: []llm.CompletionResponse{
@@ -311,10 +313,18 @@ func TestServe_NarrativePlayerInput_SlowPass_MalformedToolCallText_DoesNotBroadc
 		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
 	}
 
+	var errMsg protocol.SystemErrorMessage
+	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
+		t.Fatalf("Read(system.error) error = %v", err)
+	}
+	if errMsg.Payload.Code != "dm_reaction_failed" {
+		t.Errorf("system.error Code = %q, want %q", errMsg.Payload.Code, "dm_reaction_failed")
+	}
+
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer shortCancel()
-	if _, _, err := readEnvelopeType(shortCtx, conn); err == nil {
-		t.Fatal("expected no further message after the malformed slow-pass response, but one arrived")
+	if typ, _, err := readEnvelopeType(shortCtx, conn); err == nil {
+		t.Fatalf("expected no further message after the failure notice, but a %q arrived", typ)
 	}
 }
 
@@ -518,10 +528,18 @@ func TestServe_NarrativePlayerInput_SlowPass_StartCombatFails_ClaimsTurnOrderAny
 		t.Fatalf("tool.result Success = true, want false (start_combat should have failed on a nonexistent character_id)")
 	}
 
+	var errMsg protocol.SystemErrorMessage
+	if err := wsjson.Read(ctx, conn, &errMsg); err != nil {
+		t.Fatalf("Read(system.error) error = %v", err)
+	}
+	if errMsg.Payload.Code != "dm_reaction_failed" {
+		t.Errorf("system.error Code = %q, want %q", errMsg.Payload.Code, "dm_reaction_failed")
+	}
+
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer shortCancel()
-	if _, _, err := readEnvelopeType(shortCtx, conn); err == nil {
-		t.Fatal("expected no narrative.dm_prose after start_combat failed and the model claimed turn order anyway, but a message arrived")
+	if typ, _, err := readEnvelopeType(shortCtx, conn); err == nil {
+		t.Fatalf("expected no client.display after start_combat failed and the model claimed turn order anyway, but a %q arrived", typ)
 	}
 }
 
