@@ -224,6 +224,185 @@ func TestServe_NarrativePlayerInput_SlowPass_UnequipItem_EngineRejects_ReturnsFa
 	}
 }
 
+func TestServe_NarrativePlayerInput_SlowPass_PackItem_Success_Persists(t *testing.T) {
+	actorData, err := structpb.NewStruct(map[string]any{"name": "Kestrel"})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct() error = %v", err)
+	}
+	fakeEngine := &fakeSystemEngineClient{
+		stowItemResp: &systemenginepb.StowItemResponse{
+			Success:       true,
+			ResultMessage: "Kestrel stows Crowbar in Explorer's Pack.",
+			Actor:         &systemenginepb.Actor{ActorId: "actor-char", CharacterData: actorData, SchemaVersion: "opencombatengine-v1"},
+		},
+	}
+	fakeLLM := toolCallLLM("pack_item", `{"character_id":"actor-char","item_name":"Crowbar","container_name":"Explorer's Pack"}`)
+
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "actor-char", "campaign-pack", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-pack", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-pack", "player-a", "actor-char", "I tuck the crowbar into my pack."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var toolResult protocol.ToolResultMessage
+	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+		t.Fatalf("Read(tool.result) error = %v", err)
+	}
+	if !toolResult.Payload.Success {
+		t.Fatalf("tool.result Success = false, want true (payload: %+v)", toolResult.Payload)
+	}
+	if fakeEngine.lastStowItemRequest == nil {
+		t.Fatal("StowItem was never called")
+	}
+	if fakeEngine.lastStowItemRequest.ItemName != "Crowbar" {
+		t.Errorf("StowItem called with ItemName = %q, want %q", fakeEngine.lastStowItemRequest.ItemName, "Crowbar")
+	}
+	if fakeEngine.lastStowItemRequest.ContainerName != "Explorer's Pack" {
+		t.Errorf("StowItem called with ContainerName = %q, want %q", fakeEngine.lastStowItemRequest.ContainerName, "Explorer's Pack")
+	}
+
+	if _, err := st.GetCharacter(ctx, "actor-char"); err != nil {
+		t.Fatalf("GetCharacter(actor-char) error = %v", err)
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_PackItem_EngineRejects_ReturnsFailureToolResult(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{
+		stowItemResp: &systemenginepb.StowItemResponse{
+			Success: false,
+			Error:   "Kestrel has no Action remaining this turn.",
+		},
+	}
+	fakeLLM := toolCallLLM("pack_item", `{"character_id":"actor-char","item_name":"Crowbar","container_name":"Explorer's Pack"}`)
+
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "actor-char", "campaign-pack-reject", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-pack-reject", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-pack-reject", "player-a", "actor-char", "I tuck the crowbar into my pack."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var toolResult protocol.ToolResultMessage
+	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+		t.Fatalf("Read(tool.result) error = %v", err)
+	}
+	if toolResult.Payload.Success {
+		t.Fatalf("tool.result Success = true, want false (the engine rejected the pack)")
+	}
+	if toolResult.Payload.ReasonCode != "pack_failed" {
+		t.Errorf("tool.result ReasonCode = %q, want %q", toolResult.Payload.ReasonCode, "pack_failed")
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_DrawItem_Success_Persists(t *testing.T) {
+	actorData, err := structpb.NewStruct(map[string]any{"name": "Kestrel"})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct() error = %v", err)
+	}
+	fakeEngine := &fakeSystemEngineClient{
+		drawItemResp: &systemenginepb.DrawItemResponse{
+			Success:       true,
+			ResultMessage: "Kestrel draws Crowbar.",
+			Actor:         &systemenginepb.Actor{ActorId: "actor-char", CharacterData: actorData, SchemaVersion: "opencombatengine-v1"},
+		},
+	}
+	fakeLLM := toolCallLLM("draw_item", `{"character_id":"actor-char","item_name":"Crowbar"}`)
+
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "actor-char", "campaign-draw", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-draw", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-draw", "player-a", "actor-char", "I dig the crowbar out of my pack."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var toolResult protocol.ToolResultMessage
+	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+		t.Fatalf("Read(tool.result) error = %v", err)
+	}
+	if !toolResult.Payload.Success {
+		t.Fatalf("tool.result Success = false, want true (payload: %+v)", toolResult.Payload)
+	}
+	if fakeEngine.lastDrawItemRequest == nil {
+		t.Fatal("DrawItem was never called")
+	}
+	if fakeEngine.lastDrawItemRequest.ItemName != "Crowbar" {
+		t.Errorf("DrawItem called with ItemName = %q, want %q", fakeEngine.lastDrawItemRequest.ItemName, "Crowbar")
+	}
+
+	if _, err := st.GetCharacter(ctx, "actor-char"); err != nil {
+		t.Fatalf("GetCharacter(actor-char) error = %v", err)
+	}
+}
+
+func TestServe_NarrativePlayerInput_SlowPass_DrawItem_EngineRejects_ReturnsFailureToolResult(t *testing.T) {
+	fakeEngine := &fakeSystemEngineClient{
+		drawItemResp: &systemenginepb.DrawItemResponse{
+			Success: false,
+			Error:   "Kestrel has already used this turn's free object interaction.",
+		},
+	}
+	fakeLLM := toolCallLLM("draw_item", `{"character_id":"actor-char","item_name":"Crowbar"}`)
+
+	ts, st := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+	seedCharacter(t, st, "actor-char", "campaign-draw-reject", "player-a")
+
+	conn := dialAndJoin(t, ts, "campaign-draw-reject", "player-a")
+	defer conn.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := sendPlayerInput(ctx, conn, "campaign-draw-reject", "player-a", "actor-char", "I dig the crowbar out of my pack."); err != nil {
+		t.Fatalf("sendPlayerInput() error = %v", err)
+	}
+	var bubble protocol.NarrativePlayerBubbleMessage
+	if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+		t.Fatalf("Read(narrative.player_bubble) error = %v", err)
+	}
+	var toolResult protocol.ToolResultMessage
+	if err := wsjson.Read(ctx, conn, &toolResult); err != nil {
+		t.Fatalf("Read(tool.result) error = %v", err)
+	}
+	if toolResult.Payload.Success {
+		t.Fatalf("tool.result Success = true, want false (the engine rejected the draw)")
+	}
+	if toolResult.Payload.ReasonCode != "draw_failed" {
+		t.Errorf("tool.result ReasonCode = %q, want %q", toolResult.Payload.ReasonCode, "draw_failed")
+	}
+}
+
 func TestServe_NarrativePlayerInput_SlowPass_ReceiveItem_Success_Persists(t *testing.T) {
 	actorData, err := structpb.NewStruct(map[string]any{"name": "Kestrel"})
 	if err != nil {

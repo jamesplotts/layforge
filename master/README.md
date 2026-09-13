@@ -2435,6 +2435,64 @@ tests, and `character_creation_test.go`'s name assertion. The reworked
 web/admin UIs are static-verified (build, JS parse, id resolution), not
 browser-tested this pass.
 
+**Item carry location + retrieval action-economy cost.** Live-observed
+continuity bug: told a crowbar went into a pack, the DM later narrated it
+"tucked into his pack," then still later "clinking at his hip" — nothing
+anywhere tracked where an item actually was, so the model just guessed
+each time. Fixed with a real mechanical fact, not a prompt reminder:
+OpenCombatEngine's `ListCarriedItems` reports each carried item's real
+location (equipped/stowed-in-a-named-container/quick-access, derived on
+demand from equipment slots and container nesting — never a new stored
+field, so there's nothing here that can silently fail to round-trip the
+way `Gender`/`RaceName`/`Background` once did), surfaced to both DM
+sub-passes as a new "Item locations" grounding-context section
+(`internal/server/item_locations.go`'s `itemLocationsContextText`, gated
+like `mechanicsTools()` since it makes a real engine call). Two new DM
+tools, `pack_item`/`draw_item` (deliberately named apart from the
+existing, unrelated `stash_item`/`retrieve_item` off-site-cache tools),
+call the engine's new `StowItem`/`DrawItem` RPCs: properly stowing an
+item, or drawing one back out of a container, always costs the
+character's Action; bringing an already-quick-access item to hand costs
+a free object interaction instead — a new, stackable action-economy
+resource (`IActionEconomy.HasFreeObjectInteraction`,
+`GrantFreeObjectInteraction()`), once per turn with no fallback to the
+Action once that's spent. `equip_item` also gained a real gate it never
+had: equipping into an already-occupied `main_hand`/`off_hand` now
+rejects instead of silently swapping — the character must `unequip_item`
+(free) or `pack_item` (costs the Action) first, which is the actual
+mechanical enforcement of "hands full" this feature exists to provide;
+before this, that rule was only ever something a prompt could ask the DM
+model to respect, never something the engine itself checked. Both system
+prompts now name "Item locations" explicitly and are told never to
+narrate an item as drawn, readied, or stowed ahead of the tool call that
+actually did it.
+**Known, honestly-scoped gap**: looting a *stowed* item off a corpse
+still isn't possible — `give_item`/`TransferItem` only ever searches a
+character's flat inventory list, never walks into a container's
+contents. This predates this feature (the same limitation already
+existed for any character's own stowed items before "stowed" was a
+narratable concept at all) and is simply more visible now; closing it is
+real future work, not a silent omission.
+
+Covered on the OpenCombatEngine side by `StandardEquipmentManagerTests`'
+hand-slot-gate cases, `ActionEconomyTests`' free-object-interaction
+cases, and `SystemEngineGrpcServiceTests`' `StowItem_*`/`DrawItem_*`/
+`ListCarriedItems_*` sections plus the hands-full sequence proofs
+(`Equip` rejects → `UnequipItem` frees it → `Equip` succeeds; `StowItem`
+→ `Equip` succeeds) — see that repo's own `RELEASE_NOTES.md` for the
+full writeup, including the deep-nested-container persistence tests this
+feature's design needed (`ActorMappingTests.ToActor_Then_ToCreature_
+RoundTripsDeeplyNestedContainerContents`,
+`Should_Save_And_Load_FourDeep_Nested_Container_Contents`). Covered here
+by `internal/server/item_locations_test.go` (the grounding-context
+section: present with real per-item locations, absent for an empty
+inventory/engine rejection/no system engine configured) and
+`internal/server/inventory_test.go`'s new `PackItem_*`/`DrawItem_*`
+cases (success-persists and engine-rejects, mirroring the existing
+`EquipItem_*`/`UnequipItem_*` tests exactly). Not yet live-verified
+end to end against a real DM model this pass — a genuine gap, named
+rather than glossed over.
+
 ## Layout
 
 ```

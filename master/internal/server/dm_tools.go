@@ -192,7 +192,7 @@ func dmTools() []llm.Tool {
 				"properties": {
 					"character_id": {"type": "string", "description": "The character equipping the item."},
 					"item_name": {"type": "string", "description": "Must already be a real member of this character's inventory."},
-					"slot": {"type": "string", "enum": ["main_hand", "off_hand", "armor", "shield", "head", "neck", "shoulders", "hands", "waist", "feet", "ring_1", "ring_2"]}
+					"slot": {"type": "string", "enum": ["main_hand", "off_hand", "armor", "shield", "head", "neck", "shoulders", "hands", "waist", "feet", "ring_1", "ring_2", "back"]}
 				}
 			}`),
 		},
@@ -204,7 +204,32 @@ func dmTools() []llm.Tool {
 				"required": ["character_id", "slot"],
 				"properties": {
 					"character_id": {"type": "string"},
-					"slot": {"type": "string", "enum": ["main_hand", "off_hand", "armor", "shield", "head", "neck", "shoulders", "hands", "waist", "feet", "ring_1", "ring_2"]}
+					"slot": {"type": "string", "enum": ["main_hand", "off_hand", "armor", "shield", "head", "neck", "shoulders", "hands", "waist", "feet", "ring_1", "ring_2", "back"]}
+				}
+			}`),
+		},
+		{
+			Name:        "pack_item",
+			Description: "Properly stow a carried item inside a real container the character is also carrying (put the crowbar in the pack, tuck the potion into the pouch) — costs the character's Action, always, whether the item was equipped or already loose. Distinct from stash_item: that leaves an item behind at a location, off the character entirely; this keeps it on their person, just packed away rather than at hand. Use draw_item to bring something back out.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "item_name", "container_name"],
+				"properties": {
+					"character_id": {"type": "string"},
+					"item_name": {"type": "string", "description": "Must already be a real item this character is carrying — equipped or loose."},
+					"container_name": {"type": "string", "description": "Must be a real container this character is also carrying (e.g. a backpack or pouch already in their inventory)."}
+				}
+			}`),
+		},
+		{
+			Name:        "draw_item",
+			Description: "Bring a carried item to hand. If it's already loose/quick-access (on a belt, in a free hand), this is free — but only once per turn; a second draw_item after that turn's free interaction is spent is rejected outright, it does not fall back to costing the Action. If the item is properly stowed inside a container, bringing it out costs the Action instead. Either way, the item lands loose/quick-access, not equipped — call equip_item afterward to actually ready it. Rejected if the item is already equipped (nothing to draw).",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"required": ["character_id", "item_name"],
+				"properties": {
+					"character_id": {"type": "string"},
+					"item_name": {"type": "string", "description": "Must already be a real item this character is carrying — stowed or loose, not already equipped."}
 				}
 			}`),
 		},
@@ -457,6 +482,10 @@ func (s *Server) callDMTool(ctx context.Context, campaignID, actingSenderID stri
 		return s.dmEquipItem(ctx, campaignID, call.Arguments)
 	case "unequip_item":
 		return s.dmUnequipItem(ctx, campaignID, call.Arguments)
+	case "pack_item":
+		return s.dmPackItem(ctx, campaignID, call.Arguments)
+	case "draw_item":
+		return s.dmDrawItem(ctx, campaignID, call.Arguments)
 	case "receive_item":
 		return s.dmReceiveItem(ctx, campaignID, call.Arguments)
 	case "discard_item":
@@ -1218,6 +1247,8 @@ func parseEquipmentSlot(s string) (systemenginepb.EquipmentSlot, bool) {
 		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_RING_1, true
 	case "ring_2":
 		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_RING_2, true
+	case "back":
+		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_BACK, true
 	default:
 		return systemenginepb.EquipmentSlot_EQUIPMENT_SLOT_UNSPECIFIED, false
 	}
@@ -1329,6 +1360,114 @@ func (s *Server) dmUnequipItem(ctx context.Context, campaignID string, argsJSON 
 	}
 
 	payload, err := json.Marshal(map[string]any{"unequipped": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmPackItem properly stows a carried item inside a real container the
+// character is also carrying — always costs the Action (StowItem's own
+// engine-side rule, regardless of whether the item was equipped or
+// already loose). No PvP gate, same "DM has GM-level latitude" reasoning
+// as dmEquipItem — this only ever rearranges what a character is already
+// carrying, on their own person.
+func (s *Server) dmPackItem(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID   string `json:"character_id"`
+		ItemName      string `json:"item_name"`
+		ContainerName string `json:"container_name"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.StowItem(ctx, &systemenginepb.StowItemRequest{
+		RequestId:     "dm-tool-" + character.ID,
+		CampaignId:    campaignID,
+		Actor:         &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		ItemName:      args.ItemName,
+		ContainerName: args.ContainerName,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "pack_failed"
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"packed": true, "message": resp.ResultMessage})
+	if err != nil {
+		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
+	}
+	return string(payload), true, ""
+}
+
+// dmDrawItem brings a carried item to hand — DrawItem's own engine-side
+// rule decides the cost: free (once per turn) if the item was already
+// loose/quick-access, the Action if it was properly stowed in a
+// container. No PvP gate, same reasoning as dmPackItem.
+func (s *Server) dmDrawItem(ctx context.Context, campaignID string, argsJSON json.RawMessage) (string, bool, string) {
+	var args struct {
+		CharacterID string `json:"character_id"`
+		ItemName    string `json:"item_name"`
+	}
+	if err := json.Unmarshal(argsJSON, &args); err != nil {
+		return fmt.Sprintf("invalid arguments: %v", err), false, "invalid_arguments"
+	}
+
+	character, err := s.campaignCharacter(ctx, campaignID, args.CharacterID)
+	if err != nil {
+		return err.Error(), false, "character_not_found"
+	}
+	characterData := &structpb.Struct{}
+	if err := protojson.Unmarshal(character.CharacterData, characterData); err != nil {
+		return fmt.Sprintf("parsing stored character data: %v", err), false, "internal_error"
+	}
+
+	resp, err := s.systemEngine.DrawItem(ctx, &systemenginepb.DrawItemRequest{
+		RequestId:  "dm-tool-" + character.ID,
+		CampaignId: campaignID,
+		Actor:      &systemenginepb.Actor{ActorId: character.ID, CharacterData: characterData, SchemaVersion: character.SchemaVersion},
+		ItemName:   args.ItemName,
+	})
+	if err != nil {
+		return fmt.Sprintf("calling system engine: %v", err), false, "engine_error"
+	}
+	if !resp.Success {
+		return resp.Error, false, "draw_failed"
+	}
+
+	newCharacterData, err := protojson.Marshal(resp.Actor.CharacterData)
+	if err != nil {
+		return fmt.Sprintf("marshaling updated character data: %v", err), false, "internal_error"
+	}
+	character.CharacterData = newCharacterData
+	character.UpdatedAt = time.Now().UTC()
+	if err := s.characters.SaveCharacter(ctx, character); err != nil {
+		return fmt.Sprintf("saving updated character: %v", err), false, "internal_error"
+	}
+
+	payload, err := json.Marshal(map[string]any{"drawn": true, "message": resp.ResultMessage})
 	if err != nil {
 		return fmt.Sprintf("marshaling result: %v", err), false, "internal_error"
 	}

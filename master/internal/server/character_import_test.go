@@ -147,6 +147,25 @@ type fakeSystemEngineClient struct {
 	// request, for asserting on what Server actually sent the engine.
 	lastUnequipItemRequest *systemenginepb.UnequipItemRequest
 
+	stowItemResp *systemenginepb.StowItemResponse
+	stowItemErr  error
+	// lastStowItemRequest captures the most recent StowItem() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastStowItemRequest *systemenginepb.StowItemRequest
+
+	drawItemResp *systemenginepb.DrawItemResponse
+	drawItemErr  error
+	// lastDrawItemRequest captures the most recent DrawItem() call's
+	// request, for asserting on what Server actually sent the engine.
+	lastDrawItemRequest *systemenginepb.DrawItemRequest
+
+	listCarriedItemsResp *systemenginepb.ListCarriedItemsResponse
+	listCarriedItemsErr  error
+	// lastListCarriedItemsRequest captures the most recent
+	// ListCarriedItems() call's request, for asserting on what Server
+	// actually sent the engine.
+	lastListCarriedItemsRequest *systemenginepb.ListCarriedItemsRequest
+
 	addItemToInventoryResp *systemenginepb.AddItemToInventoryResponse
 	addItemToInventoryErr  error
 	// lastAddItemToInventoryRequest captures the most recent
@@ -306,6 +325,30 @@ func (f *fakeSystemEngineClient) UnequipItem(_ context.Context, in *systemengine
 		return nil, f.unequipItemErr
 	}
 	return f.unequipItemResp, nil
+}
+
+func (f *fakeSystemEngineClient) StowItem(_ context.Context, in *systemenginepb.StowItemRequest, _ ...grpc.CallOption) (*systemenginepb.StowItemResponse, error) {
+	f.lastStowItemRequest = in
+	if f.stowItemErr != nil {
+		return nil, f.stowItemErr
+	}
+	return f.stowItemResp, nil
+}
+
+func (f *fakeSystemEngineClient) DrawItem(_ context.Context, in *systemenginepb.DrawItemRequest, _ ...grpc.CallOption) (*systemenginepb.DrawItemResponse, error) {
+	f.lastDrawItemRequest = in
+	if f.drawItemErr != nil {
+		return nil, f.drawItemErr
+	}
+	return f.drawItemResp, nil
+}
+
+func (f *fakeSystemEngineClient) ListCarriedItems(_ context.Context, in *systemenginepb.ListCarriedItemsRequest, _ ...grpc.CallOption) (*systemenginepb.ListCarriedItemsResponse, error) {
+	f.lastListCarriedItemsRequest = in
+	if f.listCarriedItemsErr != nil {
+		return nil, f.listCarriedItemsErr
+	}
+	return f.listCarriedItemsResp, nil
 }
 
 func (f *fakeSystemEngineClient) AddItemToInventory(_ context.Context, in *systemenginepb.AddItemToInventoryRequest, _ ...grpc.CallOption) (*systemenginepb.AddItemToInventoryResponse, error) {
