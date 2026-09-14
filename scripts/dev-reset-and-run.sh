@@ -59,6 +59,18 @@ MASTER_ADMIN_URL="http://127.0.0.1:${MASTER_ADMIN_PORT}/"
 # so this is a generous ceiling, not a realistic expected duration. See
 # the clone step's own comment for what this guards against.
 CLONE_TIMEOUT=120
+# The sidecar's cold-start builds the project AND, on a truly fresh
+# clone, populates its on-disk Open5e caches (spells.json, items.json —
+# both live under bin/.../open5e-cache/, so a fresh OCE_DIR always
+# starts with neither) via live, paginated fetches against Open5e's own
+# API. A real fresh-clone run of this script was observed taking just
+# over 7 minutes end to end (build + both live fetches) before the
+# sidecar bound its port — comfortably clearing an earlier 240s ceiling
+# here, which failed this exact run even though the sidecar was never
+# actually stuck, just still starting. This is a generous ceiling for a
+# slow-but-healthy cold start, not a claim that a hang always takes this
+# long to detect.
+SIDECAR_STARTUP_TIMEOUT=600
 
 # Refuse to run from inside either directory this script is about to
 # delete — see the IMPORTANT note above.
@@ -235,8 +247,8 @@ nohup dotnet run --project src/OpenCombatEngine.GrpcSidecar/OpenCombatEngine.Grp
   >"$SIDECAR_LOG" 2>&1 &
 sidecar_pid=$!
 cd "$HOME_DIR"
-echo "   sidecar starting (pid $sidecar_pid) — first run also restores/builds, this can take a while"
-if ! wait_for_port localhost "$SIDECAR_PORT" 240; then
+echo "   sidecar starting (pid $sidecar_pid) — first run also restores/builds and populates the Open5e caches, this can take several minutes"
+if ! wait_for_port localhost "$SIDECAR_PORT" "$SIDECAR_STARTUP_TIMEOUT"; then
   echo "error: sidecar never started listening on port $SIDECAR_PORT — check $SIDECAR_LOG" >&2
   exit 1
 fi
