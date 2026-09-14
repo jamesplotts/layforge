@@ -2641,6 +2641,23 @@ assignment phase, so it gets the same by-ability wording as a natural
 side effect, not extra scope. See `web/README.md` for the client-side
 dice-reveal writeup.
 
+Two small live-play UX fixes: the narrative input box's placeholder now
+reads "What does Reorx do?" once a character is loaded, instead of the
+generic "What do you do?"; and the character sheet's "Equipment"
+sidebar tab (renamed "Item Slots" client-side, since a schema-driven tab
+label is just `humanizeFieldName` on its property name) is no longer
+always empty or full of meaningless numbers — it used to carry only a
+numeric `ItemIndex` referencing into the inventory list by position,
+which a schema-driven client has no domain knowledge to resolve itself.
+OpenCombatEngine's `EquippedSlotState` gained additive `SlotName`/
+`ItemName` fields (and `EquipmentState` gained `AttunedItemNames`),
+resolved once, engine-side, at the same moment `BuildEquipmentState()`
+already has both the slot and the real `IItem` in hand — the same
+"engine computes, client just displays" reasoning as `AbilityEntry`/
+`SkillEntry` above. The client needed zero changes beyond the label
+rename: the existing uniform-scalar-array table renderer already turns
+readable `{slotName, itemName}` rows into a real table for free.
+
 ## Layout
 
 ```

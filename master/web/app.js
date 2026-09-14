@@ -1441,10 +1441,13 @@ const RACE_ADJECTIVES = { Dwarf: "Dwarven", Elf: "Elven" };
 // renderCharacterIdentity fills the one-line "Reorx, Male Dwarven Fighter"
 // summary under the sidebar's Character header, from the engine's
 // character_data (name, gender, raceName, and the class from the first
-// class-level entry).
+// class-level entry). Also keeps the narrative input's placeholder
+// personalized ("What does Reorx do?") once a real name is known,
+// falling back to the generic "What do you do?" before one is.
 function renderCharacterIdentity(data) {
   if (!data) {
     el.characterIdentity.hidden = true;
+    el.inputText.placeholder = "What do you do?";
     return;
   }
   const name = data.name || state.characterId || "Character";
@@ -1454,6 +1457,7 @@ function renderCharacterIdentity(data) {
   const descriptor = [data.gender, race, className].filter(Boolean).join(" ");
   el.characterIdentity.textContent = descriptor ? `${name}, ${descriptor}` : name;
   el.characterIdentity.hidden = false;
+  el.inputText.placeholder = `What does ${name} do?`;
 }
 
 // onMapTokenState handles map.token_state (design doc §6.2) — a

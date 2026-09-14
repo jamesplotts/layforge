@@ -246,6 +246,24 @@ ability?", closing the other half of the original report (no visibility
 into the other five totals while assigning). `standard_array` shares the
 same assignment phase, so it gets the same by-ability wording too.
 
+The narrative input box's placeholder now personalizes once a character
+is loaded — "What does Reorx do?" instead of the generic "What do you
+do?" — set alongside the identity line in `renderCharacterIdentity`, and
+reset back to the generic text when there's no character data yet (still
+mid-creation, or a fresh page with nothing loaded).
+
+The sidebar's "Equipment" tab is now labeled "Item Slots" (a
+`FIELD_LABEL_OVERRIDES` entry in `character-sheet.js`, since a tab's
+label is just `humanizeFieldName` on its schema property name) —
+clearer next to Inventory, which it's a subset of (what's actively
+worn/wielded/attuned, not everything carried). It's also now actually
+useful rather than empty or full of meaningless numbers: see
+OpenCombatEngine's own `EquippedSlotState.SlotName`/`.ItemName` and
+`EquipmentState.AttunedItemNames` for the engine-side half of this fix —
+this client needed no other changes, since the existing uniform-scalar-
+array table renderer (see the Ability Scores/Skills entry above) already
+renders the newly-readable data correctly once it's readable.
+
 ## Running
 
 From `master/`:

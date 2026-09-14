@@ -14,7 +14,11 @@
 // more than that and building it speculatively would be guessing at a
 // shape instead of learning it from a real second system engine.
 
-const FIELD_LABEL_OVERRIDES = { id: "ID" };
+// "equipment" only ever appears as a top-level property (so this only
+// ever renames that tab, never a nested field) — "Item Slots" reads
+// clearer than "Equipment" next to the Inventory tab it's a subset of
+// (what's actively worn/wielded, not everything carried).
+const FIELD_LABEL_OVERRIDES = { id: "ID", equipment: "Item Slots" };
 
 function humanizeFieldName(name) {
   if (FIELD_LABEL_OVERRIDES[name]) return FIELD_LABEL_OVERRIDES[name];
