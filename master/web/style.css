@@ -593,9 +593,16 @@ button.secondary {
 }
 
 /* The one die per 4d6-drop-lowest set excluded from its total — shown,
-   not hidden (the player should see what was rolled and dropped), just
-   visually dimmed with its face struck through. */
-.roll-die.dropped {
+   not hidden (the player should see what was rolled and dropped), the
+   die itself dimmed with its face struck through. The dimming is
+   deliberately scoped to .roll-die-svg only, not the whole .roll-die —
+   an earlier version dimmed the face text too (opacity on the whole
+   element, plus the already-muted --parchment-ink-dim color,
+   compounding), which a live player misread ("4" for "1") because the
+   number itself got too faint to read reliably. The strikethrough alone
+   communicates "excluded from the total"; the number stays at full
+   contrast so what was actually rolled is never in doubt. */
+.roll-die.dropped .roll-die-svg {
   opacity: 0.55;
 }
 
@@ -605,7 +612,7 @@ button.secondary {
 
 .roll-die.dropped .roll-die-face {
   text-decoration: line-through;
-  color: var(--parchment-ink-dim);
+  color: var(--parchment-ink);
 }
 
 .roll-die-face {
