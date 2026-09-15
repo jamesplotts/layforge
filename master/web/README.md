@@ -264,6 +264,18 @@ this client needed no other changes, since the existing uniform-scalar-
 array table renderer (see the Ability Scores/Skills entry above) already
 renders the newly-readable data correctly once it's readable.
 
+The dice bubbles' SVG icons now look like the actual die shape being
+rolled, not a generic regular polygon that always read as a circle-ish
+blob regardless of size — d4 (tetrahedron), d6 (isometric cube), d8
+(octahedron), d10 (pentagonal trapezohedron), and d20 (icosahedron) each
+get their own silhouette plus faceted shading for a gem-cut look
+(`DIE_SHAPE_BUILDERS` in `app.js`, replacing the old `DIE_VERTEX_COUNTS`/
+`regularPolygonPoints`), reusing the app's existing `--parchment`/
+`--brass` theme tokens rather than per-die hardcoded colors. Also fixes
+a real display bug this surfaced: a physical d10 is printed 0-9, not
+1-10 — a server result of 10 on a d10 now shows as "0" on the revealed
+face; every other size still shows its literal number.
+
 ## Running
 
 From `master/`:
