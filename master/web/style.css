@@ -513,9 +513,12 @@ button.secondary {
   cursor: pointer;
 }
 
-.roll-die.interactive:hover .roll-die-svg polygon {
+.roll-die.interactive:hover .roll-die-svg {
+  filter: brightness(1.08);
+}
+
+.roll-die.interactive:hover .roll-die-outline {
   stroke: var(--brass-dark);
-  fill: var(--parchment-hi);
 }
 
 .roll-die-svg {
@@ -525,19 +528,66 @@ button.secondary {
   height: 100%;
 }
 
-.roll-die-svg polygon {
+/* .roll-die-outline is each die's outer silhouette — the element the
+   ghost/revealed/dropped/hover states below target — same role the old
+   single generic <polygon> played, before each die size got its own
+   shape + facet detail (see the shape builders above buildDieEl). */
+.roll-die-outline {
   fill: var(--parchment);
   stroke: var(--brass);
   stroke-width: 2;
 }
 
-.roll-die.ghost .roll-die-svg polygon {
+/* Faceted shading: die-shape-specific polygons layered over the outline
+   plus their seam lines, for a gem-cut look. Shade tones reuse the
+   app's existing parchment/brass tokens (light -> dark) rather than
+   introducing per-die hardcoded colors, so every die size still sits in
+   this app's established palette. */
+.roll-die-facet {
+  stroke: none;
+}
+
+.roll-die-facet-a {
+  fill: var(--parchment-hi);
+}
+
+.roll-die-facet-b {
+  fill: var(--parchment);
+}
+
+.roll-die-facet-c {
+  fill: #b9a06e; /* fallback for browsers without color-mix() */
+  fill: color-mix(in srgb, var(--parchment) 55%, var(--brass-dark) 45%);
+}
+
+.roll-die-facet-line {
+  stroke: var(--brass-dark);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.roll-die-gloss {
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+/* Ghost dice (a spectator's not-yet-revealed die) stay a clean dashed
+   silhouette with no facet detail — a hidden die shouldn't look any more
+   "decided" than an empty outline (the shape itself was never secret,
+   only the result is; this just keeps the hidden state visually calm). */
+.roll-die.ghost .roll-die-outline {
   fill: rgba(239, 225, 196, 0.35);
   stroke: var(--parchment-line);
   stroke-dasharray: 3 3;
 }
 
-.roll-die.revealed .roll-die-svg polygon {
+.roll-die.ghost .roll-die-facet,
+.roll-die.ghost .roll-die-facet-line,
+.roll-die.ghost .roll-die-gloss {
+  display: none;
+}
+
+.roll-die.revealed .roll-die-outline {
   fill: var(--parchment-hi);
   stroke: var(--brass);
 }
@@ -549,7 +599,7 @@ button.secondary {
   opacity: 0.55;
 }
 
-.roll-die.dropped .roll-die-svg polygon {
+.roll-die.dropped .roll-die-outline {
   stroke: var(--parchment-line);
 }
 

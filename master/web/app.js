@@ -1506,31 +1506,236 @@ function closeCombatMapLightbox() {
 // prompt_id, so the *_reveal/*_complete handlers below know which DOM
 // elements to update.
 
-// DIE_VERTEX_COUNTS maps a die's sides to how many vertices its outline
-// polygon gets. d20 is resolve_check's own checks; d6 is ability-score
-// generation's 4d6-drop-lowest (below) — not hard-blocked from growing
-// further; an unlisted size falls back to a hexagon rather than failing
-// to render at all (which happens to already be exactly right for d6,
-// the explicit entry below is for clarity, not correctness).
-const DIE_VERTEX_COUNTS = { 20: 20, 6: 6 };
+// Each die size gets a distinct silhouette + faceted shading, rather than
+// a generic regular polygon that always reads as a circle-ish blob — a
+// "d20" should actually look like a many-faceted icosahedron and a "d6"
+// like a cube. DIE_SHAPE_BUILDERS maps a die's sides to a function
+// returning that shape's description; an unlisted size falls back to a
+// plain hexagon (buildFallbackShape) rather than failing to render.
+//
+// A shape description is { outline, facets, lines }:
+//   outline — "x,y x,y ..." points string for the outer silhouette
+//             polygon. This is the element the ghost/dropped/revealed/
+//             hover CSS states target (.roll-die-outline), same role the
+//             old single <polygon> played.
+//   facets  — [{ points, shade }] filled polygons drawn over the outline
+//             to suggest gem-like faceted lighting. shade is "a"/"b"/"c"
+//             (lightest to darkest); the actual colors live in
+//             style.css as .roll-die-facet-a/b/c, all derived from the
+//             app's existing parchment/brass theme tokens — nothing here
+//             hardcodes a per-die color.
+//   lines   — [{ x1, y1, x2, y2 }] facet-seam strokes drawn on top of
+//             the facets.
+// All coordinates sit in the shared "0 0 40 40" viewBox, center (20, 20)
+// — same coordinate space the old polygon used.
 
-function regularPolygonPoints(vertices, cx, cy, r) {
+function regularPolygonVertices(vertices, cx, cy, r) {
   const pts = [];
   for (let i = 0; i < vertices; i++) {
     const angle = (Math.PI * 2 * i) / vertices - Math.PI / 2;
-    pts.push(`${(cx + r * Math.cos(angle)).toFixed(2)},${(cy + r * Math.sin(angle)).toFixed(2)}`);
+    pts.push([cx + r * Math.cos(angle), cy + r * Math.sin(angle)]);
   }
-  return pts.join(" ");
+  return pts;
 }
 
+function pointsAttr(pairs) {
+  return pairs.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
+}
+
+// buildTetrahedronShape — d4: a triangle with a smaller inset triangle
+// tied to the outer corners by three lines, reading as a pyramid apex
+// seen slightly from above (the classic d4 icon look).
+function buildTetrahedronShape() {
+  const T = [20, 4], BL = [4, 34], BR = [36, 34];
+  const iT = [20, 15], iBL = [12.8, 28.5], iBR = [27.2, 28.5];
+  return {
+    outline: pointsAttr([T, BL, BR]),
+    facets: [
+      { points: pointsAttr([T, BL, iBL, iT]), shade: "b" },
+      { points: pointsAttr([T, iT, iBR, BR]), shade: "c" },
+      { points: pointsAttr([BL, BR, iBR, iBL]), shade: "b" },
+      { points: pointsAttr([iT, iBL, iBR]), shade: "a" },
+    ],
+    lines: [
+      { x1: T[0], y1: T[1], x2: iT[0], y2: iT[1] },
+      { x1: BL[0], y1: BL[1], x2: iBL[0], y2: iBL[1] },
+      { x1: BR[0], y1: BR[1], x2: iBR[0], y2: iBR[1] },
+    ],
+  };
+}
+
+// buildCubeShape — d6: an isometric cube. A hexagon outline split by 3
+// spokes from its center into top/left/right rhombus facets — chosen
+// over a flat square because the 3-facet cube keeps its "die-ness" even
+// at 44px, where a flat square just reads as a rounded square icon.
+function buildCubeShape() {
+  const T = [20, 3], R = [35, 11.5], BR = [35, 28.5], B = [20, 37], BL = [5, 28.5], L = [5, 11.5];
+  const C = [20, 20];
+  return {
+    outline: pointsAttr([T, R, BR, B, BL, L]),
+    facets: [
+      { points: pointsAttr([T, R, C, L]), shade: "a" },
+      { points: pointsAttr([L, C, B, BL]), shade: "b" },
+      { points: pointsAttr([R, BR, B, C]), shade: "c" },
+    ],
+    lines: [
+      { x1: C[0], y1: C[1], x2: R[0], y2: R[1] },
+      { x1: C[0], y1: C[1], x2: B[0], y2: B[1] },
+      { x1: C[0], y1: C[1], x2: L[0], y2: L[1] },
+    ],
+  };
+}
+
+// buildOctahedronShape — d8: a diamond split by a horizontal + vertical
+// cross into 4 triangular facets — two pyramids base-to-base, the
+// "diamond with a seam" look real d8 dice have.
+function buildOctahedronShape() {
+  const T = [20, 3], R = [36, 20], B = [20, 37], L = [4, 20], C = [20, 20];
+  return {
+    outline: pointsAttr([T, R, B, L]),
+    facets: [
+      { points: pointsAttr([T, L, C]), shade: "a" },
+      { points: pointsAttr([T, C, R]), shade: "b" },
+      { points: pointsAttr([L, C, B]), shade: "b" },
+      { points: pointsAttr([C, R, B]), shade: "c" },
+    ],
+    lines: [
+      { x1: L[0], y1: L[1], x2: R[0], y2: R[1] },
+      { x1: T[0], y1: T[1], x2: B[0], y2: B[1] },
+    ],
+  };
+}
+
+// buildTrapezohedronShape — d10: an elongated kite/diamond (narrower and
+// taller than the d8's) with a zigzag seam down the middle, splitting it
+// into two offset kite facets — the pentagonal-trapezohedron look. Real
+// d10s are printed 0-9, not 1-10, so a rolled result of 10 must display
+// as "0" — that mapping lives in settleDie below, keyed off this die's
+// sides, not here (this function only draws the shape).
+function buildTrapezohedronShape() {
+  const T = [20, 2], R = [31, 20], B = [20, 38], L = [9, 20];
+  const Z1 = [25, 15], Z2 = [15, 25];
+  return {
+    outline: pointsAttr([T, R, B, L]),
+    facets: [
+      { points: pointsAttr([T, Z1, Z2, B, L]), shade: "a" },
+      { points: pointsAttr([T, R, B, Z2, Z1]), shade: "c" },
+    ],
+    lines: [
+      { x1: T[0], y1: T[1], x2: Z1[0], y2: Z1[1] },
+      { x1: Z1[0], y1: Z1[1], x2: Z2[0], y2: Z2[1] },
+      { x1: Z2[0], y1: Z2[1], x2: B[0], y2: B[1] },
+    ],
+  };
+}
+
+// buildIcosahedronShape — d20: a roughly circular outline tiled by 10
+// pie-slice triangular facets fanning out from the center, alternating
+// light/dark for a faceted-gem look. A literal 20-triangle icosahedron
+// net turns to mud at 44px (per-facet detail that reads fine zoomed in
+// disappears at icon scale), so this is a deliberately reduced facet
+// count that still reads as "many small triangles tiling a circle"
+// rather than the old plain 20-gon, which just looked like a circle.
+function buildIcosahedronShape() {
+  const C = [20, 20];
+  const verts = regularPolygonVertices(10, 20, 20, 18);
+  const facets = verts.map((v, i) => {
+    const next = verts[(i + 1) % verts.length];
+    return { points: pointsAttr([v, next, C]), shade: i % 2 === 0 ? "a" : "c" };
+  });
+  const lines = verts.map((v) => ({ x1: C[0], y1: C[1], x2: v[0], y2: v[1] }));
+  return { outline: pointsAttr(verts), facets, lines };
+}
+
+// buildFallbackShape — any other/unlisted die size: a plain hexagon, no
+// facet detail claimed for a shape we don't actually know, in the same
+// spirit as the old default hexagon (just restyled to the new theme via
+// .roll-die-outline).
+function buildFallbackShape() {
+  return { outline: pointsAttr(regularPolygonVertices(6, 20, 20, 18)), facets: [], lines: [] };
+}
+
+const DIE_SHAPE_BUILDERS = {
+  4: buildTetrahedronShape,
+  6: buildCubeShape,
+  8: buildOctahedronShape,
+  10: buildTrapezohedronShape,
+  20: buildIcosahedronShape,
+};
+
+// dieGlossIdSeq gives each die its own gradient element id — SVG
+// `fill: url(#id)` resolves against the whole document, so with many
+// dice on the page at once a shared id would make later dice's gloss
+// silently reference an earlier die's gradient.
+let dieGlossIdSeq = 0;
+
+// dieOutlineSvg builds one die's SVG: an outline silhouette (what the
+// ghost/dropped/revealed/hover CSS states target), a handful of shaded
+// facet polygons and seam lines for a faceted-gem look, and a subtle
+// gloss highlight — all driven by the app's existing parchment/brass
+// theme tokens, no images and no per-die hardcoded colors.
 function dieOutlineSvg(sides) {
-  const vertices = DIE_VERTEX_COUNTS[sides] || 6;
+  const shape = (DIE_SHAPE_BUILDERS[sides] || buildFallbackShape)();
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 40 40");
   svg.classList.add("roll-die-svg");
-  const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-  polygon.setAttribute("points", regularPolygonPoints(vertices, 20, 20, 18));
-  svg.appendChild(polygon);
+
+  const glossId = `roll-die-gloss-${dieGlossIdSeq++}`;
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const gradient = document.createElementNS("http://www.w3.org/2000/svg", "radialGradient");
+  gradient.setAttribute("id", glossId);
+  gradient.setAttribute("cx", "35%");
+  gradient.setAttribute("cy", "28%");
+  gradient.setAttribute("r", "55%");
+  const stopBright = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+  stopBright.setAttribute("offset", "0%");
+  stopBright.setAttribute("stop-color", "#ffffff");
+  stopBright.setAttribute("stop-opacity", "0.65");
+  const stopFade = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+  stopFade.setAttribute("offset", "100%");
+  stopFade.setAttribute("stop-color", "#ffffff");
+  stopFade.setAttribute("stop-opacity", "0");
+  gradient.append(stopBright, stopFade);
+  defs.appendChild(gradient);
+  svg.appendChild(defs);
+
+  const outline = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  outline.classList.add("roll-die-outline");
+  outline.setAttribute("points", shape.outline);
+  svg.appendChild(outline);
+
+  const facetGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  facetGroup.classList.add("roll-die-facet-group");
+  for (const facet of shape.facets) {
+    const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    poly.classList.add("roll-die-facet", `roll-die-facet-${facet.shade}`);
+    poly.setAttribute("points", facet.points);
+    facetGroup.appendChild(poly);
+  }
+  svg.appendChild(facetGroup);
+
+  const seamGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  seamGroup.classList.add("roll-die-seam-group");
+  for (const seg of shape.lines) {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.classList.add("roll-die-facet-line");
+    line.setAttribute("x1", seg.x1);
+    line.setAttribute("y1", seg.y1);
+    line.setAttribute("x2", seg.x2);
+    line.setAttribute("y2", seg.y2);
+    seamGroup.appendChild(line);
+  }
+  svg.appendChild(seamGroup);
+
+  const gloss = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+  gloss.classList.add("roll-die-gloss");
+  gloss.setAttribute("cx", "16");
+  gloss.setAttribute("cy", "13");
+  gloss.setAttribute("rx", "10");
+  gloss.setAttribute("ry", "8");
+  gloss.setAttribute("fill", `url(#${glossId})`);
+  svg.appendChild(gloss);
+
   return svg;
 }
 
@@ -1541,6 +1746,7 @@ function buildDieEl(die, interactive) {
   if (interactive) dieEl.type = "button";
   dieEl.className = "roll-die " + (interactive ? "interactive" : "ghost");
   dieEl.dataset.dieId = die.id;
+  dieEl.dataset.sides = die.sides;
   dieEl.appendChild(dieOutlineSvg(die.sides));
   const face = document.createElement("span");
   face.className = "roll-die-face";
@@ -1552,13 +1758,18 @@ function buildDieEl(die, interactive) {
 // already decided server-side; this is purely a reveal animation, never
 // a computation. dropped (used by the ability-score-roll dice below, not
 // combat's client.roll) adds a visual "excluded from the total" marker.
+// A physical d10 is printed 0-9 (there is no face reading "10"), so a
+// server result of 10 on a d10 displays as "0" here; every other die
+// size always shows its literal number.
 function settleDie(dieEl, result, dropped) {
   dieEl.classList.add("tumbling");
   window.setTimeout(() => {
     dieEl.classList.remove("tumbling");
     dieEl.classList.add("revealed");
     if (dropped) dieEl.classList.add("dropped");
-    dieEl.querySelector(".roll-die-face").textContent = String(result);
+    const sides = Number(dieEl.dataset.sides);
+    const display = sides === 10 && result === 10 ? 0 : result;
+    dieEl.querySelector(".roll-die-face").textContent = String(display);
   }, 550);
 }
 
