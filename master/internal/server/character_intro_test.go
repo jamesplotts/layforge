@@ -45,6 +45,105 @@ func awaitClientDisplay(ctx context.Context, conn *websocket.Conn) (protocol.Cli
 	}
 }
 
+// awaitNarrativeDmThinking is awaitClientDisplay's narrative.dm_thinking
+// counterpart — sendDmThinkingIndicatorAfterDelay (dm_slow_pass.go) sends
+// it, if at all, only after dmThinkingIndicatorDelay has passed with the
+// pass still running, so it's likewise not something a single conn.Read
+// can assume is the very next message.
+func awaitNarrativeDmThinking(ctx context.Context, conn *websocket.Conn) (protocol.NarrativeDmThinkingPayload, error) {
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			return protocol.NarrativeDmThinkingPayload{}, err
+		}
+		var envelope protocol.Envelope
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			continue
+		}
+		if envelope.Type != protocol.MessageTypeNarrativeDmThinking {
+			continue
+		}
+		var msg protocol.NarrativeDmThinkingMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return protocol.NarrativeDmThinkingPayload{}, err
+		}
+		return msg.Payload, nil
+	}
+}
+
+// TestServe_CharacterIntro_SlowLLM_SendsPrivateDmThinkingIndicatorFirst
+// is the regression test for a live-reported UX gap: "right after
+// rolling a character, there is a very long delay before the first DM
+// message appears" — sendCreationComplete now launches a delayed,
+// private narrative.dm_thinking indicator (dmThinkingText) alongside
+// sendCharacterIntro, the same "done channel cancels a too-early send"
+// shape renderPlayerBubble's own slow-pass indicator uses. The fake
+// LLM's first call (the intro pass's own — nothing else touches s.llm
+// during a quick_roll) deliberately sleeps well past
+// dmThinkingIndicatorDelay so this test can observe the indicator
+// actually firing before the intro itself arrives, without adding any
+// real delay to TestServe_CharacterIntro_QuickRoll_SendsPrivateGroundedNarration
+// above.
+func TestServe_CharacterIntro_SlowLLM_SendsPrivateDmThinkingIndicatorFirst(t *testing.T) {
+	characterData, err := structpb.NewStruct(map[string]any{
+		"name": "Bram", "gender": "Male", "raceName": "Dwarf", "background": "Criminal",
+	})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct() error = %v", err)
+	}
+	fakeEngine := &fakeSystemEngineClient{
+		startCharacterCreationResp: &systemenginepb.CharacterCreationPromptResponse{
+			Success: true, Done: true,
+			Actor: &systemenginepb.Actor{ActorId: "engine-actor-1", CharacterData: characterData, SchemaVersion: "opencombatengine-v1"},
+		},
+	}
+	const introText = "You've spent years running with a gang in the sewers beneath the city."
+	fakeLLM := &fakeLLMProvider{respondFunc: func(callIndex int, _ llm.CompletionRequest) (llm.CompletionResponse, error) {
+		if callIndex == 0 {
+			time.Sleep(2 * time.Second)
+		}
+		return llm.CompletionResponse{Text: introText}, nil
+	}}
+
+	ts, _ := newTestServerWithLLMAndSystemEngine(t, fakeLLM, fakeEngine)
+	defer ts.Close()
+
+	conn := dialAndJoin(t, ts, "campaign-intro-thinking", "player-a")
+	defer conn.CloseNow()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := sendCreationStartNamed(ctx, conn, "campaign-intro-thinking", "player-a", "Bram"); err != nil {
+		t.Fatalf("sendCreationStart() error = %v", err)
+	}
+	topPrompt := readCreationPrompt(t, ctx, conn)
+	answerCreationPrompt(t, ctx, conn, "campaign-intro-thinking", "player-a", topPrompt, "quick_roll")
+
+	var validation protocol.CharacterValidationResultMessage
+	if err := wsjson.Read(ctx, conn, &validation); err != nil {
+		t.Fatalf("Read(character.validation_result) error = %v", err)
+	}
+
+	thinking, err := awaitNarrativeDmThinking(ctx, conn)
+	if err != nil {
+		t.Fatalf("awaitNarrativeDmThinking() error = %v", err)
+	}
+	if thinking.Text == "" {
+		t.Error("Payload.Text is empty, want a non-empty display string")
+	}
+	if thinking.Recipient != "player-a" {
+		t.Errorf("Payload.Recipient = %q, want %q — private to this player, not a broadcast", thinking.Recipient, "player-a")
+	}
+
+	intro, err := awaitClientDisplay(ctx, conn)
+	if err != nil {
+		t.Fatalf("awaitClientDisplay() error = %v", err)
+	}
+	if intro.Text != introText {
+		t.Errorf("intro Text = %q, want %q", intro.Text, introText)
+	}
+}
+
 func TestServe_CharacterIntro_QuickRoll_SendsPrivateGroundedNarration(t *testing.T) {
 	characterData, err := structpb.NewStruct(map[string]any{
 		"name": "Bram", "gender": "Male", "raceName": "Dwarf", "background": "Criminal",

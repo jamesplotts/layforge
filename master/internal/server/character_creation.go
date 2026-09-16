@@ -279,7 +279,7 @@ func (s *Server) handleCreationPregenAnswer(ctx context.Context, conn *websocket
 	}); err != nil {
 		return s.sendError(ctx, conn, campaignID, "", fmt.Errorf("saving claimed pregen: %w", err))
 	}
-	return s.sendCreationComplete(ctx, conn, campaignID, characterID)
+	return s.sendCreationComplete(ctx, conn, campaignID, senderID, characterID)
 }
 
 // startCreationRoll begins an engine-driven roll (design doc §9.4's
@@ -418,7 +418,7 @@ func (s *Server) finishCreationRoll(ctx context.Context, conn *websocket.Conn, c
 	}); err != nil {
 		return s.sendError(ctx, conn, campaignID, "", fmt.Errorf("saving rolled character: %w", err))
 	}
-	return s.sendCreationComplete(ctx, conn, campaignID, characterID)
+	return s.sendCreationComplete(ctx, conn, campaignID, senderID, characterID)
 }
 
 // sendCreationComplete sends the character.validation_result that
@@ -438,8 +438,14 @@ func (s *Server) finishCreationRoll(ctx context.Context, conn *websocket.Conn, c
 // Also launches sendCharacterIntro in its own goroutine — this
 // character just became playable, and the intro is a best-effort extra,
 // never something the completion response itself should wait on or fail
-// over (see that function's own doc comment).
-func (s *Server) sendCreationComplete(ctx context.Context, conn *websocket.Conn, campaignID, characterID string) error {
+// over (see that function's own doc comment). Alongside it, a delayed,
+// private narrative.dm_thinking indicator (see
+// sendDmThinkingIndicatorAfterDelay) covers the same real LLM latency
+// for this pass that the slow pass's own indicator covers for an
+// ordinary turn — a live report described a "really long pause" right
+// after character creation with nothing on screen to explain it. Private
+// to senderID, not broadcast: nobody else is even in this scene yet.
+func (s *Server) sendCreationComplete(ctx context.Context, conn *websocket.Conn, campaignID, senderID, characterID string) error {
 	msg, err := newMessage(campaignID, protocol.MessageTypeCharacterValidationResult, protocol.CharacterValidationResultPayload{
 		CharacterID: characterID,
 	})
@@ -449,7 +455,12 @@ func (s *Server) sendCreationComplete(ctx context.Context, conn *websocket.Conn,
 	if err := wsjson.Write(ctx, conn, msg); err != nil {
 		return fmt.Errorf("writing character.validation_result: %w", err)
 	}
-	go s.sendCharacterIntro(campaignID, characterID)
+	introDone := make(chan struct{})
+	go func() {
+		defer close(introDone)
+		s.sendCharacterIntro(campaignID, characterID)
+	}()
+	go s.sendDmThinkingIndicatorAfterDelay(campaignID, "", senderID, introDone)
 	return nil
 }
 

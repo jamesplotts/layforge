@@ -158,14 +158,17 @@ const dmThinkingText = "The DM is pondering the scene."
 const dmThinkingIndicatorDelay = 1500 * time.Millisecond
 
 // sendDmThinkingIndicatorAfterDelay waits up to dmThinkingIndicatorDelay
-// for done to close — meaning the slow pass this indicator would be
-// covering for has already finished, one way or another — before
-// broadcasting narrative.dm_thinking. done closing first means the
-// broadcast is skipped entirely: the turn was fast enough that showing
-// and immediately clearing the indicator would only be visual noise.
-// Meant to be called via `go` right after launching runSlowPass in its
-// own goroutine — see renderPlayerBubble.
-func (s *Server) sendDmThinkingIndicatorAfterDelay(campaignID, inReplyTo string, done <-chan struct{}) {
+// for done to close — meaning the pass this indicator would be covering
+// for has already finished, one way or another — before sending
+// narrative.dm_thinking. done closing first means the send is skipped
+// entirely: the pass was fast enough that showing and immediately
+// clearing the indicator would only be visual noise. recipient is
+// forwarded to sendDmThinkingIndicator unchanged — "" for the whole
+// campaign (renderPlayerBubble's slow pass) or one sender_id/account for
+// a private pass (sendCreationComplete/concludeCharacterReview's
+// character-intro pass). Meant to be called via `go` right after
+// launching the pass itself in its own goroutine.
+func (s *Server) sendDmThinkingIndicatorAfterDelay(campaignID, inReplyTo, recipient string, done <-chan struct{}) {
 	select {
 	case <-done:
 		return
@@ -173,27 +176,36 @@ func (s *Server) sendDmThinkingIndicatorAfterDelay(campaignID, inReplyTo string,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	s.sendDmThinkingIndicator(ctx, campaignID, inReplyTo)
+	s.sendDmThinkingIndicator(ctx, campaignID, inReplyTo, recipient)
 }
 
-// sendDmThinkingIndicator broadcasts narrative.dm_thinking to every
-// client in campaignID — see that message's own doc comment for why
-// this exists and why it's deliberately not recordEvent'd, and
-// sendDmThinkingIndicatorAfterDelay above for why this is never called
-// immediately. Best-effort: a failure here only means players go
-// without the "the DM is working on it" cue for this one turn, never
-// something worth failing the turn over.
-func (s *Server) sendDmThinkingIndicator(ctx context.Context, campaignID, inReplyTo string) {
+// sendDmThinkingIndicator sends narrative.dm_thinking — to every client
+// in campaignID when recipient is "", or privately to just that
+// sender_id/account otherwise, the same broadcast-vs-private split
+// ClientDisplayPayload.Recipient already documents. See that message's
+// own doc comment for why this exists and why it's deliberately not
+// recordEvent'd, and sendDmThinkingIndicatorAfterDelay above for why
+// this is never called immediately. Best-effort: a failure here only
+// means the relevant player(s) go without the "still working on it" cue
+// for this one pass, never something worth failing the pass over.
+func (s *Server) sendDmThinkingIndicator(ctx context.Context, campaignID, inReplyTo, recipient string) {
 	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeDmThinking, protocol.NarrativeDmThinkingPayload{
 		Text:               dmThinkingText,
+		Recipient:          recipient,
 		InReplyToMessageID: inReplyTo,
 	})
 	if err != nil {
 		s.logger.Warn("failed to build dm_thinking indicator", "error", err, "campaign_id", campaignID)
 		return
 	}
-	if err := broadcastMessage(s, msg); err != nil {
-		s.logger.Warn("failed to broadcast dm_thinking indicator", "error", err, "campaign_id", campaignID)
+	if recipient == "" {
+		if err := broadcastMessage(s, msg); err != nil {
+			s.logger.Warn("failed to broadcast dm_thinking indicator", "error", err, "campaign_id", campaignID)
+		}
+		return
+	}
+	if err := sendToSender(s, recipient, msg); err != nil {
+		s.logger.Warn("failed to send dm_thinking indicator", "error", err, "campaign_id", campaignID, "recipient", recipient)
 	}
 }
 

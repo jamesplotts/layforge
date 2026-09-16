@@ -929,7 +929,7 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 		defer close(slowPassDone)
 		s.runSlowPass(campaignID, input)
 	}()
-	go s.sendDmThinkingIndicatorAfterDelay(campaignID, input.MessageID, slowPassDone)
+	go s.sendDmThinkingIndicatorAfterDelay(campaignID, input.MessageID, "", slowPassDone)
 	return nil
 }
 

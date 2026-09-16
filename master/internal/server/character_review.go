@@ -195,8 +195,15 @@ func (s *Server) concludeCharacterReview(ctx context.Context, campaignID, charac
 	// sendCreationComplete marks for a rolled/claimed-pregen character —
 	// see sendCharacterIntro's own doc comment for why this is the
 	// automatic-review path's hook and not also the admin panel's manual
-	// approval endpoint.
+	// approval endpoint. The delayed, private dm_thinking indicator
+	// alongside it mirrors sendCreationComplete's own — see that
+	// function's doc comment.
 	if status == store.CharacterStatusApproved {
-		go s.sendCharacterIntro(campaignID, characterID)
+		introDone := make(chan struct{})
+		go func() {
+			defer close(introDone)
+			s.sendCharacterIntro(campaignID, characterID)
+		}()
+		go s.sendDmThinkingIndicatorAfterDelay(campaignID, "", senderID, introDone)
 	}
 }

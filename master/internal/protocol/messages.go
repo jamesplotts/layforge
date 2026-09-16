@@ -268,21 +268,32 @@ type NarrativePlayerBubblePayload struct {
 type NarrativePlayerBubbleMessage = Message[NarrativePlayerBubblePayload]
 
 // NarrativeDmThinkingPayload is the payload of a narrative.dm_thinking
-// message: a transient "the DM is working on a reply" indicator,
-// broadcast to the whole campaign the moment Master launches the DM slow
-// pass (design doc §8), so a real, sometimes multi-minute wait against a
-// slow local LLM doesn't read as a frozen game to anyone watching, not
-// just the acting player. Text carries the actual display string
-// server-side (never hardcoded client-side) so a future variety of
-// phrasing needs no client redeploy — the same "Master computes, client
-// displays" split as every other narration text in this protocol.
+// message: a transient "the DM is working on a reply" indicator for any
+// Master-side pass with real, sometimes multi-minute LLM latency, so a
+// slow local model doesn't read as a frozen game. Text carries the
+// actual display string server-side (never hardcoded client-side) so a
+// future variety of phrasing needs no client redeploy — the same
+// "Master computes, client displays" split as every other narration text
+// in this protocol.
 type NarrativeDmThinkingPayload struct {
 	Text string `json:"text"`
+	// Recipient mirrors ClientDisplayPayload's own field: the sender_id/
+	// account this indicator is for, or "" for a whole-campaign broadcast
+	// (design doc §7's slow pass, launched from narrative.player_input —
+	// everyone watching the scene is waiting on the same reply). A
+	// non-empty Recipient is the character-creation intro pass
+	// (character_intro.go) — a private, single-player moment nobody else
+	// at the table has any reason to see a cue for yet.
+	Recipient string `json:"recipient,omitempty"`
 	// InReplyToMessageID is the narrative.player_input this slow pass is
 	// reacting to — lets a client clear the right indicator (and only
 	// that one) once the matching client.display or system.error
 	// arrives, the same correlation system.error's own field already
-	// uses.
+	// uses. Empty for the character-intro case above: there is no
+	// player_input to correlate against, and a client only ever has at
+	// most one dm_thinking indicator showing for itself at a time, so
+	// clearing "whichever one is showing" is unambiguous — see
+	// clearDmThinkingBubble (app.js).
 	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
 }
 

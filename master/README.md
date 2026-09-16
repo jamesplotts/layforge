@@ -2719,6 +2719,23 @@ reload and consumed (and cleared) by the page's own startup tab
 selection, so a later, ordinary manual reload still lands on Session
 like always.
 
+The dm_thinking indicator now also covers the character-intro pass
+(`character_intro.go`) — a live report: "right after rolling a
+character, there is a very long delay before the first DM message
+appears." `sendCreationComplete` (a quick/detailed roll or claimed
+pregen finishing) and `concludeCharacterReview`'s Approved case both
+already launched `sendCharacterIntro` in its own goroutine; each now
+also launches `sendDmThinkingIndicatorAfterDelay` alongside it, the same
+"cancel if the pass already finished" shape the slow pass's own
+indicator uses. `NarrativeDmThinkingPayload`/`sendDmThinkingIndicator`
+gained a `Recipient` field (mirroring `ClientDisplayPayload`'s own) so
+this one can go privately to just that player — via `sendToSender`, not
+a campaign broadcast — since nobody else is even in the scene yet; ""
+still means the whole-campaign broadcast the slow pass uses. No client
+changes needed at all: `app.js`'s existing `narrative.dm_thinking`/
+`client.display` handling already applies uniformly regardless of what
+triggered either one.
+
 ## Layout
 
 ```
