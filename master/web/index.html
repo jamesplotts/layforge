@@ -135,9 +135,21 @@ If you do not agree, do not join this game.</pre>
              conversation. A resolved check (resolve_check, whether DM-
              triggered or player-initiated) shows up as an interactive
              client.roll bubble directly in #log, not a separate tray —
-             see app.js's "client.roll* interactive dice" section. -->
+             see app.js's "client.roll* interactive dice" section.
+             #dice-arena is the shared physics dice tray (dice-arena.js):
+             it's a sibling of #log, not a child, specifically so it tracks
+             .log-frame's fixed *visible* viewport rather than #log's own
+             scrollable content height — a die tumbling on top of several
+             pages of scrollback still bounces within what the player can
+             actually see, not some much-taller off-screen box. Always
+             present in the DOM (dice-arena.js only pays its own real
+             WebGL setup cost lazily, on the first actual throw — see that
+             file's ensureBox); pointer-events:none in style.css so dice
+             mid-toss never block reading or scrolling the log beneath
+             them. -->
         <div class="log-frame">
           <div id="log" class="log"></div>
+          <div id="dice-arena" class="dice-arena"></div>
         </div>
 
         <form id="input-form" class="input-form">

@@ -1,69 +1,75 @@
 # vendor
 
-Vendored third-party assets `../dice3d.js` imports/loads as plain files —
-no npm, no bundler, matching this client's "no build step" contract (see
-`../README.md`). Copied verbatim from upstream, license files included
-alongside each.
+Vendored third-party assets `../dice-arena.js` imports/loads as plain
+files — no npm, no bundler, matching this client's "no build step"
+contract (see `../README.md`). Copied verbatim from upstream, license
+files included alongside each.
 
-- `three.module.min.js` — [three.js](https://github.com/mrdoob/three.js)
-  r0.160.0 (MIT), from `unpkg.com/three@0.160.0/build/three.module.min.js`.
-  WebGL scene/camera/renderer, materials, and lighting for each die.
-- `cannon-es.js` — [cannon-es](https://github.com/pmndrs/cannon-es)
-  0.20.0 (MIT), from `unpkg.com/cannon-es@0.20.0/dist/cannon-es.js`.
-  **No longer imported by `dice3d.js`** as of the dice-theme-assets
-  rework (see below) — the operator explicitly doesn't need dice to
-  physically tumble/bounce, only to spin in place, so the physics-driven
-  contained-tumble code (and this import) was deleted from `dice3d.js`.
-  Left vendored here rather than deleted outright, in case a future
-  feature wants real physics again; confirmed via grep that nothing else
-  in `master/web/` imports it either, before leaving it in this
-  half-orphaned state.
-- `dice-themes/` — mesh + texture assets from
+- `dice-box-threejs.es.js` —
+  [@3d-dice/dice-box-threejs](https://github.com/3d-dice/dice-box-threejs)
+  0.0.12 (MIT, copyright "3D Dice"; `dice-box-threejs-LICENSE` here is
+  that package's own `LICENSE` file, copied verbatim), from
+  `registry.npmjs.org/@3d-dice/dice-box-threejs/-/dice-box-threejs-0.0.12.tgz`'s
+  own `dist/dice-box-threejs.es.js`. A single ~700KB self-contained ES
+  module — three.js r143 and [cannon-es](https://github.com/pmndrs/cannon-es)
+  are bundled *inline* by this package's own build (confirmed by reading
+  the file: it carries three.js's own `@license` header partway through,
+  and `export default` is the one `DiceBox` class, nothing else), so
+  vendoring is exactly one file plus its license, no separate three.js/
+  cannon-es copies needed the way the previous `dice3d.js` integration
+  required (see below for what that replaced). Drives a real thrown-
+  physics dice tray: `new DiceBox("#dice-arena", options)`, `.initialize()`
+  once, then `.roll(notation)`/`.add(notation)` with `"NdSIDES@v1,v2,..."`
+  notation to force predetermined results — see `../dice-arena.js` for
+  how this project drives it and works around a couple of gaps in its
+  public surface (no supported throw-from-a-specific-pixel origin; a
+  `this.rolling` internal flag that clears the whole tray if a second
+  `add()`/`roll()` lands before the previous one's animation finishes,
+  worked around by serializing calls rather than trusting the library's
+  own "safe to call concurrently" framing at face value — confirmed by
+  reading `startClickThrow`/`clearDice`, not assumed).
+  Die-face numbers are drawn at runtime via Canvas 2D onto procedural
+  per-shape geometry, not a baked texture atlas, and colors come from
+  config (`theme_colorset`), so — unlike the mesh+texture assets this
+  replaces — no separate binary asset files are needed at all. The
+  package's own `public/textures/*.webp` (optional surface-pattern
+  skins) and `public/sounds/*.mp3` are not vendored; this project doesn't
+  use `theme_texture` and passes `sounds: false`.
+
+  To update: re-run `curl -sL
+  registry.npmjs.org/@3d-dice/dice-box-threejs` to find the current
+  `dist-tags.latest` and that version's tarball URL, download and
+  extract it, copy `dist/dice-box-threejs.es.js` and `LICENSE` over
+  these two files, and update the version number above.
+
+## Superseded (removed)
+
+This project has vendored three.js (and, briefly, cannon-es) twice
+before this file's current entry, each time for a different dice-
+rendering approach; removed outright rather than left as unused dead
+weight each time a rework retired the code that used them — `git log`
+on this file and on `../dice3d.js` (`git show
+<commit-before-removal>:master/web/dice3d.js`) has every prior
+generation if one is ever needed again:
+
+- **`three.module.min.js`** (three.js r0.160.0, from
+  `unpkg.com/three@0.160.0/build/three.module.min.js`) and
+  **`cannon-es.js`** (cannon-es 0.20.0, from
+  `unpkg.com/cannon-es@0.20.0/dist/cannon-es.js`) drove `dice3d.js`'s
+  per-die-bubble WebGL rendering — first hand-built primitive geometry
+  physically tumbled via cannon-es, then (cannon-es dropped at that
+  point, left vendored but unused) real artist-made mesh/texture assets
+  spun in place with a scripted animation instead of real physics. Both
+  files are gone now that `dice3d.js` itself is gone, replaced by the
+  single shared physics arena described above — this is three.js's
+  *third* tour of duty in this project (it originally drove a
+  standalone WebGL dice tray before dice moved into chat-log bubbles at
+  all — see `git show 2f4f3cc~1:master/web/dice.js`), and each previous
+  copy was removed rather than accumulated once its call site stopped
+  using it.
+- **`dice-themes/`** — mesh + texture assets from
   [3d-dice/dice-themes](https://github.com/3d-dice/dice-themes) (MIT,
-  copyright "3D Dice"; `dice-themes/LICENSE` here is that repo's own
-  license file, copied verbatim), commit-pinned to whatever `main` served
-  on 2026-09-15 (the repo doesn't tag releases). Real Blender-made dice
-  models + textures, decoupled from that org's Babylon.js/Ammo.js runtime
-  (`dice-box`) — this project takes only the static mesh/texture assets
-  and drives them itself with the three.js stack above. Two subfolders:
-  - `dice-themes/default/default.json` — the "default" theme's mesh
-    document (Babylon-JSON: flat positions/normals/uvs/indices arrays per
-    die shape, plus a `colliderFaceMap` giving each face's printed value —
-    see `dice3d.js`'s face-orientation math for how that's used). Vendored
-    under `default/` rather than `rust/` because the **rust** theme's own
-    `theme.config.json` carries no `meshFile` field at all — confirmed
-    against the upstream repo's actual file listing, not assumed — since
-    upstream reuses the base theme's geometry for every recolor rather
-    than shipping duplicate geometry per palette. `dice3d.js` falls back
-    to this file when a theme's config doesn't name its own mesh.
-  - `dice-themes/rust/` — the "rust" theme actually shipped today:
-    `theme.config.json`, `diffuse-light.png` (a mostly-transparent
-    white-ink-on-nothing mask meant to be recolored — see `dice3d.js`'s
-    `composeDiffuseTexture` for why it's composited onto a solid base
-    color rather than alpha-blended live), and `normal.png` (downscaled
-    from the upstream 1024×1024 to 256×256 before vendoring — the
-    original was 726KB and this project cares about staying lightweight;
-    a die renders at 56 logical px on screen, so the extra resolution
-    bought nothing visible). `rust/specular.jpg` was **not** vendored —
-    this theme's material doesn't use a specular/roughness map, a flat
-    roughness value looks fine at this render size — see `dice3d.js` for
-    why `default` and `gemstoneMarble` weren't shipped at all (a theme
-    comparison, not an oversight).
-
-This is three.js's (and formerly cannon-es's) second tour of duty here —
-they originally drove a standalone WebGL dice tray, removed earlier in
-this project's life when dice moved into chat-log message bubbles (`git
-show 2f4f3cc~1:master/web/dice.js` if you want to see that earlier
-shape). The bubbles' own SVG/CSS dice that briefly replaced them didn't
-look as good, so `dice3d.js` brought real WebGL rendering back — first
-with hand-built primitive geometry, then (this rework) with real
-artist-made mesh/texture assets for the material realism primitives
-couldn't match. See `dice3d.js`'s own top-of-file comment for the full
-story, including why it never gives a die a permanent GPU context.
-
-To update three.js: re-download the same URL pattern with a newer
-version number, and update this file's version number. It's a small,
-stable library; there's no expectation of frequent updates. To update the
-dice-theme assets: re-fetch the same paths from
-`https://raw.githubusercontent.com/3d-dice/dice-themes/main/themes/...`
-and update this entry with whatever date/commit you pulled.
+  "3D Dice"), the real Blender-made die models/textures `dice3d.js`
+  drove with the three.js stack above. `dice-box-threejs`'s own
+  procedural Canvas-2D face rendering (see above) needs no equivalent
+  asset, so this wasn't replaced with anything — it's just gone.

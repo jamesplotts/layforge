@@ -276,9 +276,11 @@ face; every other size shows its literal number. That mapping carried
 forward unchanged into the WebGL version below.
 
 There's also now a real WebGL die in every roll bubble (`dice3d.js`,
-new) — **superseded by the entry below** (real mesh/texture assets
-replaced the primitive geometry, cannon-es physics is gone, and the DOM
-text overlay this paragraph describes was later removed entirely) — this
+new) — **superseded twice over, see the real-thrown-physics-dice entry
+much further below** (real mesh/texture assets replaced the primitive
+geometry, cannon-es physics is gone, and the DOM text overlay this
+paragraph describes was later removed entirely; then `dice3d.js` itself
+was retired outright in favor of `dice-arena.js`) — this
 app's original dice tray (a standalone WebGL/physics d20,
 removed earlier when dice moved into chat-log bubbles) is back, just
 rendered *inside* each small per-die bubble slot instead of a dedicated
@@ -307,7 +309,8 @@ GPU resources held — an idle/ghost/already-revealed die is never more
 than a static image. Verified against a 48-die stress run (double the
 worst realistic in-session count) with zero contexts leaked.
 
-`dice3d.js`'s dice are now built from a real artist-made mesh + texture
+**Superseded, see the real-thrown-physics-dice entry much further below**
+— `dice3d.js`'s dice are now built from a real artist-made mesh + texture
 (the "rust" theme from [3d-dice/dice-themes](https://github.com/3d-dice/dice-themes),
 MIT licensed — see `vendor/README.md`) instead of three.js primitive
 geometry, and cannon-es physics is gone entirely. Two changes, requested
@@ -460,6 +463,115 @@ never going to receive either (a slow-pass failure notice is private to
 the acting player only) falls back to the bubble's own 5-minute
 `setTimeout` instead of it sitting in the log forever.
 
+**Dice are now real thrown physics, not a scripted per-bubble spin —
+`dice3d.js` is retired outright, replaced by `dice-arena.js` driving one
+shared arena overlaying the log (`#dice-arena`, see index.html) via the
+vendored [`@3d-dice/dice-box-threejs`](https://github.com/3d-dice/dice-box-threejs)
+0.0.12 (MIT — see `vendor/README.md`).** A die's button no longer holds
+its own permanent visual; clicking it throws that one die into the shared
+tray, lets real physics settle it, crops the settled die's own on-screen
+region out of the tray's shared canvas (camera-projection math against
+the library's real `PerspectiveCamera`, not a guess — see
+`dice-arena.js`'s `boundsForMesh`), and flies that cropped image back to
+the button's slot before swapping it in as the resting picture. Same
+underlying contract app.js's `client.roll*`/`client.ability_score_rolls`
+call sites already used (`settleDie` ending in a `.revealed` state,
+`.dropped` marker support) — only `settleDie`'s internals and timing
+changed: it's `async` now and genuinely awaits the real throw+flight
+finishing, rather than a fixed timeout the way `dice3d.js`'s scripted
+spin could rely on (real physics plus a serial queue — see below — don't
+run on a constant this file could hardcode).
+
+What was actually verified, not just assumed correct because that's the
+library's whole stated purpose (the same rigor this project's own earlier
+face-orientation bug — see the `dice3d.js` entries above — was caught
+missing until pixel-level checks happened):
+- **Predetermined results, every shape, several values each**: d6/d8/
+  d10/d12/d20 all confirmed correct via real rendered screenshots at
+  production settings, cross-checked against `getDiceResults()`'s own
+  reported value and, for d20, directly against which geometry face the
+  library's camera-facing convention actually painted the forced number
+  onto (matched exactly, dot-product 1.0 alignment). d10@10 correctly
+  shows the physically-printed "0" face, same convention `dice3d.js`
+  always used.
+- **A real, confirmed library bug for d4 specifically** — not fixed, not
+  worked around, shipped with this same honest flag `dice3d.js` used to
+  carry for d4 (see that file's own entries above), except this one is a
+  harder failure than "not fully sure which glyph a viewer's eye lands
+  on": the vendored library's own d4-forcing path (`swapDiceFace_D4`,
+  structurally different code from every other shape's forcing) does not
+  actually relabel the geometry at the position a player reads. Verified
+  three independent ways — the metadata (`getDiceResults()`'s reported
+  `value` for a forced d4 stays the pre-forced natural roll forever,
+  because `swapDiceFace_D4`, unlike its sibling, never clears the die's
+  cached result), the geometry (projecting the settled mesh's own face
+  normals to find the true "up" reading position, confirmed independently
+  via *unforced* natural rolls first, then checking what's actually
+  painted there for a *forced* roll — the natural pre-forced number, not
+  the requested one), and real rendered screenshots at high contrast,
+  side by side. A d4 roll in this app may show the wrong face; the
+  server-decided result is unaffected and always shown as text elsewhere
+  in the same bubble regardless (design doc: never something a client
+  computes or can override) — only this one die's own picture can be
+  wrong. See `dice-arena.js`'s own `D4_FORCING_IS_UNRELIABLE` doc comment
+  for the full trail if this needs to be revisited.
+- **Fly-home lands on the actual button position, not a stale one** —
+  confirmed by throwing a die, scrolling the log a large distance while
+  it's still mid-air (well before physics settles), and checking the
+  flying image's own real animation target: it matched the button's
+  *post-scroll* screen position, not where the button was when the throw
+  started.
+- **Two dice thrown close together don't cross-wire results** — confirmed
+  by clicking a second bubble's die while the first was still visibly
+  mid-throw and checking both settled with their own correct shape/value/
+  image, never swapped.
+- **Bounce stays inside `.log-frame`'s box** at a normal desktop width, a
+  narrow (560px) width, and after a live browser resize mid-session
+  (`dice-arena.js`'s own `window.resize` handler calling the library's
+  `setDimensions()` to rebuild the physics walls and camera for the new
+  size — confirmed this is the correct call: the similarly-named
+  `updateConfig()` is an unrelated *theme* reloader that never touches
+  physics bounds at all, a mix-up this session caught by reading the
+  vendored source rather than guessing from the method name).
+- The 4d6-drop-lowest ability-score flow (`client.ability_score_rolls`)
+  still works end to end under the new `async`/awaited `settleDie` —
+  including clicking all four dice of a set in rapid succession, which
+  exercises the serial queue below for real (four throws, correctly
+  sequenced, not corrupted).
+
+Two honest, known limitations, not fixed here:
+- **The throw doesn't originate from the exact clicked pixel.** The
+  vendored library's only throw path (`startClickThrow`, used by both
+  `roll()` and `add()`) picks a randomized vector across the tray's own
+  current width/height itself — there is no supported way to say "throw
+  from pixel (x, y)". A click still throws a real, physically-simulated
+  die into the shared tray; it just doesn't visibly originate from the
+  button itself the way the fly-home *landing* does.
+- **Two rolls "close together" now animate one after another, not
+  physically overlapping in the tray**, despite that being this rework's
+  original ambition (matching a real tabletop with more than one thing
+  happening on it at once). Downgraded deliberately, not by oversight:
+  the vendored library's `add()`/`roll()` both route through a shared
+  `this.rolling` flag that, if a second throw call lands while an earlier
+  one is still animating, clears every current die (including the
+  still-mid-air one) and — worse — leaves that earlier throw's own
+  promise unresolved *forever*, confirmed by reproducing it directly in a
+  real browser before this module was ever built around a fix. Every
+  `dice-arena.js` call into the shared `DiceBox` instance is funneled
+  through one serial queue as a result (see that file's own "Why a serial
+  queue" doc block) — correctness over the original concurrent-tumble
+  ambition.
+
+Vendoring: `vendor/dice-box-threejs.es.js` (new, ~700KB, three.js r143 and
+cannon-es bundled inline by the package's own build — no separate copies
+of either needed, unlike `dice3d.js`'s setup) plus its `LICENSE`.
+`vendor/three.module.min.js`, `vendor/cannon-es.js`, and
+`vendor/dice-themes/` are all gone — nothing in `master/web/` used them
+once `dice3d.js` itself was removed (confirmed by grep immediately before
+deleting each, the same check the last several dice-related commits have
+all done). See `vendor/README.md` for the full entry, including how to
+pull a newer version later.
+
 ## Running
 
 From `master/`:
@@ -527,10 +639,15 @@ and point `-web-dir` at the copy instead.
   `character-sheet.js` only walks `properties`/`items`/`$ref`, not the
   full JSON Schema spec (no `oneOf`/`anyOf`/`patternProperties`/etc.),
   since nothing today's schema uses needs more than that.
-- **The die outline is a generic polygon, not real d20 face art.**
-  `DIE_VERTEX_COUNTS` in `app.js` only has an entry for 20 sides today;
-  an unlisted size falls back to a hexagon outline rather than failing
-  to render.
-- **The die bubble only shows results from checks (d20).** Nothing here
-  rolls damage dice or any non-d20 shape yet — `roll.check_request` only
-  triggers `ResolveCheck`, not `ApplyEffect`.
+- **The die outline is a generic polygon, not real d20 face art** — stale
+  as of the real-thrown-physics-dice rework above: dice are now real
+  physics-thrown 3D geometry with real per-face numbering for every shape
+  this app supports (d4/d6/d8/d10/d12/d20), not an outline of any kind.
+  Left here rather than deleted so `git blame` on this line still points
+  at when it stopped being true.
+- **Combat rolls only ever throw the check's own d20** — `roll.check_request`
+  only triggers `ResolveCheck`, not `ApplyEffect`, so nothing here rolls
+  damage dice yet. Not a dice-*rendering* limitation any more (every shape
+  renders correctly — see above), purely that nothing today asks for a
+  non-d20 combat roll; `client.ability_score_rolls` already throws d6 dice
+  through the same pipeline.

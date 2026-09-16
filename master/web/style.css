@@ -369,6 +369,24 @@ button.secondary {
   z-index: 2;
 }
 
+/* #dice-arena (dice-arena.js) is the shared physics dice tray — a sibling
+   overlay of #log, not #log itself, so it tracks .log-frame's fixed
+   *visible* box rather than #log's scrollable content height (see
+   index.html's own comment on this element). Absolutely filling
+   .log-frame's box, same as .log-frame::after's border above it —
+   z-index above both #log's bubbles and that border, so tumbling dice
+   read as sitting on top of the whole scene, but pointer-events:none at
+   all times: dice mid-toss must never block reading or scrolling the log
+   beneath them (design intent carried over unchanged from dice3d.js's own
+   die slots, which were always inert to clicks themselves too — only the
+   .roll-die *button* wrapping a die is ever interactive). */
+.dice-arena {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
 .bubble {
   position: relative;
   max-width: 72ch;
@@ -534,12 +552,15 @@ button.secondary {
   filter: brightness(1.12);
 }
 
-/* .roll-die-visual is the die's actual rendering — a captured WebGL
-   frame shown as a plain <img> while idle/revealed (no live GPU context
-   held — see dice3d.js's renderer-pool comment), swapped for a live
-   <canvas> only for the roughly one second a die is actively spinning
-   (dice3d.js's TUMBLE_DURATION_MS). Same slot, same sizing, regardless of
-   which one currently occupies it. */
+/* .roll-die-visual is the die's actual rendering — since dice-arena.js
+   (replacing dice3d.js — see that file's own removal note in `git log`)
+   throws every die into one shared physics arena instead of rendering a
+   permanent per-die visual, this slot holds nothing at all until the die
+   is actually thrown: buildDieSlot mounts a themed placeholder (see
+   .roll-die-visual-placeholder below) here first, and settleDie swaps it
+   for a real cropped `<img>` of the settled die (dice-arena.js's
+   throwDie) once the fly-home animation lands. Same slot, same sizing,
+   regardless of which one currently occupies it. */
 .roll-die-visual {
   position: absolute;
   inset: 0;
@@ -549,12 +570,21 @@ button.secondary {
   border-radius: 6px;
 }
 
-/* Fallback for the rare case dice3d.js's renderer pool is fully checked
-   out when a die is first created (see acquireRenderer) — a plain themed
-   placeholder rather than nothing, so a die slot is never blank. */
+/* The die's resting look *before* it's ever thrown — every interactive/
+   ghost die starts here (see buildDieSlot in dice-arena.js), not just a
+   rare fallback the way this rule's dice3d.js-era predecessor was (a
+   renderer-pool-exhaustion backstop). The shape label (d4/d6/.../d20, set
+   via buildDieSlot's textContent) lets a player see what they're about to
+   throw before they click. */
 .roll-die-visual-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: var(--parchment);
   border: 2px solid var(--brass);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--parchment-ink-dim);
 }
 
 /* Ghost dice (a spectator's not-yet-revealed die) read as present but
@@ -576,12 +606,14 @@ button.secondary {
    die itself dimmed with a diagonal strike drawn over it. The dimming is
    deliberately mild (0.55, not lower) — an earlier version, back when the
    rolled number was a separate DOM text overlay (`.roll-die-face`,
-   removed once the 3D die's own settled orientation became the sole
-   carrier of the result — see dice3d.js), compounded that opacity with
+   removed once the die's own settled face became the sole carrier of the
+   result — first the 3D-rendered die dice3d.js drove in place, now a
+   real cropped photo of a physically-thrown die via dice-arena.js/
+   throwDie, same principle either way), compounded that opacity with
    the text's own already-muted color and a live player misread "4" for
    "1". There's no text layer to compound with any more, but the same
    "don't dim so hard the rolled face becomes ambiguous" caution still
-   applies to the mesh itself, so this stays conservative. The ::after
+   applies to the die's own image, so this stays conservative. The ::after
    strike is the "excluded from the total" signal; it's drawn with
    pointer-events:none and doesn't touch .roll-die-visual's own opacity,
    so it reads as an annotation layered on top rather than part of the
@@ -603,6 +635,26 @@ button.secondary {
     var(--parchment-ink) calc(50% + 1.5px),
     transparent calc(50% + 1.5px)
   );
+}
+
+/* .dice-fly-home is the short-lived <img> app.js's flyDieHome animates
+   from a settled die's arena position to its own button's slot (see that
+   function's doc comment). position:fixed and appended to <body> — it has
+   to travel across both the arena overlay and the bubble's own DOM freely,
+   in viewport coordinates, unclipped by either's overflow/stacking
+   context. FLY_HOME_MS in app.js must match this rule's own transition
+   duration (kept as one shared value in that file's own comment, the same
+   pairing dice3d.js's old TUMBLE_DURATION_MS constant used to need). */
+.dice-fly-home {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  border-radius: 6px;
+  transition:
+    left 450ms ease-in,
+    top 450ms ease-in,
+    width 450ms ease-in,
+    height 450ms ease-in;
 }
 
 .roll-summary {

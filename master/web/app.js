@@ -38,7 +38,7 @@
 // section below, on which character.creation_start's conversation runs.
 
 import { renderCharacterSheetTabs } from "./character-sheet.js";
-import { buildDieVisual, tumbleAndSettle, TUMBLE_DURATION_MS } from "./dice3d.js";
+import { throwDie } from "./dice-arena.js";
 
 // ES modules are always strict mode — no "use strict" directive needed.
 
@@ -1556,57 +1556,168 @@ function closeCombatMapLightbox() {
 // prompt_id, so the *_reveal/*_complete handlers below know which DOM
 // elements to update.
 
-// The die's actual 3D rendering (a real artist-made mesh + texture — the
-// "rust" theme from 3d-dice/dice-themes — scripted into a spin-to-result
-// animation) lives in dice3d.js, imported at the top of this file. This
-// section only wires that module into the die element's lifecycle:
-// buildDieEl mounts a die's initial (resting) visual, settleDie triggers
-// its spin-and-reveal. See dice3d.js for the rendering/pooling/face-
-// orientation math itself — nothing shape- or WebGL-specific belongs
-// here.
+// The die's actual rendering — a real thrown-physics toss across the
+// shared arena overlaying the log (dice-arena.js, replacing dice3d.js's
+// per-bubble contained-spin — see `git log dice3d.js` for that earlier
+// generation), landing wherever physics takes it and then flying back to
+// this button's own slot — lives in dice-arena.js, imported at the top of
+// this file. This section only wires that module into the die element's
+// lifecycle: buildDieEl mounts a die's initial (empty, not-yet-thrown)
+// slot, settleDie triggers the throw/settle/fly-home sequence and swaps
+// in the result once it lands. See dice-arena.js for the arena/physics/
+// fly-home-projection details themselves — nothing arena- or
+// WebGL-specific belongs here.
 //
-// There used to be a `.roll-die-face` DOM span layered on top of the 3D
-// visual as a guaranteed-legible text fallback, decoupled from whether
-// the mesh's own face orientation was correct. It's gone: the operator
-// explicitly wants the 3D die's own settled orientation to be the only
-// thing communicating the result now, not a belt-and-suspenders text
-// overlay on top of it. See dice3d.js's computeTargetQuaternion and this
-// session's final report for how that orientation is derived and how far
-// it's actually been verified per die shape.
+// There used to be a `.roll-die-face` DOM span layered on top of the die
+// as a guaranteed-legible text fallback, decoupled from whether the die's
+// own rendering was correct. It's still gone here: the operator's
+// standing preference (set when dice3d.js dropped its own version of this
+// same overlay) is that the die's own settled face is the only thing
+// communicating the result, not a belt-and-suspenders text layer on top
+// of it — dice-arena.js's throwDie crops the real settled die out of the
+// arena's own render, the same "the picture of the die IS the answer, no
+// second copy of the number floating over it" principle, just sourced
+// from a physics throw's camera capture instead of a scripted spin's.
 
-// buildDieEl builds one die element — a real <button> when the roller
-// can click it, a plain <div> for a spectator's read-only ghost. The 3D
-// visual (a resting-pose snapshot to start — see dice3d.js's
-// buildDieVisual) is its only child; there is no separate text layer.
+// buildDieEl builds one die element — a real <button> when the roller can
+// click it, a plain <div> for a spectator's read-only ghost. Its only
+// child, until settleDie fills it in, is an empty themed placeholder
+// showing the die's shape (e.g. "d20") — there is nothing to render yet:
+// unlike dice3d.js's per-die resting snapshot, dice-arena.js never draws a
+// die at all until it's actually thrown (see that module's ensureBox doc
+// comment on why even the shared arena itself is constructed lazily, on
+// first throw, not at page load).
 function buildDieEl(die, interactive) {
   const dieEl = document.createElement(interactive ? "button" : "div");
   if (interactive) dieEl.type = "button";
   dieEl.className = "roll-die " + (interactive ? "interactive" : "ghost");
   dieEl.dataset.dieId = die.id;
   dieEl.dataset.sides = die.sides;
-  dieEl.appendChild(buildDieVisual(dieEl, Number(die.sides)));
+  const placeholder = document.createElement("div");
+  placeholder.className = "roll-die-visual roll-die-visual-placeholder";
+  placeholder.textContent = `d${die.sides}`;
+  dieEl.appendChild(placeholder);
   return dieEl;
 }
 
-// settleDie plays the spin animation, passing the server-decided result
-// straight into dice3d.js so the die can settle on the correct face — the
-// result was already decided server-side (design doc §3.1/§4); this
-// function only ever plays it back, never computes anything. dropped
-// (used by the ability-score-roll dice below, not combat's client.roll)
-// adds a visual "excluded from the total" marker (see style.css's
-// .roll-die.dropped). A physical d10 is printed 0-9 (there is no face
-// reading "10"), so a server result of 10 is passed through to dice3d.js
-// unchanged — its colliderFaceMap already treats 10 as the physically-
-// printed "0" face, the same convention the old text overlay used for
-// *display* — every other die size shows its literal rolled number.
-function settleDie(dieEl, result, dropped) {
+// FLY_HOME_MS must match .dice-fly-home's own CSS transition duration in
+// style.css — kept as one shared value rather than two hand-kept-in-sync
+// magic numbers (the same reasoning dice3d.js's old TUMBLE_DURATION_MS
+// comment gave for the same kind of pairing), used here only as
+// flyDieHome's own "give up and swap in the result anyway" fallback in
+// the rare case a `transitionend` event never fires (e.g. the starting
+// and target rects happen to be identical, so nothing actually animates).
+const FLY_HOME_MS = 450;
+
+// flyDieHome animates a freshly-cropped `<img>` of a just-settled die
+// (dice-arena.js's throwDie already produced both `startRect`, the die's
+// current on-screen position inside the arena, and `dataUrl`, the cropped
+// image itself) from the arena to `targetRect` — the die button's own
+// slot. Appended to `document.body` with `position: fixed` rather than
+// living inside the bubble/arena DOM for the flight, since it has to
+// travel across both freely, in viewport coordinates, unclipped by
+// either's own overflow/stacking context. Resolves once the flight has
+// visibly finished (the CSS transition's `transitionend`, or the fallback
+// timeout below if that never fires) — callers swap in the die's real
+// resting `<img>` only after this resolves, so a docked die never
+// "pops" into place a frame before its own flight animation visually
+// arrives.
+function flyDieHome(startRect, targetRect, dataUrl) {
+  return new Promise((resolve) => {
+    const img = document.createElement("img");
+    img.className = "dice-fly-home";
+    img.alt = "";
+    img.src = dataUrl;
+    img.style.left = `${startRect.left}px`;
+    img.style.top = `${startRect.top}px`;
+    img.style.width = `${startRect.width}px`;
+    img.style.height = `${startRect.height}px`;
+    document.body.appendChild(img);
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      img.remove();
+      resolve();
+    };
+    img.addEventListener("transitionend", finish, { once: true });
+    window.setTimeout(finish, FLY_HOME_MS + 200); // fallback — see this function's own doc comment.
+
+    // Two nested rAFs: the first lets the browser actually paint the
+    // starting rect (written synchronously above) as a real frame before
+    // anything else happens; only once that's committed do we write the
+    // target rect, giving the CSS transition a genuine start point to
+    // animate from. Collapsing both writes into the same frame (a single
+    // rAF, or none) would let the browser coalesce them and skip straight
+    // to the end state with no visible flight at all.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        img.style.left = `${targetRect.left}px`;
+        img.style.top = `${targetRect.top}px`;
+        img.style.width = `${targetRect.width}px`;
+        img.style.height = `${targetRect.height}px`;
+      });
+    });
+  });
+}
+
+// settleDie throws this die into the shared arena with the server-decided
+// result (design doc §3.1/§4; this function only ever plays that result
+// back, never computes anything), waits for it to physically settle, and
+// flies the resulting cropped image home to dieEl's own slot before
+// marking it revealed. dropped (used by the ability-score-roll dice
+// below, not combat's client.roll) adds a visual "excluded from the
+// total" marker (see style.css's .roll-die.dropped). A physical d10 is
+// printed 0-9 (there is no face reading "10"), so a server result of 10
+// is passed through to dice-arena.js unchanged — confirmed by reading the
+// vendored library's own swapDiceFace, it already treats a forced 10 on a
+// d10 as that same printed-0 face — every other die size shows its
+// literal rolled number.
+//
+// Now async (dice3d.js's old version wasn't — it fired the animation and
+// used a fixed TUMBLE_DURATION_MS timeout to know when to reveal). A
+// fixed delay doesn't work here: dice-arena.js's throws are real physics
+// plus a serial queue (see that module's own "why a serial queue" doc
+// block) so how long any given throw actually takes to settle varies and
+// isn't a constant this file could hardcode. Awaiting throwDie's own
+// promise is the only correct way to know a die has actually settled.
+// Callers that don't need to wait (the click handlers below) simply don't
+// await this — its own internal try/catch means it never rejects out
+// from under them.
+async function settleDie(dieEl, result, dropped) {
   dieEl.classList.add("tumbling");
-  tumbleAndSettle(dieEl, result);
-  window.setTimeout(() => {
-    dieEl.classList.remove("tumbling");
-    dieEl.classList.add("revealed");
-    if (dropped) dieEl.classList.add("dropped");
-  }, TUMBLE_DURATION_MS);
+  try {
+    const sides = Number(dieEl.dataset.sides);
+    const { dataUrl, rect } = await throwDie(sides, result);
+    // Recomputed now, at settle time, not when the throw started — the
+    // log can scroll (and dice-arena.js's queue can make a throw wait a
+    // real amount of time behind an earlier one still mid-air) during the
+    // gap between click and settle, so dieEl's own screen position may
+    // have moved since. See dice-arena.js's viewportRectForBounds for the
+    // matching reasoning on the arena side of this same flight.
+    const targetRect = dieEl.getBoundingClientRect();
+    await flyDieHome(rect, targetRect, dataUrl);
+    const img = document.createElement("img");
+    img.className = "roll-die-visual";
+    img.alt = "";
+    img.src = dataUrl;
+    dieEl.replaceChildren(img);
+  } catch (err) {
+    // The die's own picture is cosmetic on top of an already-authoritative
+    // result — design doc's "never something a client computes or can
+    // override" means the real number was decided server-side and is
+    // always shown separately too (this bubble's own roll-summary line,
+    // or client.roll_complete's breakdown). A throw/render failure here
+    // (the shared WebGL arena failing to init on an unsupported browser,
+    // say) leaves this one die showing its plain shape placeholder rather
+    // than a picture of the die — not ideal, but never a wrong or missing
+    // result, and never worth blocking the reveal over.
+    console.error("settleDie: dice-arena throw failed", err);
+  }
+  dieEl.classList.remove("tumbling");
+  dieEl.classList.add("revealed");
+  if (dropped) dieEl.classList.add("dropped");
 }
 
 function rollBubbleWrap(text) {
@@ -1727,26 +1838,31 @@ function renderAbilityScoreRollSet(promptId, sets, index, introText) {
   let revealedCount = 0;
   for (const die of dice) {
     const dieEl = buildDieEl(die, true);
-    dieEl.addEventListener("click", () => {
+    // async click handler, awaiting settleDie itself now instead of a
+    // fixed extra delay after firing it — dice-arena.js's throws are real
+    // physics behind a serial queue (see that module's own doc comment),
+    // so a set's four individually-clicked dice can end up queued one
+    // behind another if clicked in quick succession, and how long that
+    // takes isn't a constant this file can hardcode the way the old fixed
+    // 600ms wait assumed. Awaiting the real settle is the only way to
+    // know the last die has actually finished flying home before the sum
+    // (which is summing exactly what the player just watched land)
+    // appears.
+    dieEl.addEventListener("click", async () => {
       if (dieEl.classList.contains("revealed") || dieEl.classList.contains("tumbling")) return;
-      settleDie(dieEl, die.result, die.dropped);
+      await settleDie(dieEl, die.result, die.dropped);
       revealedCount++;
       if (revealedCount < dice.length) return;
-      // Wait out the last die's own tumble (settleDie's 550ms) before
-      // showing the sum and advancing, so the summary never appears
-      // before the player can see what it's summing.
-      window.setTimeout(() => {
-        const kept = dice.filter((d) => !d.dropped).map((d) => d.result);
-        summary.textContent = `${kept.join(" + ")} = ${set.total}`;
-        wrap.classList.add("answered");
-        if (index + 1 < sets.length) {
-          const next = renderAbilityScoreRollSet(promptId, sets, index + 1, introText);
-          el.log.appendChild(next);
-          el.log.scrollTop = el.log.scrollHeight;
-        } else {
-          send({ ...newEnvelope("client.ability_score_rolls_ack"), payload: { prompt_id: promptId } });
-        }
-      }, 600);
+      const kept = dice.filter((d) => !d.dropped).map((d) => d.result);
+      summary.textContent = `${kept.join(" + ")} = ${set.total}`;
+      wrap.classList.add("answered");
+      if (index + 1 < sets.length) {
+        const next = renderAbilityScoreRollSet(promptId, sets, index + 1, introText);
+        el.log.appendChild(next);
+        el.log.scrollTop = el.log.scrollHeight;
+      } else {
+        send({ ...newEnvelope("client.ability_score_rolls_ack"), payload: { prompt_id: promptId } });
+      }
     });
     row.appendChild(dieEl);
   }
