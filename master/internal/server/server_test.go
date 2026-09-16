@@ -811,6 +811,82 @@ func TestServe_NarrativePlayerInput_RendersAndBroadcastsBubble(t *testing.T) {
 	}
 }
 
+// TestServe_NarrativePlayerInput_BroadcastsDmThinkingIndicatorAfterBubble
+// covers a live-reported UX gap, not a mechanical bug: a player reported
+// "a really long pause" before the DM's slow-pass reply with no
+// indication anything was happening, which reads as Master having
+// frozen against a slow local LLM. narrative.dm_thinking is Master's
+// fix — broadcast to everyone in the campaign (not just the acting
+// player), but only once dmThinkingIndicatorDelay has actually elapsed
+// with the slow pass still running (see
+// sendDmThinkingIndicatorAfterDelay's own doc comment for why: so an
+// ordinary fast completion never flashes it). The fake LLM's first
+// slow-pass call (call index 1 — call 0 is the fast pass's own
+// synchronous render, already done before the slow pass even launches)
+// deliberately sleeps well past that delay so this test can observe the
+// indicator actually firing, without slowing down every other test that
+// touches narrative.player_input — see that constant's own doc comment
+// for why none of them needed to change at all.
+func TestServe_NarrativePlayerInput_BroadcastsDmThinkingIndicatorAfterBubble(t *testing.T) {
+	fake := &fakeLLMProvider{respondFunc: func(callIndex int, _ llm.CompletionRequest) (llm.CompletionResponse, error) {
+		if callIndex == 1 {
+			time.Sleep(2 * time.Second)
+		}
+		return llm.CompletionResponse{Text: "Player-A draws a sword."}, nil
+	}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := httptest.NewServer(server.New(logger, nil, fake, "test-model", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, session.NewHub()).Handler())
+	defer ts.Close()
+
+	a := dialAndJoin(t, ts, "campaign-dm-thinking", "player-a")
+	defer a.CloseNow()
+	b := dialAndJoin(t, ts, "campaign-dm-thinking", "player-b")
+	defer b.CloseNow()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := protocol.NarrativePlayerInputMessage{
+		Envelope: protocol.Envelope{
+			ProtocolVersion: protocol.CurrentProtocolVersion,
+			MessageID:       "input-thinking-1",
+			Timestamp:       time.Now().UTC(),
+			SenderID:        "player-a",
+			CampaignID:      "campaign-dm-thinking",
+			Type:            protocol.MessageTypeNarrativePlayerInput,
+		},
+		Payload: protocol.NarrativePlayerInputPayload{
+			CharacterID: "char-a",
+			Text:        "I draw my sword.",
+			Source:      protocol.NarrativeInputSourceTyped,
+		},
+	}
+	if err := wsjson.Write(ctx, a, input); err != nil {
+		t.Fatalf("Write(narrative.player_input) error = %v", err)
+	}
+
+	for name, conn := range map[string]*websocket.Conn{"player-a (sender)": a, "player-b (spectator)": b} {
+		var bubble protocol.NarrativePlayerBubbleMessage
+		if err := wsjson.Read(ctx, conn, &bubble); err != nil {
+			t.Fatalf("%s: Read(narrative.player_bubble) error = %v", name, err)
+		}
+
+		var thinking protocol.NarrativeDmThinkingMessage
+		if err := wsjson.Read(ctx, conn, &thinking); err != nil {
+			t.Fatalf("%s: Read(narrative.dm_thinking) error = %v", name, err)
+		}
+		if thinking.Type != protocol.MessageTypeNarrativeDmThinking {
+			t.Errorf("%s: Type = %q, want %q", name, thinking.Type, protocol.MessageTypeNarrativeDmThinking)
+		}
+		if thinking.Payload.Text == "" {
+			t.Errorf("%s: Payload.Text is empty, want a non-empty display string", name)
+		}
+		if thinking.Payload.InReplyToMessageID != input.MessageID {
+			t.Errorf("%s: Payload.InReplyToMessageID = %q, want %q", name, thinking.Payload.InReplyToMessageID, input.MessageID)
+		}
+	}
+}
+
 // TestServe_NarrativePlayerInput_FastPass_IncludesCharacterName is the
 // direct regression test for a live-observed bug: with no character name
 // in the fast pass's own prompt, the model had nothing to call the

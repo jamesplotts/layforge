@@ -167,6 +167,17 @@ const el = {
 
 // --- Tabs ---
 
+// POST_RESTART_TAB_KEY is a one-shot sessionStorage flag: set right
+// before a System-tab "Save & Restart" reloads the page (see
+// el.systemSaveRestart's handler and pollUntilBackUpThenReload), read
+// and immediately cleared by the page's own startup tab-selection below.
+// sessionStorage (not a URL param or localStorage) is the right tool
+// here specifically because it survives a plain location.reload() but
+// nothing longer-lived — an operator manually reloading the admin page
+// later should land back on the ordinary default (Session), not get
+// stuck on Campaign forever from one old restart.
+const POST_RESTART_TAB_KEY = "layforge-admin-post-restart-tab";
+
 for (const button of el.tabButtons) {
   button.addEventListener("click", () => selectTab(button.dataset.tab));
 }
@@ -1345,6 +1356,15 @@ el.systemSaveRestart.addEventListener("click", async () => {
   el.restartBanner.hidden = false;
   el.systemSave.disabled = true;
   el.systemSaveRestart.disabled = true;
+  // The next thing worth doing once new System-tab settings have taken
+  // effect is picking/installing a campaign, not re-reading Session
+  // (the ordinary default) — see POST_RESTART_TAB_KEY's own doc comment.
+  try {
+    sessionStorage.setItem(POST_RESTART_TAB_KEY, "campaign");
+  } catch {
+    // Private-browsing/storage-disabled edge case — worst case the
+    // reload just falls back to the ordinary default tab.
+  }
   pollUntilBackUpThenReload();
 });
 
@@ -1417,7 +1437,19 @@ el.termsModalAgree.addEventListener("click", async () => {
 
 loadTerms();
 loadSystemSettings();
-// Session is the default tab; load the campaign list first so its
-// active-campaign dropdown is populated, then kick off the tab (which
-// starts the 5s poll).
-loadCampaignList().then(() => selectTab("session"));
+// Session is the default tab — except right after a System-tab "Save &
+// Restart" reload, which opens straight to Campaign instead (see
+// POST_RESTART_TAB_KEY's own doc comment). Either way, load the
+// campaign list first so its active-campaign dropdown is populated
+// before the tab (which starts the 5s poll) actually opens.
+loadCampaignList().then(() => {
+  let postRestartTab = null;
+  try {
+    postRestartTab = sessionStorage.getItem(POST_RESTART_TAB_KEY);
+    sessionStorage.removeItem(POST_RESTART_TAB_KEY);
+  } catch {
+    // Private-browsing/storage-disabled edge case — falls through to
+    // the ordinary default below.
+  }
+  selectTab(postRestartTab || "session");
+});

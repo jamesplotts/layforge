@@ -267,6 +267,28 @@ type NarrativePlayerBubblePayload struct {
 // NarrativePlayerBubbleMessage is a narrative.player_bubble Message.
 type NarrativePlayerBubbleMessage = Message[NarrativePlayerBubblePayload]
 
+// NarrativeDmThinkingPayload is the payload of a narrative.dm_thinking
+// message: a transient "the DM is working on a reply" indicator,
+// broadcast to the whole campaign the moment Master launches the DM slow
+// pass (design doc §8), so a real, sometimes multi-minute wait against a
+// slow local LLM doesn't read as a frozen game to anyone watching, not
+// just the acting player. Text carries the actual display string
+// server-side (never hardcoded client-side) so a future variety of
+// phrasing needs no client redeploy — the same "Master computes, client
+// displays" split as every other narration text in this protocol.
+type NarrativeDmThinkingPayload struct {
+	Text string `json:"text"`
+	// InReplyToMessageID is the narrative.player_input this slow pass is
+	// reacting to — lets a client clear the right indicator (and only
+	// that one) once the matching client.display or system.error
+	// arrives, the same correlation system.error's own field already
+	// uses.
+	InReplyToMessageID string `json:"in_reply_to_message_id,omitempty"`
+}
+
+// NarrativeDmThinkingMessage is a narrative.dm_thinking Message.
+type NarrativeDmThinkingMessage = Message[NarrativeDmThinkingPayload]
+
 // CharacterUploadPayload is the payload of a character.upload message: a
 // player uploading a character whose JSON conforms to the active system
 // engine's schema (design doc §6.1, §9.4). See protocol/asyncapi.yaml

@@ -683,6 +683,9 @@ function handleMessage(msg) {
     case "narrative.player_bubble":
       onNarrativeBubble(msg);
       break;
+    case "narrative.dm_thinking":
+      appendDmThinkingBubble(msg.payload || {});
+      break;
     case "safety.flag_broadcast":
       appendSafetyBanner(msg.payload ? msg.payload.topic : "");
       break;
@@ -699,6 +702,7 @@ function handleMessage(msg) {
       onCharacterStateResponse(msg);
       break;
     case "client.display":
+      clearDmThinkingBubble(msg.payload && msg.payload.in_reply_to_message_id);
       appendDmBubble(msg.payload ? msg.payload.text : "");
       break;
     case "tool.result":
@@ -847,6 +851,14 @@ function onSystemError(msg) {
   if (inReplyTo && inReplyTo === state.pendingInputMessageId) {
     clearPendingBubble();
   }
+  // sendSlowPassFailureNotice (server.go) is this system.error — a
+  // slow-pass turn that produced no usable narration. Only the acting
+  // player ever receives it (deliberately private, see that function's
+  // own doc comment), so this is the one path where clearing the
+  // dm_thinking indicator can't rely on client.display ever arriving;
+  // everyone else at the table falls back to appendDmThinkingBubble's
+  // own safety timeout instead.
+  clearDmThinkingBubble(inReplyTo);
   // A character-creation failure (e.g. the chosen path needs a system
   // engine the Host hasn't configured) deletes the session server-side
   // and disables the prompt's buttons — leaving the player with no way
@@ -1761,6 +1773,46 @@ function appendBubble(characterId, text) {
 function appendDmBubble(text) {
   el.log.appendChild(dmBubbleEl(text));
   el.log.scrollTop = el.log.scrollHeight;
+}
+
+// appendDmThinkingBubble renders narrative.dm_thinking
+// (internal/server/dm_slow_pass.go's sendDmThinkingIndicator) — a
+// transient "the DM is working on a reply" bubble shown to the whole
+// table the moment the slow pass launches, so a real, sometimes
+// multi-minute wait against a slow local LLM doesn't read as a frozen
+// game. Tagged with the player_input message_id it's replying to
+// (dataset.inReplyTo) so clearDmThinkingBubble removes only the right
+// one, leaving a different, still-in-flight turn's own indicator alone.
+function appendDmThinkingBubble(payload) {
+  const text = payload.text || "The DM is pondering the scene.";
+  const inReplyTo = payload.in_reply_to_message_id || "";
+  const bubble = dmBubbleEl(text);
+  bubble.classList.add("dm-thinking");
+  bubble.dataset.inReplyTo = inReplyTo;
+  el.log.appendChild(bubble);
+  el.log.scrollTop = el.log.scrollHeight;
+
+  // Safety net for a viewer who was never going to receive a matching
+  // clear message at all — a spectator watching someone else's turn
+  // fail: sendSlowPassFailureNotice (server.go) is private to the
+  // acting player only, deliberately (see its own doc comment), so a
+  // spectator's copy of this bubble would otherwise sit in the log
+  // forever. mechanicsPassTimeout (180s) + narrationPassTimeout (90s)
+  // bounds how long a real slow pass can legitimately run; double that
+  // with margin before giving up on it client-side.
+  setTimeout(() => clearDmThinkingBubble(inReplyTo), 300000);
+}
+
+// clearDmThinkingBubble removes the dm_thinking bubble(s) tagged with
+// inReplyTo. A falsy inReplyTo clears every one currently shown — a
+// defensive fallback, not the expected path, since every real
+// narrative.dm_thinking carries one.
+function clearDmThinkingBubble(inReplyTo) {
+  el.log.querySelectorAll(".dm-thinking").forEach((bubble) => {
+    if (!inReplyTo || bubble.dataset.inReplyTo === inReplyTo) {
+      bubble.remove();
+    }
+  });
 }
 
 // TOOL_FLAVOR_CATEGORY groups every DM tool name (design doc §8,

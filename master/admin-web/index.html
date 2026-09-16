@@ -20,11 +20,17 @@
        prerequisite everything else on this panel is moot without (a
        real self-hoster's own first-use feedback — Campaign/Security/
        Pregens/Character Review all assume a working AI DM already
-       exists). -->
+       exists). Campaign is second (installing/configuring the pack a
+       Session then picks from), Session third — it still opens by
+       default (the "active" class below, and app.js's own default
+       selectTab("session")) once those two are already set up; a
+       System-tab "Save & Restart" instead reopens straight to Campaign
+       after the reload, since that's the very next thing worth doing
+       once new settings have taken effect. -->
   <nav class="tabs" role="tablist">
-    <button class="tab-button active" data-tab="session" type="button" role="tab">Session</button>
     <button class="tab-button" data-tab="system" type="button" role="tab">System</button>
     <button class="tab-button" data-tab="campaign" type="button" role="tab">Campaign</button>
+    <button class="tab-button active" data-tab="session" type="button" role="tab">Session</button>
     <button class="tab-button" data-tab="security" type="button" role="tab">Security</button>
     <button class="tab-button" data-tab="pregens" type="button" role="tab">Pregens</button>
     <button class="tab-button" data-tab="characters" type="button" role="tab">Character Review</button>

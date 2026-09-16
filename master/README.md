@@ -2682,6 +2682,43 @@ a new regression test using a real authenticated test connection (the
 existing PvP-gate table tests all use unauthenticated ones, where
 `actingSender` is a no-op, so none of them could have caught this).
 
+There's now a "the DM is working on it" cue for the slow pass's real,
+sometimes multi-minute latency — a live report described "a really long
+pause" with no on-screen indication anything was happening, easy to
+mistake for Master having frozen, worse still when the pause covers a
+turn with several sequential tool calls (design doc §8's loop) each
+needing their own model round trip. `renderPlayerBubble` now launches
+the slow pass alongside a delayed broadcast of a new
+`narrative.dm_thinking` message ("The DM is pondering the scene.") to
+the whole campaign, not just the acting player. Deliberately delayed
+(`dmThinkingIndicatorDelay`, 1.5s), not sent the instant the pass
+launches: a `done` channel closed when the slow pass finishes lets the
+delayed send cancel itself entirely if the turn was already fast enough
+that the indicator would only flash and disappear — a warm/capable LLM
+never shows it at all, and not one of this repo's own near-instant test
+fakes does either, so the entire existing `narrative.player_bubble` →
+`tool.result`-ordered test suite needed zero changes. The client clears
+the bubble it renders once the matching `client.display` or
+`system.error` (by `in_reply_to_message_id`) arrives, with its own
+5-minute safety timeout for a spectator who was never going to receive
+either (a slow-pass failure notice is deliberately private to the acting
+player only). Not persisted via `recordEvent` — it's UI chrome for an
+in-progress wait, not a game event worth replaying through
+`log.history_request`.
+
+Reordered the admin panel's tabs — **System, Campaign, Session**, then
+Security/Pregens/Character Review unchanged — matching this file's own
+long-standing "System first, not last" rationale (see `index.html`'s
+top-of-nav comment) that the actual markup had drifted from (Session had
+ended up first). Session still opens by default once a Host is already
+set up, but a System tab **Save & Restart** now reopens straight to
+Campaign after its reload instead — the next thing actually worth doing
+once new settings have taken effect — via a one-shot
+`sessionStorage` flag (`POST_RESTART_TAB_KEY`) set right before the
+reload and consumed (and cleared) by the page's own startup tab
+selection, so a later, ordinary manual reload still lands on Session
+like always.
+
 ## Layout
 
 ```

@@ -19,16 +19,30 @@ type MessageType string
 // Master implements more of it; an unrecognized type on the wire is
 // rejected by IsValid, not silently accepted.
 const (
-	MessageTypeUnspecified               MessageType = ""
-	MessageTypeSystemConnect             MessageType = "system.connect"
-	MessageTypeSystemSessionState        MessageType = "system.session_state"
-	MessageTypeSystemError               MessageType = "system.error"
-	MessageTypeSafetyFlag                MessageType = "safety.flag"
-	MessageTypeSafetyFlagBroadcast       MessageType = "safety.flag_broadcast"
-	MessageTypeLogHistoryRequest         MessageType = "log.history_request"
-	MessageTypeLogHistoryResponse        MessageType = "log.history_response"
-	MessageTypeNarrativePlayerInput      MessageType = "narrative.player_input"
-	MessageTypeNarrativePlayerBubble     MessageType = "narrative.player_bubble"
+	MessageTypeUnspecified           MessageType = ""
+	MessageTypeSystemConnect         MessageType = "system.connect"
+	MessageTypeSystemSessionState    MessageType = "system.session_state"
+	MessageTypeSystemError           MessageType = "system.error"
+	MessageTypeSafetyFlag            MessageType = "safety.flag"
+	MessageTypeSafetyFlagBroadcast   MessageType = "safety.flag_broadcast"
+	MessageTypeLogHistoryRequest     MessageType = "log.history_request"
+	MessageTypeLogHistoryResponse    MessageType = "log.history_response"
+	MessageTypeNarrativePlayerInput  MessageType = "narrative.player_input"
+	MessageTypeNarrativePlayerBubble MessageType = "narrative.player_bubble"
+	// MessageTypeNarrativeDmThinking is a transient, campaign-wide
+	// broadcast Master sends the moment it launches the DM slow pass
+	// (design doc §8's tool-use loop, internal/server/dm_slow_pass.go)
+	// — never persisted via recordEvent, since it's UI chrome for an
+	// in-progress wait, not a game event worth replaying through
+	// log.history_response. It exists so a slow local LLM's real,
+	// sometimes multi-minute latency (a cold model, several sequential
+	// tool-call round trips) doesn't read as Master having frozen —
+	// confirmed live: a player reported "a really long pause" with no
+	// on-screen indication anything was happening. The client clears it
+	// once the matching client.display/system.error (by
+	// in_reply_to_message_id) arrives, or after its own safety timeout —
+	// see web/app.js's appendDmThinkingBubble.
+	MessageTypeNarrativeDmThinking       MessageType = "narrative.dm_thinking"
 	MessageTypeCharacterUpload           MessageType = "character.upload"
 	MessageTypeCharacterValidationResult MessageType = "character.validation_result"
 	MessageTypeRollCheckRequest          MessageType = "roll.check_request"
@@ -95,6 +109,7 @@ func (t MessageType) IsValid() bool {
 		MessageTypeSafetyFlag, MessageTypeSafetyFlagBroadcast,
 		MessageTypeLogHistoryRequest, MessageTypeLogHistoryResponse,
 		MessageTypeNarrativePlayerInput, MessageTypeNarrativePlayerBubble,
+		MessageTypeNarrativeDmThinking,
 		MessageTypeCharacterUpload, MessageTypeCharacterValidationResult,
 		MessageTypeRollCheckRequest,
 		MessageTypeCharacterSchemaRequest, MessageTypeCharacterSchemaResponse,

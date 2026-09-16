@@ -416,6 +416,23 @@ button.secondary {
   color: var(--bubble-dm-who);
 }
 
+/* narrative.dm_thinking — a transient "still working on it" indicator
+   shown while the slow pass runs (design doc §8's tool-use loop can take
+   a while against a slow local model). Italic and softened, like
+   .bubble.pending, so it reads as provisional chrome, not a real DM
+   line; the gentle pulse is the only motion in an otherwise static log,
+   which is the point — it's the cue that something is still happening. */
+.bubble.dm-thinking .text {
+  font-style: italic;
+  opacity: 0.7;
+  animation: dm-thinking-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dm-thinking-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.9; }
+}
+
 .tool-result-note {
   font-style: normal;
   align-self: center;

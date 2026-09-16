@@ -304,6 +304,18 @@ GPU resources held — an idle/ghost/already-revealed die is never more
 than a static image. Verified against a 48-die stress run (double the
 worst realistic in-session count) with zero contexts leaked.
 
+There's now an italic, gently-pulsing "The DM is pondering the scene."
+bubble (`.dm-thinking`, `appendDmThinkingBubble`/`clearDmThinkingBubble`)
+for the slow pass's own real latency — Master only actually sends the
+underlying `narrative.dm_thinking` broadcast once a short delay has
+passed with the pass still running, so a fast reply never flashes it (see
+`master/README.md`'s own writeup for why). Tagged with the triggering
+`narrative.player_input`'s `message_id` so the right one clears once the
+matching `client.display` or `system.error` arrives; a spectator who was
+never going to receive either (a slow-pass failure notice is private to
+the acting player only) falls back to the bubble's own 5-minute
+`setTimeout` instead of it sitting in the log forever.
+
 ## Running
 
 From `master/`:

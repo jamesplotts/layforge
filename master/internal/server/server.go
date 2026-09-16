@@ -917,7 +917,19 @@ func (s *Server) renderPlayerBubble(ctx context.Context, conn *websocket.Conn, c
 		return err
 	}
 
-	go s.runSlowPass(campaignID, input)
+	// slowPassDone lets sendDmThinkingIndicatorAfterDelay know the moment
+	// the slow pass finishes, however it finishes, so a fast completion
+	// (a warm LLM, or any test fake) never flashes the "still working on
+	// it" indicator at all — see that function's own doc comment. This
+	// wrapping goroutine's only job is that close(); runSlowPass still
+	// runs on its own goroutine underneath, recovering its own panics
+	// exactly as before.
+	slowPassDone := make(chan struct{})
+	go func() {
+		defer close(slowPassDone)
+		s.runSlowPass(campaignID, input)
+	}()
+	go s.sendDmThinkingIndicatorAfterDelay(campaignID, input.MessageID, slowPassDone)
 	return nil
 }
 

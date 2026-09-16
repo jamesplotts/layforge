@@ -135,6 +135,68 @@ const narrationPassMaxToolIterations = 5
 const mechanicsPassTimeout = 180 * time.Second
 const narrationPassTimeout = 90 * time.Second
 
+// dmThinkingText is narrative.dm_thinking's display string (see that
+// payload's own doc comment for why it's owned here, server-side,
+// rather than hardcoded into the client). A single fixed phrase, not a
+// randomized set like TOOL_FLAVOR_PHRASES (app.js) — this indicator is
+// shown once per turn and gone as soon as real content arrives, so
+// repetition within one session is far less noticeable than the
+// per-tool-call flavor notes those phrases exist to vary.
+const dmThinkingText = "The DM is pondering the scene."
+
+// dmThinkingIndicatorDelay is how long sendDmThinkingIndicatorAfterDelay
+// waits, after the slow pass launches, before actually broadcasting
+// narrative.dm_thinking. Long enough that an ordinary fast completion —
+// a warm, capable LLM, or any of this package's own near-instant test
+// fakes — finishes and closes its done channel first, so the indicator
+// never even flashes for those; short enough that a genuinely slow turn
+// against a cold/self-hosted model still shows it well before a player
+// starts wondering if the game froze. This also happens to be exactly
+// what keeps the existing narrative.player_bubble/tool.result-ordered
+// test suite unaffected without touching any of it: no automated test's
+// fake LLM takes anywhere near this long to answer.
+const dmThinkingIndicatorDelay = 1500 * time.Millisecond
+
+// sendDmThinkingIndicatorAfterDelay waits up to dmThinkingIndicatorDelay
+// for done to close — meaning the slow pass this indicator would be
+// covering for has already finished, one way or another — before
+// broadcasting narrative.dm_thinking. done closing first means the
+// broadcast is skipped entirely: the turn was fast enough that showing
+// and immediately clearing the indicator would only be visual noise.
+// Meant to be called via `go` right after launching runSlowPass in its
+// own goroutine — see renderPlayerBubble.
+func (s *Server) sendDmThinkingIndicatorAfterDelay(campaignID, inReplyTo string, done <-chan struct{}) {
+	select {
+	case <-done:
+		return
+	case <-time.After(dmThinkingIndicatorDelay):
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s.sendDmThinkingIndicator(ctx, campaignID, inReplyTo)
+}
+
+// sendDmThinkingIndicator broadcasts narrative.dm_thinking to every
+// client in campaignID — see that message's own doc comment for why
+// this exists and why it's deliberately not recordEvent'd, and
+// sendDmThinkingIndicatorAfterDelay above for why this is never called
+// immediately. Best-effort: a failure here only means players go
+// without the "the DM is working on it" cue for this one turn, never
+// something worth failing the turn over.
+func (s *Server) sendDmThinkingIndicator(ctx context.Context, campaignID, inReplyTo string) {
+	msg, err := newMessage(campaignID, protocol.MessageTypeNarrativeDmThinking, protocol.NarrativeDmThinkingPayload{
+		Text:               dmThinkingText,
+		InReplyToMessageID: inReplyTo,
+	})
+	if err != nil {
+		s.logger.Warn("failed to build dm_thinking indicator", "error", err, "campaign_id", campaignID)
+		return
+	}
+	if err := broadcastMessage(s, msg); err != nil {
+		s.logger.Warn("failed to broadcast dm_thinking indicator", "error", err, "campaign_id", campaignID)
+	}
+}
+
 // runSlowPass runs design doc §7's slow pass for input: build the
 // shared grounding context once, run the mechanics pass, then the
 // narration pass, then broadcast the result as client.display. Meant to
