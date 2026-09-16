@@ -668,6 +668,31 @@ func (s *Server) dispatch(ctx context.Context, conn *websocket.Conn, campaignID 
 		if err := json.Unmarshal(data, &input); err != nil {
 			return s.sendError(ctx, conn, campaignID, envelope.MessageID, fmt.Errorf("malformed narrative.player_input payload: %w", err))
 		}
+		// A real, live-observed bug this closes: every other case in this
+		// switch resolves the acting identity through actingSender(cs,
+		// envelope.SenderID) before using it for anything — this was the
+		// one case that didn't, so input.SenderID (and everything
+		// downstream that reads it: renderPlayerBubble's slow pass,
+		// runSlowPass's actingSenderID, every DM tool's pvpGateBlocked
+		// check) carried whatever raw sender_id the client itself
+		// happened to send, not the connection's authenticated account —
+		// so for any Discord-authenticated player, source.OwnerID
+		// (store.Character.OwnerID, set from the authenticated account at
+		// save time) could never equal actingSenderID, and
+		// pvpGateBlocked's "source.OwnerID == actingSenderID" self-owned
+		// exemption silently never matched. A player spending their own
+		// gold (spend_currency, no recipient at all) or giving it to an
+		// NPC (transfer_currency) was rejected as "PvP blocked" every
+		// time, confirmed live: three separate DM tool calls (two
+		// transfer_currency, one spend_currency retry) all failed with
+		// reason_code=pvp_blocked for a player narrating "Rog gives
+		// Sister Miriam three gold" — the DM's own narration described the
+		// coin changing hands while the mechanical deduction silently
+		// never happened. Same fix shape as actingSender's own doc
+		// comment: resolve once, here, before this value is trusted for
+		// anything (including the event log below, which should record
+		// who actually acted, not an easily-forged client string).
+		input.SenderID = actingSender(cs, envelope.SenderID)
 		recordEvent(ctx, s, input)
 		return s.renderPlayerBubble(ctx, conn, campaignID, input)
 	case protocol.MessageTypeCharacterUpload:

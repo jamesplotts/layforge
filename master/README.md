@@ -2658,6 +2658,30 @@ already has both the slot and the real `IItem` in hand — the same
 rename: the existing uniform-scalar-array table renderer already turns
 readable `{slotName, itemName}` rows into a real table for free.
 
+Fixed a real, systemic PvP-gate bug affecting every Discord-authenticated
+player: `narrative.player_input`'s dispatch case in `server.go` was the
+one case in the whole message switch that never resolved the acting
+identity through `actingSender(cs, envelope.SenderID)` before trusting
+it — every sibling case already did. So `input.SenderID` (and everything
+downstream that reads it — `renderPlayerBubble`'s slow pass,
+`runSlowPass`'s `actingSenderID`, every DM tool's `pvpGateBlocked` check)
+carried whatever raw `sender_id` the client itself happened to send
+(just a locally-typed value, not an account id), never the connection's
+real authenticated account. `pvpGateBlocked`'s "`source.OwnerID ==
+actingSenderID`" self-owned exemption could therefore never match for an
+authenticated player, so spending or giving away one's own character's
+own gold (`spend_currency`, `transfer_currency`) was wrongly rejected as
+PvP-blocked, every time. Confirmed live: `reason_code=pvp_blocked` for a
+player narrating "Rog gives Sister Miriam three gold" — the DM's own
+narration described the coin changing hands while the mechanical
+deduction silently never happened, and the character sheet's gold total
+never moved. Fixed by resolving `input.SenderID` through `actingSender`
+right after unmarshaling, same as every other case — see
+`TestServe_NarrativePlayerInput_SlowPass_SpendCurrency_AuthenticatedConnection_SelfOwnedNotGatedByForgedSenderID`,
+a new regression test using a real authenticated test connection (the
+existing PvP-gate table tests all use unauthenticated ones, where
+`actingSender` is a no-op, so none of them could have caught this).
+
 ## Layout
 
 ```
