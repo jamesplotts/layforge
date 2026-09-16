@@ -500,8 +500,8 @@ button.secondary {
 
 .roll-die {
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 56px;
+  height: 56px;
   padding: 0;
   border: none;
   background: none;
@@ -513,101 +513,58 @@ button.secondary {
   cursor: pointer;
 }
 
-.roll-die.interactive:hover .roll-die-svg {
-  filter: brightness(1.08);
+.roll-die.interactive:hover .roll-die-visual {
+  filter: brightness(1.12);
 }
 
-.roll-die.interactive:hover .roll-die-outline {
-  stroke: var(--brass-dark);
-}
-
-.roll-die-svg {
+/* .roll-die-visual is the die's actual rendering — a captured WebGL
+   frame shown as a plain <img> while idle/revealed (no live GPU context
+   held — see dice3d.js's renderer-pool comment), swapped for a live
+   <canvas> only for the few hundred ms a die is actively tumbling. Same
+   slot, same sizing, regardless of which one currently occupies it. */
+.roll-die-visual {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
-/* .roll-die-outline is each die's outer silhouette — the element the
-   ghost/revealed/dropped/hover states below target — same role the old
-   single generic <polygon> played, before each die size got its own
-   shape + facet detail (see the shape builders above buildDieEl). */
-.roll-die-outline {
-  fill: var(--parchment);
-  stroke: var(--brass);
-  stroke-width: 2;
+/* Fallback for the rare case dice3d.js's renderer pool is fully checked
+   out when a die is first created (see acquireRenderer) — a plain themed
+   placeholder rather than nothing, so a die slot is never blank. */
+.roll-die-visual-placeholder {
+  background: var(--parchment);
+  border: 2px solid var(--brass);
 }
 
-/* Faceted shading: die-shape-specific polygons layered over the outline
-   plus their seam lines, for a gem-cut look. Shade tones reuse the
-   app's existing parchment/brass tokens (light -> dark) rather than
-   introducing per-die hardcoded colors, so every die size still sits in
-   this app's established palette. */
-.roll-die-facet {
-  stroke: none;
+/* Ghost dice (a spectator's not-yet-revealed die) read as present but
+   held back — the shape itself was never secret, only the result is, so
+   this just keeps the hidden state visually calmer than a fully-lit
+   revealed die rather than hiding the die itself. */
+.roll-die.ghost .roll-die-visual {
+  opacity: 0.7;
+  filter: saturate(0.75);
 }
 
-.roll-die-facet-a {
-  fill: var(--parchment-hi);
-}
-
-.roll-die-facet-b {
-  fill: var(--parchment);
-}
-
-.roll-die-facet-c {
-  fill: #b9a06e; /* fallback for browsers without color-mix() */
-  fill: color-mix(in srgb, var(--parchment) 55%, var(--brass-dark) 45%);
-}
-
-.roll-die-facet-line {
-  stroke: var(--brass-dark);
-  stroke-width: 1;
-  opacity: 0.55;
-}
-
-.roll-die-gloss {
-  pointer-events: none;
-  mix-blend-mode: screen;
-}
-
-/* Ghost dice (a spectator's not-yet-revealed die) stay a clean dashed
-   silhouette with no facet detail — a hidden die shouldn't look any more
-   "decided" than an empty outline (the shape itself was never secret,
-   only the result is; this just keeps the hidden state visually calm). */
-.roll-die.ghost .roll-die-outline {
-  fill: rgba(239, 225, 196, 0.35);
-  stroke: var(--parchment-line);
-  stroke-dasharray: 3 3;
-}
-
-.roll-die.ghost .roll-die-facet,
-.roll-die.ghost .roll-die-facet-line,
-.roll-die.ghost .roll-die-gloss {
-  display: none;
-}
-
-.roll-die.revealed .roll-die-outline {
-  fill: var(--parchment-hi);
-  stroke: var(--brass);
+.roll-die.revealed .roll-die-visual {
+  opacity: 1;
+  filter: none;
 }
 
 /* The one die per 4d6-drop-lowest set excluded from its total — shown,
    not hidden (the player should see what was rolled and dropped), the
    die itself dimmed with its face struck through. The dimming is
-   deliberately scoped to .roll-die-svg only, not the whole .roll-die —
+   deliberately scoped to .roll-die-visual only, not the whole .roll-die —
    an earlier version dimmed the face text too (opacity on the whole
    element, plus the already-muted --parchment-ink-dim color,
    compounding), which a live player misread ("4" for "1") because the
    number itself got too faint to read reliably. The strikethrough alone
    communicates "excluded from the total"; the number stays at full
    contrast so what was actually rolled is never in doubt. */
-.roll-die.dropped .roll-die-svg {
+.roll-die.dropped .roll-die-visual {
   opacity: 0.55;
-}
-
-.roll-die.dropped .roll-die-outline {
-  stroke: var(--parchment-line);
 }
 
 .roll-die.dropped .roll-die-face {
@@ -623,24 +580,19 @@ button.secondary {
   width: 100%;
   height: 100%;
   font-weight: 700;
-  font-size: 15px;
+  font-size: 17px;
   color: var(--parchment-ink);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 4px rgba(243, 233, 216, 0.5);
 }
 
-.roll-die.tumbling {
-  animation: roll-tumble 0.55s ease-in-out;
-}
-
-@keyframes roll-tumble {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  50% {
-    transform: rotate(200deg) scale(1.08);
-  }
-  100% {
-    transform: rotate(360deg) scale(1);
-  }
+/* .roll-die.tumbling no longer drives its own CSS transform animation —
+   dice3d.js's live WebGL canvas (physics-driven, contained to this
+   element's own bounds) is the entire visual motion now. The class stays
+   as pure state (guards re-clicking mid-tumble in app.js, and scopes the
+   placeholder/number-hidden styling below) rather than an animation
+   trigger. */
+.roll-die.tumbling .roll-die-face {
+  opacity: 0;
 }
 
 .roll-summary {

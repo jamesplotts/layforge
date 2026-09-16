@@ -264,17 +264,45 @@ this client needed no other changes, since the existing uniform-scalar-
 array table renderer (see the Ability Scores/Skills entry above) already
 renders the newly-readable data correctly once it's readable.
 
-The dice bubbles' SVG icons now look like the actual die shape being
-rolled, not a generic regular polygon that always read as a circle-ish
-blob regardless of size — d4 (tetrahedron), d6 (isometric cube), d8
-(octahedron), d10 (pentagonal trapezohedron), and d20 (icosahedron) each
-get their own silhouette plus faceted shading for a gem-cut look
-(`DIE_SHAPE_BUILDERS` in `app.js`, replacing the old `DIE_VERTEX_COUNTS`/
-`regularPolygonPoints`), reusing the app's existing `--parchment`/
-`--brass` theme tokens rather than per-die hardcoded colors. Also fixes
-a real display bug this surfaced: a physical d10 is printed 0-9, not
-1-10 — a server result of 10 on a d10 now shows as "0" on the revealed
-face; every other size still shows its literal number.
+The dice bubbles' SVG icons briefly looked like the actual die shape
+being rolled instead of a generic regular polygon — d4/d6/d8/d10/d20
+each got their own faceted silhouette (`DIE_SHAPE_BUILDERS` in
+`app.js`). **Superseded by the entry below** — SVG facets still didn't
+look as good as this app's original WebGL dice tray, so the tray's real
+rendering came back, just embedded per-die instead of in a separate
+tray. This entry's real, still-true fix: a physical d10 is printed 0-9,
+not 1-10 — a server result of 10 on a d10 shows as "0" on the revealed
+face; every other size shows its literal number. That mapping carried
+forward unchanged into the WebGL version below.
+
+There's also now a real WebGL die in every roll bubble (`dice3d.js`,
+new) — this app's original dice tray (a standalone WebGL/physics d20,
+removed earlier when dice moved into chat-log bubbles) is back, just
+rendered *inside* each small per-die bubble slot instead of a dedicated
+tray area, since the SVG dice that briefly replaced it didn't look as
+good. Real three.js primitive geometry per size (tetrahedron/box/
+octahedron/icosahedron, plus a hand-built pentagonal trapezohedron for
+d10 — three.js has no built-in for that shape), a physically-lit
+material, and a cannon-es-driven tumble — but contained entirely inside
+each die's own small physics arena, never simulating a die bouncing
+around the actual page. The revealed number stays a plain DOM text
+overlay (`.roll-die-face`, unchanged) rather than being baked into the
+3D mesh — deliberately, so the die can settle in any resting pose
+without needing to solve "orient the correct labeled face toward the
+camera" per shape, and so the number's legibility can never regress the
+way the SVG dropped-die dimming once did (a live "1" misread as "4" from
+compounding opacity — see `dice3d.js`'s number-overlay design comment).
+
+A chat log can accumulate far more dice than the old tray ever held at
+once — a full 4d6 ability-score sequence alone is 24 dice, plus every
+combat roll ever made stays in scrollback — and browsers cap concurrent
+WebGL contexts (commonly ~16). `dice3d.js` never gives a die a
+permanent context: only an actively-tumbling die borrows one from a
+small fixed pool (`MAX_LIVE_RENDERERS`, well under that cap) for its
+brief animation, then freezes to a plain captured-frame `<img>` with no
+GPU resources held — an idle/ghost/already-revealed die is never more
+than a static image. Verified against a 48-die stress run (double the
+worst realistic in-session count) with zero contexts leaked.
 
 ## Running
 
