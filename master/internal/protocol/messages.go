@@ -53,6 +53,18 @@ type SystemSessionStatePayload struct {
 	// signed in as. Omitted (nil) for an unauthenticated join — an open
 	// campaign or a room-password-only one.
 	Identity *SessionIdentity `json:"identity,omitempty"`
+	// ExistingCharacterID is set on a joined state when this connection's
+	// account/sender_id already owns a non-rejected character in this
+	// campaign (server.go's findOwnedCharacter) — the client should
+	// resume with this character (character.get/schema, no name prompt)
+	// instead of sending character.creation_start. Omitted when there is
+	// none, meaning this is a genuinely new player who still needs to
+	// create one. Fixes a live-reported bug: a fresh page load (e.g. a
+	// browser back-button navigation followed by logging back in) always
+	// looked like a brand-new join to the client on its own, so it
+	// restarted character creation even for an account that had already
+	// finished one.
+	ExistingCharacterID string `json:"existing_character_id,omitempty"`
 }
 
 // SessionIdentity is the verified account identity of an authenticated

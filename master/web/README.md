@@ -371,13 +371,14 @@ and point `-web-dir` at the copy instead.
   reference SDK against `protocol/asyncapi.yaml`; this predates that and
   has to be kept in sync with the protocol by hand (see
   `PROTOCOL_VERSION` in `app.js`).
-- **Rejoining makes a new character, not a reused one.** Real character
-  creation now exists (see above), but nothing yet remembers "this
-  sender_id already has a character in this campaign" — every join
-  starts the creation flow fresh and a rejoin makes a brand-new
-  character record rather than resuming the previous one. The character
-  *sheet* itself is still read-only, too (only a schema-driven *viewer*,
-  `character-sheet.js` — no per-field editing after creation).
+- **A rejoin mid-creation still starts over, not resumes.** A finished
+  character is now correctly resumed on rejoin (see above) — but an
+  in-progress creation session (picked "detailed roll," answered a few
+  questions, then disconnected before finishing) isn't persisted
+  anywhere durable, only in Master's in-memory `creationSessions` map, so
+  a reconnect before finishing still restarts creation from the top-level
+  choice. Narrower than the old "every rejoin restarts creation" gap,
+  but a real one until creation sessions themselves survive a reconnect.
 - **The character sheet is read-only** — no write-back, no editing;
   `character-sheet.js` only walks `properties`/`items`/`$ref`, not the
   full JSON Schema spec (no `oneOf`/`anyOf`/`patternProperties`/etc.),

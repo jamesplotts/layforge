@@ -673,7 +673,7 @@ function handleMessage(msg) {
           onReconnected();
         } else {
           state.hasJoinedOnce = true;
-          onJoined();
+          onJoined(msg.payload.existing_character_id || "");
         }
       }
       break;
@@ -759,7 +759,19 @@ function setChatHeader() {
     "LayForge: " + campaign + (state.discordName ? " - " + state.discordName : "");
 }
 
-function onJoined() {
+// onJoined runs once, on this connection's first "joined"
+// system.session_state (see handleMessage). existingCharacterId is set
+// when Master's own join-time lookup (server.go's findOwnedCharacter)
+// found a non-rejected character this account/sender_id already owns in
+// this campaign — resume it instead of starting character creation over.
+// Fixes a live-reported bug: a fresh page load (a browser back-button
+// navigation followed by logging back in) always looked like a
+// brand-new join to this client on its own, with no way to tell "I
+// already finished creating a character" apart from "I'm a new player"
+// — so it restarted character creation every time, on top of an
+// already-playable character, even though the chat history it also
+// fetches (below) still showed everything that came before.
+function onJoined(existingCharacterId) {
   state.joined = true;
   el.joinScreen.hidden = true;
   el.chatScreen.hidden = false;
@@ -769,6 +781,10 @@ function onJoined() {
   // — "where things stand now," the natural first page for a chat-style
   // scrollback, not the campaign's very first message.
   requestHistory({});
+  if (existingCharacterId) {
+    resumeCharacter(existingCharacterId);
+    return;
+  }
   // Character creation (design doc §9.4) starts by asking the player to
   // name their character — the first step now that the join screen no
   // longer collects a name. Submitting sends character.creation_start
@@ -1405,7 +1421,16 @@ function onCharacterValidationResult(msg) {
     appendErrorNote("Character setup failed.");
     return;
   }
-  state.rollCharacterId = payload.character_id;
+  resumeCharacter(payload.character_id);
+}
+
+// resumeCharacter adopts characterId as this connection's own character
+// — the shared tail of both a just-finished creation flow
+// (character.validation_result, above) and a rejoin that skipped
+// creation entirely because Master's own join-time lookup already found
+// this account's existing character (onJoined's existingCharacterId).
+function resumeCharacter(characterId) {
+  state.rollCharacterId = characterId;
   state.characterCreated = true;
 
   // Schema is engine-wide, not per-character — fetch it once and reuse
@@ -1438,6 +1463,18 @@ function onCharacterSchemaResponse(msg) {
 function onCharacterStateResponse(msg) {
   const payload = msg.payload || {};
   state.characterData = payload.character_data || null;
+  // A resumed character (onJoined's existingCharacterId — see its own
+  // doc comment) never goes through promptForCharacterName, so
+  // state.characterId is otherwise never set at all for one — leaving
+  // bubbleDisplayName with nothing to show for this player's own
+  // narrative.player_bubble "who" tag, forever, not just until this
+  // response arrives. The real engine name is authoritative here anyway
+  // (a detailed_roll character's engine-assigned name can differ from
+  // what was typed at creation), so just keep state.characterId in sync
+  // with it whenever real data comes back.
+  if (state.characterData && state.characterData.name) {
+    state.characterId = state.characterData.name;
+  }
   renderCharacterIdentity(state.characterData); // doesn't need the schema
   maybeRenderCharacterSheet();
 }

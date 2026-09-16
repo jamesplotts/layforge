@@ -482,7 +482,23 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 			errors.New(reason))
 	}
 
-	if err := s.sendSessionState(ctx, conn, campaignID, protocol.SessionStateJoined, identity); err != nil {
+	// A live-reported bug this closes: a browser back-button navigation
+	// back to the join screen, followed by logging back in, re-triggered
+	// character creation on top of a character this account had already
+	// finished — the client's own creation-start prompt has no way to
+	// know better on its own, since a fresh page load always looks like
+	// a first-ever join to it. Master does know better: it already has
+	// this account's/sender_id's characters on file, so it resolves this
+	// once, here, and hands the answer to the client on the very
+	// message that triggers its join-vs-reconnect branching, rather than
+	// leaving the client to guess or adding a second round trip that
+	// could race it.
+	existingCharacterID := ""
+	if existing, ok := s.findOwnedCharacter(ctx, campaignID, effectiveSender); ok {
+		existingCharacterID = existing.ID
+	}
+
+	if err := s.sendSessionState(ctx, conn, campaignID, protocol.SessionStateJoined, identity, existingCharacterID); err != nil {
 		return err
 	}
 
@@ -492,9 +508,11 @@ func (s *Server) handleConnection(ctx context.Context, conn *websocket.Conn) (er
 // sendSessionState sends a system.session_state message to conn. A
 // non-zero identity (an authenticated connection) is echoed on the
 // payload so the client can show who it is signed in as; it carries no
-// token or secret.
-func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, campaignID string, state protocol.SessionState, identity auth.Identity) error {
-	payload := protocol.SystemSessionStatePayload{State: state}
+// token or secret. existingCharacterID (see findOwnedCharacter) is
+// echoed as-is — "" for every state but Joined today, since only a join
+// needs to tell the client whether to skip character creation.
+func (s *Server) sendSessionState(ctx context.Context, conn *websocket.Conn, campaignID string, state protocol.SessionState, identity auth.Identity, existingCharacterID string) error {
+	payload := protocol.SystemSessionStatePayload{State: state, ExistingCharacterID: existingCharacterID}
 	if identity.Authenticated() {
 		payload.Identity = &protocol.SessionIdentity{
 			AccountID:   identity.AccountID,

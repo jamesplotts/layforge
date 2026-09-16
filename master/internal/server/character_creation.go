@@ -89,6 +89,49 @@ func (s *Server) deleteCreationSession(sessionID string) {
 	delete(s.creationSessions, sessionID)
 }
 
+// findOwnedCharacter returns the character in campaignID that a rejoin
+// under ownerID should resume, if any — the most recently created
+// non-Rejected one. Called at join time (server.go's handleConnection)
+// so Master, not the client, decides whether character.creation_start
+// is even needed — closing a live-reported bug where a fresh page load
+// (a browser back-button navigation followed by logging back in) always
+// looked like a first-ever join to the client on its own, restarting
+// character creation on top of a character this account had already
+// finished.
+//
+// Rejected is excluded deliberately: that status exists to let the
+// player try again, not to permanently block them behind a character
+// the Host/AI already turned down. PendingReview counts as "already
+// has one" just like Approved does — a still-under-review character is
+// still a real, resumable one, not a reason to start over.
+//
+// Multiple non-Rejected rows for the same owner shouldn't normally
+// happen, but ListCharacters makes no ordering guarantee (see
+// partyRosterContextText's own note) — so if it ever does, the most
+// recently created one wins, deterministically, rather than whatever
+// order the store happens to return.
+func (s *Server) findOwnedCharacter(ctx context.Context, campaignID, ownerID string) (store.Character, bool) {
+	if s.characters == nil || ownerID == "" {
+		return store.Character{}, false
+	}
+	characters, err := s.characters.ListCharacters(ctx, campaignID)
+	if err != nil {
+		return store.Character{}, false
+	}
+	var best store.Character
+	found := false
+	for _, c := range characters {
+		if c.OwnerID != ownerID || c.Status == store.CharacterStatusRejected {
+			continue
+		}
+		if !found || c.CreatedAt.After(best.CreatedAt) {
+			best = c
+			found = true
+		}
+	}
+	return best, found
+}
+
 // handleCreationStart implements character.creation_start (design doc
 // §9.4): the very first message a player sends after joining, in place
 // of the old auto-generated stopgap character. Always succeeds with

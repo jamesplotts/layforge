@@ -2736,6 +2736,31 @@ changes needed at all: `app.js`'s existing `narrative.dm_thinking`/
 `client.display` handling already applies uniformly regardless of what
 triggered either one.
 
+Fixed a real, live-reported bug: a browser back-button navigation to the
+join screen, followed by logging back in, kept the chat history but
+restarted character creation from scratch — even though the account had
+already finished one. The client's own `onJoined()` had no way to tell
+"I already have a character" apart from "I'm a new player": a fresh page
+load looks identical either way, so it always called
+`promptForCharacterName()`. Master, unlike the client, already knows —
+new `findOwnedCharacter` (`character_creation.go`) looks up whether this
+connection's account/`sender_id` already owns a non-`Rejected` character
+in this campaign (`Approved` and `PendingReview` both count as "already
+has one"; `Rejected` deliberately doesn't, so trying again still works),
+resolved once at join time and echoed on the very `system.session_state`
+that triggers the client's join-vs-reconnect branching —
+`SystemSessionStatePayload` gained an additive `ExistingCharacterID`
+field for this, so there's no extra round trip or raciness between "you
+joined" and "here's whether you need to create a character." The client
+resumes straight into the existing character (`character.get`/schema,
+same tail `character.validation_result` already used) instead of
+prompting for a name when this is set. **Known remaining gap**, narrower
+than before: an in-progress creation session (picked a path, answered a
+few questions, disconnected before finishing) still isn't persisted
+anywhere durable, so a reconnect mid-creation restarts from the
+top-level choice rather than resuming that in-flight conversation — see
+`web/README.md`'s Known Limitations.
+
 ## Layout
 
 ```
