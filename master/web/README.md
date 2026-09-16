@@ -276,7 +276,10 @@ face; every other size shows its literal number. That mapping carried
 forward unchanged into the WebGL version below.
 
 There's also now a real WebGL die in every roll bubble (`dice3d.js`,
-new) — this app's original dice tray (a standalone WebGL/physics d20,
+new) — **superseded by the entry below** (real mesh/texture assets
+replaced the primitive geometry, cannon-es physics is gone, and the DOM
+text overlay this paragraph describes was later removed entirely) — this
+app's original dice tray (a standalone WebGL/physics d20,
 removed earlier when dice moved into chat-log bubbles) is back, just
 rendered *inside* each small per-die bubble slot instead of a dedicated
 tray area, since the SVG dice that briefly replaced it didn't look as
@@ -303,6 +306,147 @@ brief animation, then freezes to a plain captured-frame `<img>` with no
 GPU resources held — an idle/ghost/already-revealed die is never more
 than a static image. Verified against a 48-die stress run (double the
 worst realistic in-session count) with zero contexts leaked.
+
+`dice3d.js`'s dice are now built from a real artist-made mesh + texture
+(the "rust" theme from [3d-dice/dice-themes](https://github.com/3d-dice/dice-themes),
+MIT licensed — see `vendor/README.md`) instead of three.js primitive
+geometry, and cannon-es physics is gone entirely. Two changes, requested
+together: the operator compared a screenshot of the old primitive dice
+against a professional dice-rendering library's own marketing shot and
+the gap was obvious (flat materials vs. real marbled/worn textures); and
+the operator explicitly doesn't need dice to tumble/bounce — "just having
+the great looking die spin in place would be enough" — so the old
+contained-physics-arena tumble is replaced by a scripted spin: a random
+start orientation, ease-out-cubic slerp to a resting orientation over
+`TUMBLE_DURATION_MS` (now 1200ms, up from 550, to fit a real "spin up
+then settle" feel) plus a decaying extra spin around a random axis so it
+reads as a genuine spin rather than a small reorientation. cannon-es is
+no longer imported by this file (confirmed nothing else in `master/web/`
+uses it either) — `vendor/cannon-es.js` stays vendored regardless, in
+case a future feature wants real physics again.
+
+The bigger change: **the DOM text overlay (`.roll-die-face`) is gone.**
+The operator's original ask kept it as a legibility safety net on top of
+the mesh; mid-implementation the operator changed that explicitly — the
+3D die's own settled orientation is now the *only* thing communicating a
+roll's result, no text layer backing it up. That raised the bar
+considerably on `dice3d.js`'s face-orientation math (`computeTargetQuaternion`
+and friends): given a rolled value, it has to land the die on the
+*correct* face, right-side up, every time, for every shape — not just
+"plausible." The theme's mesh JSON ships a `colliderFaceMap` (a low-poly
+proxy mesh's triangle-id → printed-value table) that answers "which
+direction does face N point"; the harder part was getting a reliable
+answer out of it. Three real bugs surfaced here — two caught during
+initial implementation, a third, more severe one caught during review of
+that work — worth recording all three in case this code gets touched
+again:
+
+- Averaging a collider triangle's three stored per-vertex normals (the
+  obvious way to get "this triangle's direction") is **not** a reliable
+  stand-in for that triangle's actual flat-face direction on these
+  particular meshes — confirmed by comparing against the triangle's own
+  geometric (position-only, cross-product) normal on every shape (up to
+  124° off on a d6). The fix: `geometricFaceNormal` computes the normal
+  straight from the triangle's own vertex positions and sign-corrects it
+  against the die's own center (every shape here is a convex solid
+  centered at its local origin, so "points away from center" is a
+  reliable, mesh-independent way to pick the right one of the two
+  possible cross-product signs) — never trusting either mesh's stored
+  `normals` attribute for this particular purpose again.
+- The azimuth (which way is "up" on the selected face, so the printed
+  glyph reads correctly rather than sideways/upside-down) comes from the
+  mesh's own precomputed per-vertex `tangents` attribute rather than
+  re-deriving tangent space from the matched triangle's own UV
+  coordinates — an earlier attempt at the latter was numerically unstable
+  because the matched triangle's UV footprint turned out to be a
+  near-degenerate sliver despite being a normal-sized triangle in 3D.
+- **The severe one, caught in review, not by the original implementation
+  pass**: aligning a target face's *outward* (away-from-center) normal to
+  the camera direction reliably landed the die on its *opposite* face
+  instead — for d6, a clean, total swap, every value, every time (asked
+  for 1, got 6; asked for 2, got 5; and so on). The original
+  implementation's own verification method — cropping the UV region the
+  *matched visual triangle* samples and checking what's painted there —
+  couldn't have caught this: that check validates `findBestVisualTriangle`
+  in isolation, never the actual camera-facing orientation the align
+  quaternion produces, so it stayed "verified" while every single die in
+  the app would have shown the wrong number. Caught instead by sampling
+  the real, rendered screen pixels at the exact point a player would
+  read (a `Raycaster` cast from the live camera through a die rendered
+  with the shipped code, its hit `uv` sampled against the real texture)
+  — the only check that reflects what actually reaches the screen.
+  Root cause: the collider mesh is a pick-only utility proxy nothing
+  ever renders (upstream only ever raycasts against it — see
+  `colliderFaceMap`'s own doc comment in `dice3d.js`), so its triangle
+  winding was never authored or checked for outward-facing consistency
+  the way the *visual* mesh's was — there was no reason for anyone to
+  have made that guarantee. The fix (negate that normal before aligning
+  to camera) was re-verified the same rigorous way, for every value of
+  every shape, not a sample — see `computeTargetQuaternion`'s own
+  comment in `dice3d.js`.
+
+With the severe bug fixed, d6's on-screen orientation was re-checked
+directly against real rendered screenshots (not texture-atlas crops,
+which — see above — don't reflect final screen orientation) at this
+module's actual production canvas size: every face reads correctly,
+right-side up, with only a small (10-30°), clearly legible tilt, no
+mirroring or 90°/180° confusion. d8/d10/d12/d20 were spot-checked the
+same way and look consistent with that, though not exhaustively
+re-verified face-by-face at full zoom the way d6 and the face-*selection*
+sweep (all 60 values, every shape) were — a good next step if this file
+gets touched again, rather than a known problem. **d4 is the one shape
+none of this cleanly solves**: a real d4 prints three numbers per face
+(one per vertex, read from whichever vertex ends up on top, shared
+across the three surrounding faces) — a fundamentally different reading
+convention than "one number centered on one face toward the camera,"
+which is what every other shape here uses. The face-*selection* math
+still picks a geometrically correct face (and, post-fix, the correct
+one, not its antipode), but which of that face's three numbers a
+viewer's eye lands on isn't controlled by this code, so d4 in particular
+should be treated as lower-confidence than the rest until that gets real
+dedicated attention.
+
+Also worth noting for legibility, independent of the orientation math
+above: at a standard (non-Retina, `devicePixelRatio` 1) display, the
+printed glyph is small and low-contrast enough to be genuinely hard to
+read at this module's real 56px production size — verified by rendering
+the shipped code at both `devicePixelRatio` 1 and 2 and comparing. At 2×
+(a very common but not universal density on modern laptops/phones) it
+reads clearly. `MAX_PIXEL_RATIO` already caps at 2×, so a Retina display
+gets the sharper render already; a 1×-display player may still find the
+number harder to make out than a real physical die would be. Not fixed
+here — a candidate follow-up (bump `CANVAS_LOGICAL_SIZE`, or push glyph
+contrast/weight further in whatever theme ships) rather than something
+this pass addressed.
+
+Because the renderer pool (`MAX_LIVE_RENDERERS`, still 10, still bounded
+the same way) can now be the sole path to a *correct-looking* die rather
+than just an animation, a stress test (30 dice revealing at once, well
+over the pool size) surfaced a real gap: the retry budget for "pool was
+briefly exhausted" was sized for a cosmetic miss (fall back to the
+resting snapshot, the text overlay still had the right number), not a
+correctness one. `showStaticResult` (tumble's fallback when the
+animation itself can't get a renderer) now has its own, much longer
+retry budget (`STATIC_RESULT_RETRY_MS`/`STATIC_RESULT_RETRY_ATTEMPTS`,
+~4.5s total) sized to outlast a realistic worst case — this file's own
+24-die ability-score-reveal scenario needing 2-3 other dice's *entire*
+tumbles to finish before a pool slot frees up — rather than the old
+short window, which a stress test showed left dice at the back of a
+large burst never recovering a face at all.
+
+Vendoring: `vendor/dice-themes/` (new) holds the mesh JSON (shared with
+the upstream "default" theme, since "rust" ships no mesh of its own —
+see `vendor/README.md`) plus the rust theme's diffuse and normal-map
+textures (~365KB combined; the normal map was downscaled from the
+upstream 1024×1024 to 256×256 first — a die renders at 56 logical px on
+screen, the extra resolution bought nothing visible and the original was
+726KB on its own). `default` and `gemstoneMarble` were compared and not
+shipped: `default`'s diffuse is a transparent alpha-mask meant to be
+tinted, workable but softer-contrast at this render size than a
+directly-painted texture; `gemstoneMarble` uses its own, more elongated
+gem-cut mesh (not a plain icosahedron/etc.) that reads less immediately
+as "a d20" at a glance, and would need its own full face-orientation
+verification pass separate from everything above.
 
 There's now an italic, gently-pulsing "The DM is pondering the scene."
 bubble (`.dm-thinking`, `appendDmThinkingBubble`/`clearDmThinkingBubble`)

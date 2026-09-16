@@ -537,8 +537,9 @@ button.secondary {
 /* .roll-die-visual is the die's actual rendering — a captured WebGL
    frame shown as a plain <img> while idle/revealed (no live GPU context
    held — see dice3d.js's renderer-pool comment), swapped for a live
-   <canvas> only for the few hundred ms a die is actively tumbling. Same
-   slot, same sizing, regardless of which one currently occupies it. */
+   <canvas> only for the roughly one second a die is actively spinning
+   (dice3d.js's TUMBLE_DURATION_MS). Same slot, same sizing, regardless of
+   which one currently occupies it. */
 .roll-die-visual {
   position: absolute;
   inset: 0;
@@ -572,44 +573,36 @@ button.secondary {
 
 /* The one die per 4d6-drop-lowest set excluded from its total — shown,
    not hidden (the player should see what was rolled and dropped), the
-   die itself dimmed with its face struck through. The dimming is
-   deliberately scoped to .roll-die-visual only, not the whole .roll-die —
-   an earlier version dimmed the face text too (opacity on the whole
-   element, plus the already-muted --parchment-ink-dim color,
-   compounding), which a live player misread ("4" for "1") because the
-   number itself got too faint to read reliably. The strikethrough alone
-   communicates "excluded from the total"; the number stays at full
-   contrast so what was actually rolled is never in doubt. */
+   die itself dimmed with a diagonal strike drawn over it. The dimming is
+   deliberately mild (0.55, not lower) — an earlier version, back when the
+   rolled number was a separate DOM text overlay (`.roll-die-face`,
+   removed once the 3D die's own settled orientation became the sole
+   carrier of the result — see dice3d.js), compounded that opacity with
+   the text's own already-muted color and a live player misread "4" for
+   "1". There's no text layer to compound with any more, but the same
+   "don't dim so hard the rolled face becomes ambiguous" caution still
+   applies to the mesh itself, so this stays conservative. The ::after
+   strike is the "excluded from the total" signal; it's drawn with
+   pointer-events:none and doesn't touch .roll-die-visual's own opacity,
+   so it reads as an annotation layered on top rather than part of the
+   die's own dimming. */
 .roll-die.dropped .roll-die-visual {
   opacity: 0.55;
 }
 
-.roll-die.dropped .roll-die-face {
-  text-decoration: line-through;
-  color: var(--parchment-ink);
-}
-
-.roll-die-face {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  font-weight: 700;
-  font-size: 17px;
-  color: var(--parchment-ink);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 4px rgba(243, 233, 216, 0.5);
-}
-
-/* .roll-die.tumbling no longer drives its own CSS transform animation —
-   dice3d.js's live WebGL canvas (physics-driven, contained to this
-   element's own bounds) is the entire visual motion now. The class stays
-   as pure state (guards re-clicking mid-tumble in app.js, and scopes the
-   placeholder/number-hidden styling below) rather than an animation
-   trigger. */
-.roll-die.tumbling .roll-die-face {
-  opacity: 0;
+.roll-die.dropped::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  pointer-events: none;
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1.5px),
+    var(--parchment-ink) calc(50% - 1.5px),
+    var(--parchment-ink) calc(50% + 1.5px),
+    transparent calc(50% + 1.5px)
+  );
 }
 
 .roll-summary {

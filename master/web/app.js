@@ -1556,20 +1556,28 @@ function closeCombatMapLightbox() {
 // prompt_id, so the *_reveal/*_complete handlers below know which DOM
 // elements to update.
 
-// The die's actual 3D rendering (real per-shape geometry — tetrahedron/
-// cube/octahedron/pentagonal-trapezohedron/icosahedron for d4/d6/d8/d10/
-// d20 — with a physically-lit material and a cannon-es-driven contained
-// tumble) lives in dice3d.js, imported at the top of this file. This
+// The die's actual 3D rendering (a real artist-made mesh + texture — the
+// "rust" theme from 3d-dice/dice-themes — scripted into a spin-to-result
+// animation) lives in dice3d.js, imported at the top of this file. This
 // section only wires that module into the die element's lifecycle:
 // buildDieEl mounts a die's initial (resting) visual, settleDie triggers
-// its tumble-and-reveal. See dice3d.js for the rendering/physics/pooling
-// itself — nothing shape- or WebGL-specific belongs here.
+// its spin-and-reveal. See dice3d.js for the rendering/pooling/face-
+// orientation math itself — nothing shape- or WebGL-specific belongs
+// here.
+//
+// There used to be a `.roll-die-face` DOM span layered on top of the 3D
+// visual as a guaranteed-legible text fallback, decoupled from whether
+// the mesh's own face orientation was correct. It's gone: the operator
+// explicitly wants the 3D die's own settled orientation to be the only
+// thing communicating the result now, not a belt-and-suspenders text
+// overlay on top of it. See dice3d.js's computeTargetQuaternion and this
+// session's final report for how that orientation is derived and how far
+// it's actually been verified per die shape.
 
 // buildDieEl builds one die element — a real <button> when the roller
 // can click it, a plain <div> for a spectator's read-only ghost. The 3D
 // visual (a resting-pose snapshot to start — see dice3d.js's
-// buildDieVisual) is the first child; .roll-die-face is layered on top
-// of it and stays empty until settleDie fills it in, exactly as before.
+// buildDieVisual) is its only child; there is no separate text layer.
 function buildDieEl(die, interactive) {
   const dieEl = document.createElement(interactive ? "button" : "div");
   if (interactive) dieEl.type = "button";
@@ -1577,35 +1585,27 @@ function buildDieEl(die, interactive) {
   dieEl.dataset.dieId = die.id;
   dieEl.dataset.sides = die.sides;
   dieEl.appendChild(buildDieVisual(dieEl, Number(die.sides)));
-  const face = document.createElement("span");
-  face.className = "roll-die-face";
-  dieEl.appendChild(face);
   return dieEl;
 }
 
-// settleDie plays a short tumble then shows result — the face was
-// already decided server-side; this is purely a reveal animation, never
-// a computation. dropped (used by the ability-score-roll dice below, not
-// combat's client.roll) adds a visual "excluded from the total" marker.
-// A physical d10 is printed 0-9 (there is no face reading "10"), so a
-// server result of 10 on a d10 displays as "0" here; every other die
-// size always shows its literal number. The DOM number overlay (this
-// function) and dice3d.js's 3D tumble animation are two independent
-// timers that both key off TUMBLE_DURATION_MS so the number lands right
-// as the die visually settles — the overlay never depends on the 3D
-// animation actually completing (see dice3d.js's tumbleAndSettle), which
-// is what keeps a roll's result legible even if the renderer pool is
-// ever exhausted.
+// settleDie plays the spin animation, passing the server-decided result
+// straight into dice3d.js so the die can settle on the correct face — the
+// result was already decided server-side (design doc §3.1/§4); this
+// function only ever plays it back, never computes anything. dropped
+// (used by the ability-score-roll dice below, not combat's client.roll)
+// adds a visual "excluded from the total" marker (see style.css's
+// .roll-die.dropped). A physical d10 is printed 0-9 (there is no face
+// reading "10"), so a server result of 10 is passed through to dice3d.js
+// unchanged — its colliderFaceMap already treats 10 as the physically-
+// printed "0" face, the same convention the old text overlay used for
+// *display* — every other die size shows its literal rolled number.
 function settleDie(dieEl, result, dropped) {
   dieEl.classList.add("tumbling");
-  tumbleAndSettle(dieEl);
+  tumbleAndSettle(dieEl, result);
   window.setTimeout(() => {
     dieEl.classList.remove("tumbling");
     dieEl.classList.add("revealed");
     if (dropped) dieEl.classList.add("dropped");
-    const sides = Number(dieEl.dataset.sides);
-    const display = sides === 10 && result === 10 ? 0 : result;
-    dieEl.querySelector(".roll-die-face").textContent = String(display);
   }, TUMBLE_DURATION_MS);
 }
 
